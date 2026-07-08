@@ -24,9 +24,12 @@ export const useAgentStatus = create<AgentStatusStore>((set, get) => ({
       const res = await fetch("/api/agent/status", { cache: "no-store" });
       if (res.ok) {
         set({ status: (await res.json()) as AgentStatus, lastChecked: Date.now() });
+      } else {
+        console.warn(`[workbench] 状态探测返回 ${res.status}`);
       }
-    } catch {
+    } catch (err) {
       // 网络抖动时保留上一次结果，状态点会因 stale 显示为未知。
+      console.warn("[workbench] 状态探测失败", err);
     } finally {
       set({ checking: false });
     }

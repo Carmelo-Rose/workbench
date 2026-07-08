@@ -32,6 +32,7 @@ function hermesActivityToChunk(payload: string): string | null {
   try {
     obj = JSON.parse(payload) as Record<string, unknown>;
   } catch {
+    console.warn("[workbench] 丢弃无法解析的 Hermes SSE 行:", payload.slice(0, 200));
     return null;
   }
   if (Array.isArray(obj.choices)) return payload; // 规范 chunk 原样放行

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, type FC, type ReactNode } from "react";
+import { useEffect, useState, type FC, type ReactNode } from "react";
 import {
   BotIcon,
   CableIcon,
   CheckIcon,
   DatabaseIcon,
+  DownloadIcon,
   InfoIcon,
   Link2Icon,
   MonitorIcon,
@@ -47,11 +48,7 @@ import {
   type ConnState,
 } from "@/lib/agent-status";
 import { BACKENDS, type BackendId } from "@/lib/backends";
-import {
-  loadThemePref,
-  saveThemePref,
-  type ThemePref,
-} from "@/lib/theme";
+import { type ThemePref } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 export type SettingsSection =
@@ -67,10 +64,8 @@ const SECTIONS: { id: SettingsSection; name: string; icon: ReactNode }[] = [
   { id: "data", name: "数据", icon: <DatabaseIcon /> },
 ];
 
-/** 会话数据的 localStorage 前缀（与 createLocalStorageAdapter 的 prefix 一致）。 */
+/** 旧版会话数据的 localStorage 前缀，现仅用于一次性迁移（见 server-threads.ts）。 */
 export const THREADS_STORAGE_PREFIX = "wb:";
-const THREADS_KEY = `${THREADS_STORAGE_PREFIX}threads`;
-const MESSAGES_KEY_PREFIX = `${THREADS_STORAGE_PREFIX}messages:`;
 
 type SettingsDialogProps = {
   open: boolean;
@@ -81,6 +76,8 @@ type SettingsDialogProps = {
   onStyleChange: (id: ThreadStyleId) => void;
   companion: CompanionId;
   onCompanionChange: (id: CompanionId) => void;
+  themePref: ThemePref;
+  onThemeChange: (pref: ThemePref) => void;
 };
 
 export const SettingsDialog: FC<SettingsDialogProps> = ({
@@ -349,15 +346,17 @@ const AppearanceSection: FC<{
   onStyleChange: (id: ThreadStyleId) => void;
   companion: CompanionId;
   onCompanionChange: (id: CompanionId) => void;
-}> = ({ styleId, onStyleChange, companion, onCompanionChange }) => {
-  // Dialog 内容仅在客户端挂载，惰性读取本地偏好即可。
-  const [theme, setTheme] = useState<ThemePref>(loadThemePref);
-
-  const pickTheme = (pref: ThemePref) => {
-    setTheme(pref);
-    saveThemePref(pref);
-  };
-
+  themePref: ThemePref;
+  onThemeChange: (pref: ThemePref) => void;
+}> = ({
+  styleId,
+  onStyleChange,
+  companion,
+  onCompanionChange,
+  themePref,
+  onThemeChange,
+}) => {
+  // 主题状态提升到 AssistantShell，与头部快切按钮共用一份。
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -367,11 +366,11 @@ const AppearanceSection: FC<{
             <button
               key={opt.id}
               type="button"
-              onClick={() => pickTheme(opt.id)}
-              aria-pressed={theme === opt.id}
+              onClick={() => onThemeChange(opt.id)}
+              aria-pressed={themePref === opt.id}
               className={cn(
                 "hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring/50 flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm transition-colors outline-none focus-visible:ring-2 [&_svg]:size-4",
-                theme === opt.id
+                themePref === opt.id
                   ? "bg-accent text-accent-foreground border-ring/60 font-medium"
                   : "text-muted-foreground",
               )}
@@ -417,46 +416,54 @@ const AppearanceSection: FC<{
 
 /* -------------------------------- 数据 -------------------------------- */
 
-// Dialog 关闭即卸载内容，重开时本组件重新挂载，惰性初始化天然拿到最新计数。
-const readThreadCount = (): number => {
-  try {
-    const raw = window.localStorage.getItem(THREADS_KEY);
-    const threads: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(threads) ? threads.length : 0;
-  } catch {
-    return 0;
-  }
-};
-
 const DataSection: FC = () => {
-  const [threadCount] = useState<number>(readThreadCount);
+  // Dialog 关闭即卸载内容，重开时重新挂载并拉取最新计数。
+  const [threadCount, setThreadCount] = useState<number | null>(null);
   const [confirming, setConfirming] = useState(false);
 
-  const clearAll = () => {
-    const keys: string[] = [];
-    for (let i = 0; i < window.localStorage.length; i++) {
-      const key = window.localStorage.key(i);
-      if (key === THREADS_KEY || key?.startsWith(MESSAGES_KEY_PREFIX)) {
-        keys.push(key);
-      }
-    }
-    keys.forEach((key) => window.localStorage.removeItem(key));
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/threads")
+      .then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+      .then((data: { threads: unknown[] }) => {
+        if (!cancelled) setThreadCount(data.threads.length);
+      })
+      .catch(() => {
+        if (!cancelled) setThreadCount(0);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const clearAll = async () => {
+    await fetch("/api/threads", { method: "DELETE" });
     window.location.reload();
   };
 
   return (
     <div>
-      <SectionTitle sub="会话历史保存在本机浏览器 localStorage，不上传服务器；换浏览器或清缓存会丢失。">
-        本地数据
+      <SectionTitle sub="会话历史保存在服务端 SQLite（data/workbench.db），重启不丢、跨浏览器可见。">
+        会话数据
       </SectionTitle>
       <div className="rounded-xl border p-4">
         <DetailRow
           label="已保存会话"
           value={threadCount === null ? "—" : `${threadCount} 条`}
         />
-        <DetailRow label="存储位置" value="localStorage（wb:*）" />
+        <DetailRow label="存储位置" value="服务端 SQLite" />
       </div>
       <div className="mt-4 flex items-center gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 rounded-full px-4 text-xs"
+          disabled={!threadCount}
+          onClick={() => window.open("/api/threads/export")}
+        >
+          <DownloadIcon className="size-3.5" />
+          导出 JSON 备份
+        </Button>
         {confirming ? (
           <>
             <Button

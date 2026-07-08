@@ -10,7 +10,7 @@ Workbench is for creators and operators using it as an AI creation workbench. Th
 
 ## Product Purpose
 
-Workbench provides the web-facing assistant workspace. The immediate goal is to use the existing assistant-ui Base source as the interaction foundation: thread history, focused chat workspace, composer, suggestions, and tool-rendered results.
+Workbench is the enterprise-level platform: the primary product that the other tools (including the Mono Chrome extension) plug into. The immediate goal is to use the existing assistant-ui Base source as the interaction foundation: thread history, focused chat workspace, composer, suggestions, and tool-rendered results — as the base for that platform surface.
 
 ## Brand Personality
 

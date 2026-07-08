@@ -6,14 +6,16 @@ import {
   useAuiState,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react";
-import {
-  createLocalStorageAdapter,
-  createSimpleTitleAdapter,
-  type AsyncStorageLike,
-} from "@assistant-ui/core/react";
 import { useChatRuntime } from "@assistant-ui/react-ai-sdk";
-import { CheckIcon, ChevronDownIcon, ShareIcon } from "lucide-react";
-import { useEffect, useState, type FC } from "react";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  MonitorIcon,
+  MoonIcon,
+  ShareIcon,
+  SunIcon,
+} from "lucide-react";
+import { useEffect, useState, type FC, type ReactNode } from "react";
 import { ThreadListSidebar } from "@/components/assistant-ui/threadlist-sidebar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI";
@@ -23,7 +25,6 @@ import {
 } from "@/components/workbench/backend-select";
 import {
   SettingsDialog,
-  THREADS_STORAGE_PREFIX,
   type SettingsSection,
 } from "@/components/workbench/settings-dialog";
 import {
@@ -63,30 +64,21 @@ import {
   useAgentStatusPolling,
   useBackendChoice,
 } from "@/lib/agent-status";
-import { applyThemePref, loadThemePref } from "@/lib/theme";
+import {
+  applyThemePref,
+  loadThemePref,
+  saveThemePref,
+  type ThemePref,
+} from "@/lib/theme";
+import { serverThreadListAdapter } from "@/lib/server-threads";
 import { createHistoryProvider } from "@/lib/thread-history";
 
-/** 会话历史落在浏览器 localStorage（mono:threads / mono:messages:*）。 */
-const browserStorage: AsyncStorageLike = {
-  getItem: async (key) =>
-    typeof window === "undefined" ? null : window.localStorage.getItem(key),
-  setItem: async (key, value) => {
-    if (typeof window !== "undefined") window.localStorage.setItem(key, value);
-  },
-  removeItem: async (key) => {
-    if (typeof window !== "undefined") window.localStorage.removeItem(key);
-  },
-};
-
+/** 会话历史落在服务端 SQLite（/api/threads），首次加载自动迁移旧 localStorage。 */
 const threadListAdapter = {
-  ...createLocalStorageAdapter({
-    storage: browserStorage,
-    prefix: THREADS_STORAGE_PREFIX,
-    titleGenerator: createSimpleTitleAdapter(),
-  }),
+  ...serverThreadListAdapter(),
   // 内置 history Provider 只兼容 LocalRuntime，换成实现 withFormat 的版本
-  // 以对接 AI SDK runtime（消息以 ai-sdk/v6 格式落 localStorage）。
-  unstable_Provider: createHistoryProvider(THREADS_STORAGE_PREFIX),
+  // 以对接 AI SDK runtime（消息以 ai-sdk/v6 格式落 SQLite）。
+  unstable_Provider: createHistoryProvider(),
 };
 
 // useChatRuntime 内部的 RemoteThreadListRuntime 检测到外层实例后透传，
@@ -181,9 +173,45 @@ const StylePicker: FC<{
   );
 };
 
+/** 头部主题快切：跟随系统 → 浅色 → 深色 循环，与设置里的选择保持同步。 */
+const THEME_TOGGLE_META: Record<
+  ThemePref,
+  { label: string; icon: ReactNode }
+> = {
+  system: { label: "主题：跟随系统", icon: <MonitorIcon className="size-4" /> },
+  light: { label: "主题：浅色", icon: <SunIcon className="size-4" /> },
+  dark: { label: "主题：深色", icon: <MoonIcon className="size-4" /> },
+};
+
+const NEXT_THEME: Record<ThemePref, ThemePref> = {
+  system: "light",
+  light: "dark",
+  dark: "system",
+};
+
+const ThemeToggle: FC<{
+  value: ThemePref;
+  onChange: (pref: ThemePref) => void;
+}> = ({ value, onChange }) => {
+  const meta = THEME_TOGGLE_META[value];
+  return (
+    <TooltipIconButton
+      variant="ghost"
+      size="icon"
+      tooltip={meta.label}
+      side="bottom"
+      className="size-8 rounded-full"
+      onClick={() => onChange(NEXT_THEME[value])}
+    >
+      {meta.icon}
+    </TooltipIconButton>
+  );
+};
+
 const AssistantShell: FC = () => {
   const [styleId, setStyleId] = useState<ThreadStyleId>(loadThreadStyle);
   const [companion, setCompanion] = useState<CompanionId>(loadCompanion);
+  const [themePref, setThemePref] = useState<ThemePref>(loadThemePref);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("connections");
@@ -220,6 +248,11 @@ const AssistantShell: FC = () => {
     saveCompanion(id);
   };
 
+  const handleThemeChange = (pref: ThemePref) => {
+    setThemePref(pref);
+    saveThemePref(pref);
+  };
+
   const openSettings = (section: SettingsSection) => {
     setSettingsSection(section);
     setSettingsOpen(true);
@@ -249,17 +282,19 @@ const AssistantShell: FC = () => {
           <ThreadTitle />
           <div className="ml-auto flex items-center gap-1.5">
             <HeaderBackendStatus onClick={() => openSettings("connections")} />
+            <ThemeToggle value={themePref} onChange={handleThemeChange} />
             <CompanionPicker
               value={companion}
               onChange={handleCompanionChange}
             />
+            {/* 原生 disabled 不派发指针事件、tooltip 永不出现，改用 aria-disabled 占位。 */}
             <TooltipIconButton
               variant="ghost"
               size="icon"
-              tooltip="Share"
+              tooltip="分享 · 即将上线"
               side="bottom"
-              disabled
-              className="size-8 rounded-full"
+              aria-disabled="true"
+              className="size-8 cursor-default rounded-full opacity-50 hover:bg-transparent active:scale-100"
             >
               <ShareIcon className="size-4" />
             </TooltipIconButton>
@@ -284,6 +319,8 @@ const AssistantShell: FC = () => {
         onStyleChange={handleStyleChange}
         companion={companion}
         onCompanionChange={handleCompanionChange}
+        themePref={themePref}
+        onThemeChange={handleThemeChange}
       />
     </SidebarProvider>
   );

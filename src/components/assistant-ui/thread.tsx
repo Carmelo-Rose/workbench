@@ -33,7 +33,7 @@ import {
   ToolGroupTrigger,
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { ParticleField } from "@/components/workbench/particle-field";
+import { ThreadBackdrop } from "@/components/workbench/thread-backdrop";
 import { emitSendBurst } from "@/components/workbench/send-burst";
 import { useTilt } from "@/components/workbench/use-tilt";
 import { Button } from "@/components/ui/button";
@@ -155,7 +155,7 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
         ["--composer-padding" as string]: "8px",
       }}
     >
-      <ParticleField active={isEmpty} />
+      <ThreadBackdrop active={isEmpty} />
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         data-slot="aui_thread-viewport"

@@ -3,9 +3,11 @@
 import { CheckIcon, PawPrintIcon } from "lucide-react";
 import type { FC } from "react";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { InkKoiPet } from "@/components/workbench/pets/ink-koi";
 import { InkWispPet } from "@/components/workbench/pets/ink-wisp";
 import { InspirationGaugePet } from "@/components/workbench/pets/inspiration-gauge";
 import { NekoPet } from "@/components/workbench/pets/neko";
+import { PaperPlanePet } from "@/components/workbench/pets/paper-plane";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +20,8 @@ import {
 export const COMPANIONS = [
   { id: "neko", name: "像素小猫" },
   { id: "wisp", name: "墨点精灵" },
+  { id: "koi", name: "墨鲤" },
+  { id: "plane", name: "纸飞机" },
   { id: "inspirationGauge", name: "灵感刻度尺" },
   { id: "none", name: "无挂件" },
 ] as const;
@@ -47,6 +51,8 @@ export const CompanionLayer: FC<{
 }) => {
   if (companion === "neko") return <NekoPet />;
   if (companion === "wisp") return <InkWispPet />;
+  if (companion === "koi") return <InkKoiPet />;
+  if (companion === "plane") return <PaperPlanePet />;
   if (companion === "inspirationGauge") {
     return <InspirationGaugePet isWorking={isWorking} />;
   }
@@ -63,7 +69,7 @@ export const CompanionPicker: FC<{
         <TooltipIconButton
           variant="ghost"
           size="icon"
-          tooltip="挂件"
+          tooltip="伴宠"
           side="bottom"
           className="size-8 rounded-full data-[state=open]:bg-accent"
         >
