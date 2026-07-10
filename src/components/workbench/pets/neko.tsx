@@ -17,9 +17,9 @@ import type { FC } from "react";
  * - 指针闲置 6s 后偶尔慢速散步（stroll）到视口边缘附近的随机点，到了随机
  *   挠墙/理毛/打哈欠；散步途中按兴趣模型决定要不要理会指针。
  * - 禁入区：输入框（[data-slot="aui_composer-shell"]）boundingRect 外扩 28px，
- *   每 ~1s 与 resize 时刷新（不逐帧查询）。任何移动目标都会被钳到禁区外的
- *   最近点——指针在禁区里时猫只追到边界坐下看着；布局变化把猫困进禁区时，
- *   它会自己散步走出去。
+ *   每 ~1s 与 resize 时刷新（不逐帧查询）。追逐/散步途中贴墙滑动绕行，撞死
+ *   （连续 ~400ms 拉近不了距离）就放弃转 watch 隔墙看着，并短暂冷静，避免
+ *   对着墙反复扑空；布局变化把猫困进禁区时，它会自己散步走出去。
  * - prefers-reduced-motion 下只在角落静置一帧，不进入动画循环。
  *
  * 状态机：
@@ -147,6 +147,8 @@ const KEEPOUT_PAD = 28;
 const KEEPOUT_REFRESH_MS = 1000;
 /** 走出禁区边界后额外留出的余量 */
 const KEEPOUT_EXIT_MARGIN = 6;
+/** 追逐/散步连续这么久拉近不了距离就判定被墙挡住，放弃 */
+const STUCK_GIVE_UP_MS = 400;
 
 /** 这些状态下小猫会留意指针动静（兴趣模型的适用范围） */
 const REACTIVE_MODES: ReadonlySet<NekoMode> = new Set([
@@ -216,6 +218,12 @@ export const NekoPet: FC = () => {
     // —— 禁入区 ——
     let keepOut: KeepOutZone | null = null;
     let nextZoneRefreshAt = 0;
+
+    // —— 追逐/散步卡墙检测 ——
+    /** 被禁区墙挡住放弃追逐后的冷静期：期间指针仍在墙后就懒得再扑 */
+    let blockedUntil = 0;
+    let bestApproachDistance = Number.POSITIVE_INFINITY;
+    let lastApproachProgressAt = startedAt;
 
     const clampToViewport = () => {
       posX = clamp(posX, 16, window.innerWidth - 16);
@@ -289,12 +297,26 @@ export const NekoPet: FC = () => {
       return inViewport ?? exits[0];
     };
 
-    /** 逐步移动后调用：一脚踩进禁区就滑到边界外（沿边绕行的来源） */
-    const applyZoneGuard = () => {
-      if (!inKeepOut(posX, posY)) return;
-      const exit = nearestExitPoint(posX, posY);
-      posX = exit.x;
-      posY = exit.y;
+    /**
+     * 碰撞安全的位移：整步会踩进禁区就改成贴墙滑动（只走不越界的那根轴），
+     * 两根轴都会越界（贴角）就原地不动，等下一帧方向变了再试。
+     * 若当前本就在禁区内（布局刚变把猫罩住，撤离途中），不拦截以免困死。
+     */
+    const moveTowardWithZoneGuard = (dx: number, dy: number) => {
+      if (inKeepOut(posX, posY)) {
+        posX += dx;
+        posY += dy;
+        return;
+      }
+      const fullX = posX + dx;
+      const fullY = posY + dy;
+      if (!inKeepOut(fullX, fullY)) {
+        posX = fullX;
+        posY = fullY;
+        return;
+      }
+      if (!inKeepOut(fullX, posY)) posX = fullX;
+      else if (!inKeepOut(posX, fullY)) posY = fullY;
     };
 
     // —— 几何工具 ——
@@ -327,15 +349,6 @@ export const NekoPet: FC = () => {
 
     const scratchSprite = (): SpriteName => `scratchWall${scratchWall}`;
 
-    /** 追逐的实际目标：指针在禁区里时改追禁区边界外最近点（detour） */
-    const chaseTarget = () => {
-      if (inKeepOut(pointerX, pointerY)) {
-        const exit = nearestExitPoint(pointerX, pointerY);
-        return { x: exit.x, y: exit.y, detour: true };
-      }
-      return { x: pointerX, y: pointerY, detour: false };
-    };
-
     // —— 状态机核心 ——
 
     const setMode = (
@@ -352,6 +365,10 @@ export const NekoPet: FC = () => {
           : timestamp + opts.duration;
       if (next === "idle") {
         nextIdleActionAt = timestamp + randomBetween(1800, 5200);
+      }
+      if (next === "chase") {
+        bestApproachDistance = Number.POSITIVE_INFINITY;
+        lastApproachProgressAt = timestamp;
       }
     };
 
@@ -376,6 +393,8 @@ export const NekoPet: FC = () => {
         y: clamp(safe.y, 16, window.innerHeight - 16),
       };
       strollReason = reason;
+      bestApproachDistance = Number.POSITIVE_INFINITY;
+      lastApproachProgressAt = timestamp;
       // 兜底时长：路线被禁区挡死走不到时，超时自动放弃回 idle
       const distance = Math.hypot(strollTarget.x - posX, strollTarget.y - posY);
       setMode("stroll", timestamp, {
@@ -428,8 +447,7 @@ export const NekoPet: FC = () => {
     /** 对指针动静做出回应：想追就追，不想追就坐着看；睡着/犯困时先惊觉 */
     const reactToPointer = (timestamp: number, wantsChase: boolean) => {
       plan = [];
-      const target = chaseTarget();
-      const reachable = Math.hypot(target.x - posX, target.y - posY) > 24;
+      const reachable = Math.hypot(pointerX - posX, pointerY - posY) > 24;
       const next: NekoMode = wantsChase && reachable ? "chase" : "watch";
       if (mode === "sleeping" || mode === "tired" || next === "chase") {
         plan = [{ mode: next }];
@@ -461,6 +479,12 @@ export const NekoPet: FC = () => {
         return;
       }
 
+      if (timestamp < blockedUntil) {
+        // 刚被墙挡住放弃过：指针还在墙后就懒得再扑，出来了才重新理会
+        if (inKeepOut(pointerX, pointerY)) return;
+        blockedUntil = 0;
+      }
+
       if (distance <= WAKE_DISTANCE) return;
       if ((mode === "sleeping" || mode === "stroll") && !sustained) return;
 
@@ -480,25 +504,29 @@ export const NekoPet: FC = () => {
         setMode("tired", timestamp, { duration: randomBetween(900, 1500) });
         return;
       }
-      const target = chaseTarget();
-      if (!target.detour && distanceToPointer() < CATCH_DISTANCE) {
+      const distance = Math.max(distanceToPointer(), 1);
+      if (!inKeepOut(pointerX, pointerY) && distance < CATCH_DISTANCE) {
         beginCatchSequence(timestamp);
         return;
       }
-      const diffX = target.x - posX;
-      const diffY = target.y - posY;
-      const distance = Math.max(Math.hypot(diffX, diffY), 1);
-      if (target.detour && distance < 12) {
-        // 指针在禁区里：追到边界坐下看着
+      if (distance < bestApproachDistance - 0.5) {
+        bestApproachDistance = distance;
+        lastApproachProgressAt = timestamp;
+      } else if (timestamp - lastApproachProgressAt > STUCK_GIVE_UP_MS) {
+        // 隔着禁区墙推进不了：放弃追逐，坐下隔墙看着，冷静一阵别再扑空
         plan = [];
+        blockedUntil = timestamp + randomBetween(3000, 6000);
         startWatch(timestamp);
         return;
       }
+      const diffX = pointerX - posX;
+      const diffY = pointerY - posY;
       const speed = distance < 140 ? CHASE_SPEED * 0.72 : CHASE_SPEED;
-      setSprite(directionTowards(target.x, target.y), frameCount);
-      posX += (diffX / distance) * speed;
-      posY += (diffY / distance) * speed;
-      applyZoneGuard();
+      setSprite(directionTowards(pointerX, pointerY), frameCount);
+      moveTowardWithZoneGuard(
+        (diffX / distance) * speed,
+        (diffY / distance) * speed,
+      );
       place();
     };
 
@@ -514,15 +542,30 @@ export const NekoPet: FC = () => {
         }
         return;
       }
+      if (strollReason === "wander") {
+        if (distance < bestApproachDistance - 0.5) {
+          bestApproachDistance = distance;
+          lastApproachProgressAt = timestamp;
+        } else if (timestamp - lastApproachProgressAt > STUCK_GIVE_UP_MS) {
+          // 被禁区墙挡住走不到目的地，放弃这次散步
+          setMode("idle", timestamp);
+          return;
+        }
+      }
       // 奔跑帧但慢速 + 慢动画，散步感
       setSprite(
         directionTowards(strollTarget.x, strollTarget.y),
         Math.floor(frameCount / 2),
       );
-      posX += (diffX / distance) * STROLL_SPEED;
-      posY += (diffY / distance) * STROLL_SPEED;
-      // 撤离禁区时目标就在禁区外，不做钳制以免被困住
-      if (strollReason === "wander") applyZoneGuard();
+      const stepX = (diffX / distance) * STROLL_SPEED;
+      const stepY = (diffY / distance) * STROLL_SPEED;
+      if (strollReason === "wander") {
+        moveTowardWithZoneGuard(stepX, stepY);
+      } else {
+        // 撤离禁区：目标本就在禁区外，直接走，不做碰撞拦截以免被困住
+        posX += stepX;
+        posY += stepY;
+      }
       place();
     };
 
