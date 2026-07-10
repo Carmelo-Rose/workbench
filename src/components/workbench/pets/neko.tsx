@@ -16,17 +16,13 @@ import type { FC } from "react";
  *   小幅移动懒得理，只有指针跑远（>260px）且持续移动才重新勾起兴趣。
  * - 指针闲置 6s 后偶尔慢速散步（stroll）到视口边缘附近的随机点，到了随机
  *   挠墙/理毛/打哈欠；散步途中按兴趣模型决定要不要理会指针。
- * - 禁入区：输入框（[data-slot="aui_composer-shell"]）boundingRect 外扩 28px，
- *   每 ~1s 与 resize 时刷新（不逐帧查询）。任何移动目标都会被钳到禁区外的
- *   最近点——指针在禁区里时猫只追到边界坐下看着；布局变化把猫困进禁区时，
- *   它会自己散步走出去。
  * - prefers-reduced-motion 下只在角落静置一帧，不进入动画循环。
  *
  * 状态机：
  *   idle        自主待机，随机间隔触发小动作或散步
  *   watch       坐着扭头看指针（兴趣不足时的回应），3~8s 后回 idle
  *   chase       追指针；精力耗尽会放弃（→ tired），追上进餍足序列
- *   stroll      慢速散步（wander：闲逛到边缘；evacuate：从禁区里走出来）
+ *   stroll      慢速散步到视口边缘附近的随机点
  *   alert       惊觉过渡帧（限时），之后消费 plan 队列
  *   sit         脚本化静坐（餍足序列专用，限时）
  *   scratchSelf / scratchWall / tired  限时小动作
@@ -118,9 +114,7 @@ type NekoMode =
   | "scratchWall"
   | "tired"
   | "sleeping";
-type StrollReason = "wander" | "evacuate";
 type PlannedStep = { mode: NekoMode; duration?: number; wall?: WallDirection };
-type KeepOutZone = { left: number; top: number; right: number; bottom: number };
 
 const FRAME_MS = 100;
 const CHASE_SPEED = 8.5;
@@ -142,11 +136,6 @@ const SLEEPY_AFTER_MS = 20000;
 const SATIATED_RENEW_DISTANCE = 260;
 /** watch 换头朝向的角度阈值（约 45°） */
 const WATCH_TURN_RAD = Math.PI / 4;
-const KEEPOUT_SELECTOR = '[data-slot="aui_composer-shell"]';
-const KEEPOUT_PAD = 28;
-const KEEPOUT_REFRESH_MS = 1000;
-/** 走出禁区边界后额外留出的余量 */
-const KEEPOUT_EXIT_MARGIN = 6;
 
 /** 这些状态下小猫会留意指针动静（兴趣模型的适用范围） */
 const REACTIVE_MODES: ReadonlySet<NekoMode> = new Set([
@@ -211,11 +200,6 @@ export const NekoPet: FC = () => {
 
     // —— 散步 ——
     let strollTarget = { x: posX, y: posY };
-    let strollReason: StrollReason = "wander";
-
-    // —— 禁入区 ——
-    let keepOut: KeepOutZone | null = null;
-    let nextZoneRefreshAt = 0;
 
     const clampToViewport = () => {
       posX = clamp(posX, 16, window.innerWidth - 16);
@@ -244,58 +228,6 @@ export const NekoPet: FC = () => {
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       return;
     }
-
-    // —— 禁入区：查询节流在 KEEPOUT_REFRESH_MS + resize，勿逐帧调用 ——
-
-    const refreshKeepOut = () => {
-      const shell = document.querySelector(KEEPOUT_SELECTOR);
-      const rect = shell?.getBoundingClientRect();
-      if (!rect || (rect.width === 0 && rect.height === 0)) {
-        keepOut = null;
-        return;
-      }
-      keepOut = {
-        left: rect.left - KEEPOUT_PAD,
-        top: rect.top - KEEPOUT_PAD,
-        right: rect.right + KEEPOUT_PAD,
-        bottom: rect.bottom + KEEPOUT_PAD,
-      };
-    };
-
-    const inKeepOut = (x: number, y: number) =>
-      keepOut !== null &&
-      x > keepOut.left &&
-      x < keepOut.right &&
-      y > keepOut.top &&
-      y < keepOut.bottom;
-
-    /** 禁区内的点投影到禁区外的最近点（优先选仍在视口内的出口） */
-    const nearestExitPoint = (x: number, y: number) => {
-      if (!keepOut || !inKeepOut(x, y)) return { x, y };
-      const zone = keepOut;
-      const exits = [
-        { x: zone.left - KEEPOUT_EXIT_MARGIN, y, cost: x - zone.left },
-        { x: zone.right + KEEPOUT_EXIT_MARGIN, y, cost: zone.right - x },
-        { x, y: zone.top - KEEPOUT_EXIT_MARGIN, cost: y - zone.top },
-        { x, y: zone.bottom + KEEPOUT_EXIT_MARGIN, cost: zone.bottom - y },
-      ].sort((a, b) => a.cost - b.cost);
-      const inViewport = exits.find(
-        (p) =>
-          p.x >= 16 &&
-          p.x <= window.innerWidth - 16 &&
-          p.y >= 16 &&
-          p.y <= window.innerHeight - 16,
-      );
-      return inViewport ?? exits[0];
-    };
-
-    /** 逐步移动后调用：一脚踩进禁区就滑到边界外（沿边绕行的来源） */
-    const applyZoneGuard = () => {
-      if (!inKeepOut(posX, posY)) return;
-      const exit = nearestExitPoint(posX, posY);
-      posX = exit.x;
-      posY = exit.y;
-    };
 
     // —— 几何工具 ——
 
@@ -327,15 +259,6 @@ export const NekoPet: FC = () => {
 
     const scratchSprite = (): SpriteName => `scratchWall${scratchWall}`;
 
-    /** 追逐的实际目标：指针在禁区里时改追禁区边界外最近点（detour） */
-    const chaseTarget = () => {
-      if (inKeepOut(pointerX, pointerY)) {
-        const exit = nearestExitPoint(pointerX, pointerY);
-        return { x: exit.x, y: exit.y, detour: true };
-      }
-      return { x: pointerX, y: pointerY, detour: false };
-    };
-
     // —— 状态机核心 ——
 
     const setMode = (
@@ -360,23 +283,12 @@ export const NekoPet: FC = () => {
       setMode("watch", timestamp, { duration: randomBetween(3000, 8000) });
     };
 
-    const startStroll = (
-      timestamp: number,
-      targetX: number,
-      targetY: number,
-      reason: StrollReason,
-    ) => {
+    const startStroll = (timestamp: number, targetX: number, targetY: number) => {
       plan = [];
-      const safe =
-        reason === "wander"
-          ? nearestExitPoint(targetX, targetY)
-          : { x: targetX, y: targetY };
       strollTarget = {
-        x: clamp(safe.x, 16, window.innerWidth - 16),
-        y: clamp(safe.y, 16, window.innerHeight - 16),
+        x: clamp(targetX, 16, window.innerWidth - 16),
+        y: clamp(targetY, 16, window.innerHeight - 16),
       };
-      strollReason = reason;
-      // 兜底时长：路线被禁区挡死走不到时，超时自动放弃回 idle
       const distance = Math.hypot(strollTarget.x - posX, strollTarget.y - posY);
       setMode("stroll", timestamp, {
         duration: (distance / STROLL_SPEED) * FRAME_MS * 1.5 + 2000,
@@ -428,8 +340,7 @@ export const NekoPet: FC = () => {
     /** 对指针动静做出回应：想追就追，不想追就坐着看；睡着/犯困时先惊觉 */
     const reactToPointer = (timestamp: number, wantsChase: boolean) => {
       plan = [];
-      const target = chaseTarget();
-      const reachable = Math.hypot(target.x - posX, target.y - posY) > 24;
+      const reachable = Math.hypot(pointerX - posX, pointerY - posY) > 24;
       const next: NekoMode = wantsChase && reachable ? "chase" : "watch";
       if (mode === "sleeping" || mode === "tired" || next === "chase") {
         plan = [{ mode: next }];
@@ -480,25 +391,17 @@ export const NekoPet: FC = () => {
         setMode("tired", timestamp, { duration: randomBetween(900, 1500) });
         return;
       }
-      const target = chaseTarget();
-      if (!target.detour && distanceToPointer() < CATCH_DISTANCE) {
+      if (distanceToPointer() < CATCH_DISTANCE) {
         beginCatchSequence(timestamp);
         return;
       }
-      const diffX = target.x - posX;
-      const diffY = target.y - posY;
+      const diffX = pointerX - posX;
+      const diffY = pointerY - posY;
       const distance = Math.max(Math.hypot(diffX, diffY), 1);
-      if (target.detour && distance < 12) {
-        // 指针在禁区里：追到边界坐下看着
-        plan = [];
-        startWatch(timestamp);
-        return;
-      }
       const speed = distance < 140 ? CHASE_SPEED * 0.72 : CHASE_SPEED;
-      setSprite(directionTowards(target.x, target.y), frameCount);
+      setSprite(directionTowards(pointerX, pointerY), frameCount);
       posX += (diffX / distance) * speed;
       posY += (diffY / distance) * speed;
-      applyZoneGuard();
       place();
     };
 
@@ -507,11 +410,7 @@ export const NekoPet: FC = () => {
       const diffY = strollTarget.y - posY;
       const distance = Math.hypot(diffX, diffY);
       if (distance < 6) {
-        if (strollReason === "wander") {
-          arriveWanderAction(timestamp);
-        } else {
-          setMode("idle", timestamp);
-        }
+        arriveWanderAction(timestamp);
         return;
       }
       // 奔跑帧但慢速 + 慢动画，散步感
@@ -521,8 +420,6 @@ export const NekoPet: FC = () => {
       );
       posX += (diffX / distance) * STROLL_SPEED;
       posY += (diffY / distance) * STROLL_SPEED;
-      // 撤离禁区时目标就在禁区外，不做钳制以免被困住
-      if (strollReason === "wander") applyZoneGuard();
       place();
     };
 
@@ -556,7 +453,7 @@ export const NekoPet: FC = () => {
       ) {
         nextStrollAt = timestamp + randomBetween(9000, 22000);
         const target = pickWanderTarget();
-        startStroll(timestamp, target.x, target.y, "wander");
+        startStroll(timestamp, target.x, target.y);
         return;
       }
       if (pointerIdleFor > SLEEPY_AFTER_MS && Math.random() < 0.5) {
@@ -623,19 +520,6 @@ export const NekoPet: FC = () => {
           : ENERGY_REGEN_PER_S * (mode === "sleeping" ? 1.6 : 1);
       energy = clamp(energy + energyDelta * dt, 0, 1);
 
-      // 禁区刷新（~1s 一次）；布局变化把猫困在禁区里时让它自己走出去
-      if (timestamp >= nextZoneRefreshAt) {
-        nextZoneRefreshAt = timestamp + KEEPOUT_REFRESH_MS;
-        refreshKeepOut();
-        if (
-          inKeepOut(posX, posY) &&
-          !(mode === "stroll" && strollReason === "evacuate")
-        ) {
-          const exit = nearestExitPoint(posX, posY);
-          startStroll(timestamp, exit.x, exit.y, "evacuate");
-        }
-      }
-
       if (timestamp >= modeEndsAt) finishMode(timestamp);
       maybeReact(timestamp);
 
@@ -696,7 +580,6 @@ export const NekoPet: FC = () => {
     const onResize = () => {
       clampToViewport();
       place();
-      refreshKeepOut();
     };
 
     document.addEventListener("pointermove", onPointerMove, { passive: true });
