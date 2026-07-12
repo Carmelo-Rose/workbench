@@ -10,6 +10,7 @@ import type {
   MonoImageGenerationResult,
   MonoImageGenerationSlot,
   MonoJob,
+  MonoJobKind,
   MonoVideoAnalysisInput,
 } from "./contracts";
 import { getMonoImage2Template } from "./image2-templates";
@@ -23,7 +24,9 @@ import {
   failMonoJob,
   getMonoAsset,
   getMonoJob,
+  listMonoJobs,
   requeueInterruptedMonoJobs,
+  setMonoJobFavorite,
   updateMonoJobResult,
 } from "./store";
 
@@ -131,6 +134,29 @@ function absoluteTemplateReference(path: string): string {
 export function getJob(actor: MonoActor, jobId: string): MonoJob | null {
   scheduleMonoWorker();
   return getMonoJob(actor, jobId);
+}
+
+export function listJobs(
+  actor: MonoActor,
+  options: { kind?: MonoJobKind; favoriteOnly?: boolean; limit?: number } = {},
+): MonoJob[] {
+  scheduleMonoWorker();
+  return listMonoJobs(actor, options);
+}
+
+export function setJobFavorite(actor: MonoActor, jobId: string, favorite: boolean): MonoJob | null {
+  return setMonoJobFavorite(actor, jobId, favorite);
+}
+
+/**
+ * 列表/写操作响应用的瘦身版：入参参考图是 data URL（可达数十 MB），
+ * 替换为数量；结果图是远端 URL，保留供缩略图使用。复用参数走单条 GET 取全量。
+ */
+export function lightenMonoJob(job: MonoJob): MonoJob & { input: { referenceImageCount: number } } {
+  const references = Array.isArray(job.input.referenceImageUrls) ? job.input.referenceImageUrls : [];
+  const input = { ...job.input };
+  delete input.referenceImageUrls;
+  return { ...job, input: { ...input, referenceImageCount: references.length } };
 }
 
 export function cancelJob(actor: MonoActor, jobId: string): MonoJob | null {

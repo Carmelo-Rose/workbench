@@ -132,6 +132,64 @@ describe("Workbench Image2 route", () => {
     expect(streamText).toContain("thread_image2_chat");
     expect(streamText).toContain('"mode":"image2"');
   });
+
+  it("lists, favorites, and lightens Image2 history through the browser bridge", async () => {
+    setEnv("NODE_ENV", "test");
+    setEnv("MONO_LOCAL_DEVELOPMENT", "true");
+    setEnv("WORKBENCH_DB_PATH", path.join(os.tmpdir(), `workbench-image2-history-${crypto.randomUUID()}.db`));
+    const { POST } = await import("@/app/api/workbench/mono/generate/image/route");
+    const { GET: listJobs } = await import("@/app/api/workbench/mono/jobs/route");
+    const { PATCH } = await import("@/app/api/workbench/mono/jobs/[id]/route");
+
+    const created = await POST(new Request("http://localhost/api/workbench/mono/generate/image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "http://localhost" },
+      body: JSON.stringify({
+        prompt: "history test",
+        referenceImageUrls: ["data:image/png;base64,AA=="],
+        aspectRatio: "1:1",
+        variants: 1,
+      }),
+    }));
+    const { job } = await created.json() as { job: { id: string } };
+
+    const patched = await PATCH(
+      new Request(`http://localhost/api/workbench/mono/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Origin: "http://localhost" },
+        body: JSON.stringify({ favorite: true }),
+      }),
+      { params: Promise.resolve({ id: job.id }) },
+    );
+    expect(patched.status).toBe(200);
+
+    const listed = await listJobs(new Request("http://localhost/api/workbench/mono/jobs?favorite=1", {
+      headers: { Origin: "http://localhost" },
+    }));
+    const payload = await listed.json() as { jobs: { id: string; favorite: boolean; input: Record<string, unknown> }[] };
+    expect(listed.status).toBe(200);
+    expect(payload.jobs.map((item) => item.id)).toContain(job.id);
+    const entry = payload.jobs.find((item) => item.id === job.id)!;
+    expect(entry.favorite).toBe(true);
+    // 列表接口必须剥离 data URL 参考图，只保留数量。
+    expect(entry.input.referenceImageUrls).toBeUndefined();
+    expect(entry.input.referenceImageCount).toBe(1);
+
+    const unfavorited = await PATCH(
+      new Request(`http://localhost/api/workbench/mono/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Origin: "http://localhost" },
+        body: JSON.stringify({ favorite: false }),
+      }),
+      { params: Promise.resolve({ id: job.id }) },
+    );
+    expect(unfavorited.status).toBe(200);
+    const relisted = await listJobs(new Request("http://localhost/api/workbench/mono/jobs?favorite=1", {
+      headers: { Origin: "http://localhost" },
+    }));
+    const relistedPayload = await relisted.json() as { jobs: { id: string }[] };
+    expect(relistedPayload.jobs.map((item) => item.id)).not.toContain(job.id);
+  });
 });
 
 function setEnv(key: string, value: string | undefined) {

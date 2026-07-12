@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, ImageUpIcon, SparklesIcon, XIcon } from "lucide-react";
+import { CheckIcon, HistoryIcon, ImageUpIcon, SparklesIcon, XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useImage2Mode } from "@/lib/image2-mode";
+import { Image2HistorySheet } from "@/components/workbench/Image2History";
 import { monoAspectRatios, monoImageVariants } from "@/lib/mono/contracts";
 import {
   MONO_IMAGE2_TEMPLATES,
@@ -108,6 +109,7 @@ export function Image2ModeControl() {
   const setVariants = useImage2Mode((state) => state.setVariants);
   const selectTemplate = useSelectImage2Template();
   const activeTemplate = getMonoImage2Template(selectedTemplateId);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const exit = async () => {
     await removeTemplateReferenceAttachments(aui);
@@ -127,7 +129,10 @@ export function Image2ModeControl() {
         <PopoverContent side="top" align="start" className="max-h-[min(70vh,34rem)] overflow-y-auto">
           <div className="mb-2 flex items-center justify-between gap-3">
             <strong className="text-sm">创建图片</strong>
-            <span className="text-muted-foreground text-xs">Image2</span>
+            <Button variant="ghost" size="xs" onClick={() => setHistoryOpen(true)}>
+              <HistoryIcon />
+              历史
+            </Button>
           </div>
           <div className="space-y-1">
             {MONO_IMAGE2_TEMPLATES.map((template) => (
@@ -174,6 +179,7 @@ export function Image2ModeControl() {
       >
         <XIcon className="size-3" />
       </button>
+      <Image2HistorySheet open={historyOpen} onOpenChange={setHistoryOpen} />
     </span>
   );
 }
@@ -208,7 +214,7 @@ export function useImage2StructuredTemplate(): MonoImage2Template | undefined {
  * 附件变化时自动把顺序归一化为「产品图在前」——后端按附件顺序取
  * 前两张作为产品图/场景图，这里是顺序契约的唯一守护点。
  */
-const SLOT_PREFIXES = ["参考图1-", "参考图2-"] as const;
+export const SLOT_PREFIXES = ["参考图1-", "参考图2-"] as const;
 
 type SlotAttachment = { id: string; name: string; file?: File };
 

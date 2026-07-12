@@ -111,6 +111,7 @@ export type MonoJob = {
   error: string | null;
   idempotencyKey: string | null;
   traceId: string;
+  favorite: boolean;
   createdAt: number;
   updatedAt: number;
   startedAt: number | null;
