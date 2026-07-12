@@ -2,7 +2,7 @@
 
 import type * as React from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ImageIcon, MessagesSquare, SettingsIcon } from "lucide-react";
 import {
   Sidebar,
@@ -22,6 +22,7 @@ import {
   useBackendChoice,
 } from "@/lib/agent-status";
 import { BACKENDS } from "@/lib/backends";
+import { useImage2Mode } from "@/lib/image2-mode";
 
 export function ThreadListSidebar({
   onOpenSettings,
@@ -29,9 +30,14 @@ export function ThreadListSidebar({
 }: React.ComponentProps<typeof Sidebar> & {
   onOpenSettings?: () => void;
 }) {
-  const pathname = usePathname();
   const router = useRouter();
-  const isImage2 = pathname === "/mono/image2";
+  const searchParams = useSearchParams();
+  const resetImage2 = useImage2Mode((state) => state.reset);
+  const isImage2 = searchParams.get("mode") === "image2";
+  const exitImage2 = () => {
+    resetImage2();
+    router.push("/");
+  };
   return (
     <Sidebar {...props}>
       <SidebarHeader className="aui-sidebar-header mb-2">
@@ -61,7 +67,7 @@ export function ThreadListSidebar({
         <SidebarMenu className="mb-2">
           <SidebarMenuItem>
             <SidebarMenuButton asChild isActive={isImage2} tooltip="Image2 图像生成">
-              <Link href="/mono/image2">
+              <Link href="/?mode=image2">
                 <ImageIcon />
                 <span>Image2 图像生成</span>
               </Link>
@@ -71,11 +77,11 @@ export function ThreadListSidebar({
         <div
           onClickCapture={(event) => {
             if (isImage2 && (event.target as HTMLElement).closest("[data-slot='aui_thread-list-item-trigger']")) {
-              router.push("/");
+              exitImage2();
             }
           }}
         >
-          <ThreadList onNewThread={isImage2 ? () => router.push("/") : undefined} />
+          <ThreadList onNewThread={isImage2 ? exitImage2 : undefined} />
         </div>
       </SidebarContent>
       <SidebarFooter className="aui-sidebar-footer">

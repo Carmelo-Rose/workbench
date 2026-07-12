@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, type FC } from "react";
-import { BotIcon, ZapIcon } from "lucide-react";
+import { BotIcon, SparklesIcon, ZapIcon } from "lucide-react";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import {
   ModelSelector,
@@ -16,6 +16,8 @@ import {
 } from "@/lib/agent-status";
 import { BACKENDS, isBackendId, type BackendId } from "@/lib/backends";
 import { cn } from "@/lib/utils";
+import { useImage2Mode } from "@/lib/image2-mode";
+import { useShallow } from "zustand/shallow";
 
 const DOT_CLASS: Record<ConnState, string> = {
   ok: "bg-emerald-500",
@@ -67,14 +69,20 @@ const BackendIcon: FC<{ backend: BackendId; state: ConnState }> = ({
  */
 export const BackendModelContext: FC = () => {
   const backend = useBackendChoice((s) => s.backend);
+  const image2 = useImage2Mode(useShallow((state) => ({
+    active: state.active,
+    templateId: state.selectedTemplateId,
+    aspectRatio: state.aspectRatio,
+    variants: state.variants,
+  })));
   const api = useAui();
 
   useEffect(() => {
-    const config = { config: { modelName: backend } };
+    const config = { config: { modelName: backend, ...(image2.active ? { image2 } : {}) } };
     return api.modelContext().register({
       getModelContext: () => config,
     });
-  }, [api, backend]);
+  }, [api, backend, image2]);
 
   return null;
 };
@@ -154,24 +162,28 @@ export const HeaderBackendStatus: FC<{ onClick?: () => void }> = ({
 
 /** 助手消息脚注里的来源徽标：这条回复出自哪条链路。 */
 export const MessageBackendBadge: FC = () => {
-  const backend = useAuiState((s) => {
+  const source = useAuiState((s) => {
     const custom = s.message.metadata?.custom as
-      | { backend?: unknown }
+      | { backend?: unknown; mode?: unknown }
       | undefined;
+    if (custom?.mode === "image2") return "image2" as const;
     return isBackendId(custom?.backend) ? custom.backend : null;
   });
 
-  if (!backend) return null;
-  const Icon = backend === "hermes" ? BotIcon : ZapIcon;
+  if (!source) return null;
+  if (source === "image2") {
+    return <span data-slot="message-backend-badge" className="text-muted-foreground flex items-center gap-1 rounded-md p-1 text-xs"><SparklesIcon className="size-3.5" />Mono Image2</span>;
+  }
+  const Icon = source === "hermes" ? BotIcon : ZapIcon;
 
   return (
     <span
       data-slot="message-backend-badge"
-      title={BACKENDS[backend].description}
+      title={BACKENDS[source].description}
       className="text-muted-foreground flex items-center gap-1 rounded-md p-1 text-xs"
     >
       <Icon className="size-3.5" />
-      {BACKENDS[backend].name}
+      {BACKENDS[source].name}
     </span>
   );
 };

@@ -30,6 +30,7 @@ type JobRow = {
   error: string | null;
   idempotency_key: string | null;
   trace_id: string;
+  favorite: number;
   created_at: number;
   updated_at: number;
   started_at: number | null;
@@ -60,6 +61,7 @@ function toJob(row: JobRow): MonoJob {
     error: row.error,
     idempotencyKey: row.idempotency_key,
     traceId: row.trace_id,
+    favorite: row.favorite === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     startedAt: row.started_at,
@@ -123,6 +125,7 @@ export function createMonoJob(
     error: null,
     idempotencyKey: idempotencyKey ?? null,
     traceId: actor.traceId,
+    favorite: false,
     createdAt: now,
     updatedAt: now,
     startedAt: null,
@@ -146,6 +149,31 @@ export function createMonoJob(
   );
   appendMonoJobEvent(job.id, "queued", { traceId: actor.traceId });
   return job;
+}
+
+export function listMonoJobs(
+  actor: MonoActor,
+  options: { kind?: MonoJobKind; favoriteOnly?: boolean; limit?: number } = {},
+): MonoJob[] {
+  const conditions = ["workspace_id = ?"];
+  const params: (string | number)[] = [actor.workspaceId];
+  if (options.kind) {
+    conditions.push("kind = ?");
+    params.push(options.kind);
+  }
+  if (options.favoriteOnly) conditions.push("favorite = 1");
+  const limit = Math.min(Math.max(options.limit ?? 60, 1), 200);
+  const rows = getDb().prepare(
+    `SELECT * FROM mono_jobs WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT ?`,
+  ).all(...params, limit) as JobRow[];
+  return rows.map(toJob);
+}
+
+export function setMonoJobFavorite(actor: MonoActor, jobId: string, favorite: boolean): MonoJob | null {
+  getDb().prepare(
+    "UPDATE mono_jobs SET favorite = ? WHERE id = ? AND workspace_id = ?",
+  ).run(favorite ? 1 : 0, jobId, actor.workspaceId);
+  return getMonoJob(actor, jobId);
 }
 
 export function getMonoJob(actor: MonoActor, jobId: string): MonoJob | null {

@@ -55,14 +55,15 @@ Hermes / 视觉模型按需配置。
 
 Mono 的图片反推、视频分析和 Image2 生成现在由 Workbench 的服务端 API 承载：
 
-- `GET /mono/image2` 打开模板、参考图、结构化双槽和批次结果工作区
+- `GET /mono/image2` 兼容旧入口并跳转到聊天内 Image2 创建图片模式
 - `POST /api/mono/assets` 登记 URL 或 data URL 素材
 - `POST /api/mono/analyze/image` 同步图片反推
 - `POST /api/mono/analyze/video`、`POST /api/mono/generate/image` 创建异步任务
 - `GET` / `DELETE /api/mono/jobs/:id` 查询或取消任务
 
-Image2 支持插件迁移来的 6 个模板、最多 6 张参考图，以及一次生成 1、2、4、6
-张图片。页面、direct Agent 工具和 MCP adapter 共用同一批次任务契约。
+Image2 作为聊天 composer 模式运行，支持插件迁移来的 6 个模板、最多 6 张参考图，
+以及一次生成 1、2、4、6 张图片。聊天、direct Agent 工具和 MCP adapter 共用同一
+批次任务契约。
 
 外部平台 API 默认拒绝访问，必须设置 `MONO_PLATFORM_API_KEY`。本地开发时由
 `MONO_LOCAL_DEVELOPMENT=true` 显式启用 Workbench 单用户身份桥；生产环境不会

@@ -1,10 +1,15 @@
 "use client";
 
 import {
-  ComposerAddAttachment,
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ComposerTriggerPopover } from "@/components/assistant-ui/composer-trigger-popover";
 import { DirectiveText } from "@/components/assistant-ui/directive-text";
 import { DotMatrix } from "@/components/assistant-ui/dot-matrix";
@@ -34,10 +39,19 @@ import {
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ThreadBackdrop } from "@/components/workbench/thread-backdrop";
+import {
+  Image2ComposerContext,
+  Image2ModeControl,
+  Image2StructuredSlots,
+  Image2TemplateRail,
+  useImage2SendBlocked,
+  useImage2StructuredTemplate,
+} from "@/components/workbench/Image2ChatMode";
 import { emitSendBurst } from "@/components/workbench/send-burst";
 import { useTilt } from "@/components/workbench/use-tilt";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useImage2Mode } from "@/lib/image2-mode";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -78,8 +92,10 @@ import {
   LightbulbIcon,
   MicIcon,
   MoreHorizontalIcon,
+  PaperclipIcon,
   PencilIcon,
   PencilLineIcon,
+  PlusIcon,
   RefreshCwIcon,
   SlashIcon,
   SquareIcon,
@@ -146,6 +162,7 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS }) => {
 
 const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
+  const image2Active = useImage2Mode((state) => state.active);
 
   return (
     <ThreadPrimitive.Root
@@ -191,9 +208,13 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
           <Composer />
           <AuiIf condition={isNewChatView}>
             <div className="aui-thread-welcome-suggestions-shell min-h-19">
-              <AuiIf condition={(s) => s.composer.isEmpty}>
+              {image2Active ? (
                 <ThreadSuggestions />
-              </AuiIf>
+              ) : (
+                <AuiIf condition={(s) => s.composer.isEmpty}>
+                  <ThreadSuggestions />
+                </AuiIf>
+              )}
             </div>
           </AuiIf>
         </ThreadPrimitive.ViewportFooter>
@@ -338,6 +359,8 @@ const suggestionChipClass =
 const ThreadSuggestions: FC = () => {
   const aui = useAui();
   const router = useRouter();
+  const image2Active = useImage2Mode((state) => state.active);
+  const activateImage2 = useImage2Mode((state) => state.activate);
   const tilt = useTilt();
   const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
   const [videoDialogOpen, setVideoDialogOpen] = useState(false);
@@ -366,7 +389,8 @@ const ThreadSuggestions: FC = () => {
 
   const activateSuggestion = (label: string, prompt: string) => {
     if (label === "生成图片") {
-      router.push("/mono/image2");
+      activateImage2();
+      router.push("/?mode=image2");
       return;
     }
     if (label === "反推图片") {
@@ -379,6 +403,8 @@ const ThreadSuggestions: FC = () => {
     }
     sendPrompt(prompt);
   };
+
+  if (image2Active) return <Image2TemplateRail />;
 
   return (
     <div className="aui-thread-welcome-suggestions flex w-full flex-col gap-2 px-4">
@@ -503,6 +529,7 @@ function DirectiveChip(props: DirectiveChipProps) {
 
 const Composer: FC = () => {
   const mention = unstable_useMentionAdapter({ fallbackIcon: WrenchIcon });
+  const structuredTemplate = useImage2StructuredTemplate();
   const slash = unstable_useSlashCommandAdapter({
     commands: slashCommands,
     iconMap: slashIconMap,
@@ -518,7 +545,8 @@ const Composer: FC = () => {
             className="border-border/60 data-[dragging=true]:border-ring focus-within:border-border dark:border-muted-foreground/15 dark:focus-within:border-muted-foreground/30 flex w-full flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) shadow-[0_4px_16px_-8px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] transition-[border-color,box-shadow] focus-within:shadow-[0_6px_24px_-8px_rgba(0,0,0,0.12),0_1px_2px_rgba(0,0,0,0.05)] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))] dark:shadow-none"
           >
             <ComposerQuotePreview />
-            <ComposerAttachments />
+            <Image2ComposerContext />
+            {structuredTemplate ? <Image2StructuredSlots /> : <ComposerAttachments />}
             <LexicalComposerInput
               directiveChip={DirectiveChip}
               placeholder="Send a message... (@ to mention, / for commands)"
@@ -540,12 +568,62 @@ const Composer: FC = () => {
   );
 };
 
+/**
+ * Composer 左下角的 + 菜单：聚合上传附件、创建图片等入口，
+ * 后续新能力（视频分析、素材库等）继续往这里挂。
+ */
+const ComposerPlusMenu: FC = () => {
+  const router = useRouter();
+  const image2Active = useImage2Mode((state) => state.active);
+  const activateImage2 = useImage2Mode((state) => state.activate);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <TooltipIconButton
+          tooltip="添加内容与工具"
+          side="bottom"
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="aui-composer-plus hover:bg-muted-foreground/15 dark:hover:bg-muted-foreground/30 size-7 rounded-full p-1"
+          aria-label="添加内容与工具"
+        >
+          <PlusIcon className="size-4.5 stroke-[1.5px]" />
+        </TooltipIconButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="min-w-44">
+        <ComposerPrimitive.AddAttachment asChild>
+          <DropdownMenuItem>
+            <PaperclipIcon />
+            上传图片或文件
+          </DropdownMenuItem>
+        </ComposerPrimitive.AddAttachment>
+        <DropdownMenuItem
+          disabled={image2Active}
+          onSelect={() => {
+            activateImage2();
+            router.push("/?mode=image2");
+          }}
+        >
+          <SparklesIcon />
+          创建图片
+          {image2Active ? <CheckIcon className="ml-auto" /> : null}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
+
 const ComposerAction: FC = () => {
+  const image2Active = useImage2Mode((state) => state.active);
+  const image2SendBlocked = useImage2SendBlocked();
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
       <div className="flex items-center gap-1">
-        <ComposerAddAttachment />
+        <ComposerPlusMenu />
         <ModelPicker />
+        {image2Active ? <Image2ModeControl /> : null}
       </div>
       <div className="flex items-center gap-1.5">
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
@@ -590,6 +668,7 @@ const ComposerAction: FC = () => {
               size="icon"
               className="aui-composer-send size-7 rounded-full"
               aria-label="Send message"
+              disabled={image2SendBlocked}
               onClick={(e) => emitSendBurst(e.currentTarget)}
             >
               <ArrowUpIcon className="aui-composer-send-icon size-4.5" />

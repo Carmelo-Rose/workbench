@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS mono_jobs (
   error TEXT,
   idempotency_key TEXT,
   trace_id TEXT NOT NULL,
+  favorite INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   started_at INTEGER,
@@ -67,7 +68,12 @@ function ensureSchema(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(DDL);
-  db.exec("PRAGMA user_version = 2");
+  // v3：既有库补 favorite 列（DDL 的 CREATE TABLE IF NOT EXISTS 不会改老表）。
+  const jobColumns = db.prepare("PRAGMA table_info(mono_jobs)").all() as { name: string }[];
+  if (!jobColumns.some((column) => column.name === "favorite")) {
+    db.exec("ALTER TABLE mono_jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0");
+  }
+  db.exec("PRAGMA user_version = 3");
 }
 
 function openDb(): DatabaseSync {

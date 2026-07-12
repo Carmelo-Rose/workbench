@@ -25,6 +25,7 @@ type JobCardProps = {
   kind: "image_generation" | "video_analysis";
   children: (job: MonoJob) => ReactNode;
   onRetry?: () => void;
+  inline?: boolean;
 };
 
 const terminalStatuses = new Set<MonoJob["status"]>([
@@ -49,7 +50,7 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function JobCard({ initialJob, kind, children, onRetry }: JobCardProps) {
+function JobCard({ initialJob, kind, children, onRetry, inline = false }: JobCardProps) {
   const [polledJob, setPolledJob] = useState<MonoJob | undefined>();
   const [pollError, setPollError] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -110,6 +111,9 @@ function JobCard({ initialJob, kind, children, onRetry }: JobCardProps) {
   const title = kind === "image_generation" ? "图片生成" : "视频分析";
 
   if (!job) {
+    if (inline) {
+      return <p className="text-muted-foreground my-3 flex items-center gap-2 text-sm"><LoaderCircleIcon className="size-4 animate-spin" />正在创建图片…</p>;
+    }
     return (
       <TaskShell title={title} status="正在准备" icon={<LoaderCircleIcon className="size-4 animate-spin" />}>
         <p className="text-muted-foreground text-sm">正在提交任务…</p>
@@ -119,6 +123,24 @@ function JobCard({ initialJob, kind, children, onRetry }: JobCardProps) {
 
   const meta = jobMeta[job.status];
   const isActive = !terminalStatuses.has(job.status);
+  if (inline) {
+    return (
+      <section className="my-3 w-full">
+        <div className="text-muted-foreground mb-3 flex items-center justify-between gap-3 text-sm">
+          <span className="flex items-center gap-2">
+            {isActive ? <LoaderCircleIcon className="size-4 animate-spin" /> : job.status === "succeeded" ? <CheckIcon className="size-4" /> : <XIcon className="size-4" />}
+            <span>{isActive ? "正在创建图片" : job.status === "succeeded" ? "图片已生成" : meta.label}</span>
+          </span>
+          {isActive ? <Button variant="ghost" size="xs" onClick={() => void cancel()} disabled={isCancelling}>{isCancelling ? "正在停止" : "停止"}</Button> : null}
+        </div>
+        {children(job)}
+        {pollError && isActive ? <p className="text-muted-foreground mt-3 text-xs">任务仍在后台执行，正在重新连接…</p> : null}
+        {job.status === "failed" && onRetry ? (
+          <Button variant="outline" size="sm" className="mt-3" onClick={onRetry}><RefreshCwIcon />重新生成</Button>
+        ) : null}
+      </section>
+    );
+  }
   return (
     <TaskShell
       title={title}
@@ -213,7 +235,7 @@ function ImageGenerationCard({
   };
 
   return (
-    <JobCard initialJob={isMonoJob(result) ? result : undefined} kind="image_generation" onRetry={retry}>
+    <JobCard initialJob={isMonoJob(result) ? result : undefined} kind="image_generation" onRetry={retry} inline>
       {(job) => {
         const references = Array.isArray(job.input.referenceImageUrls)
           ? job.input.referenceImageUrls.length
@@ -232,12 +254,12 @@ function ImageGenerationCard({
                   })
                 }
               />
-              <div className="mt-3 flex flex-wrap gap-2">
+              {job.status === "succeeded" ? <div className="mt-3 flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" onClick={retry}>
                   <RefreshCwIcon />
                   再次生成
                 </Button>
-              </div>
+              </div> : null}
             </div>
           );
         }

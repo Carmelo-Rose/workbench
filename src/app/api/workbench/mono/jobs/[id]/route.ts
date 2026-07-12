@@ -1,5 +1,6 @@
-import { actorFromWorkbenchRequest, MonoHttpError, monoErrorResponse } from "@/lib/mono/http";
-import { getJob, cancelJob } from "@/lib/mono/service";
+import { z } from "zod";
+import { actorFromWorkbenchRequest, MonoHttpError, monoErrorResponse, parseMonoJson } from "@/lib/mono/http";
+import { getJob, cancelJob, lightenMonoJob, setJobFavorite } from "@/lib/mono/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,6 +18,21 @@ export async function GET(request: Request, context: Context) {
     const job = getJob(actor, id);
     if (!job) throw new MonoHttpError(404, "任务不存在或已无权访问");
     return Response.json({ job });
+  } catch (error) {
+    return monoErrorResponse(error);
+  }
+}
+
+const patchJobSchema = z.object({ favorite: z.boolean() });
+
+export async function PATCH(request: Request, context: Context) {
+  try {
+    const actor = actorFromWorkbenchRequest(request);
+    const { id } = await context.params;
+    const { favorite } = await parseMonoJson(request, patchJobSchema);
+    const job = setJobFavorite(actor, id, favorite);
+    if (!job) throw new MonoHttpError(404, "任务不存在或已无权访问");
+    return Response.json({ job: lightenMonoJob(job) });
   } catch (error) {
     return monoErrorResponse(error);
   }

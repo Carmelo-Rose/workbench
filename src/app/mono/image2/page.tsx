@@ -1,9 +1,5 @@
-"use client";
-
-import dynamic from "next/dynamic";
-
-const Assistant = dynamic(() => import("../../assistant").then((mod) => mod.Assistant), { ssr: false });
+import { redirect } from "next/navigation";
 
 export default function Image2Page() {
-  return <Assistant />;
+  redirect("/?mode=image2");
 }
