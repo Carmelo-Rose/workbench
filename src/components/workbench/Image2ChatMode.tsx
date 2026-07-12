@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { useImage2Mode } from "@/lib/image2-mode";
 import { Image2HistorySheet } from "@/components/workbench/Image2History";
+import { useMonoSubjectCatalog, type MonoSubjectView } from "@/lib/mono/subject-client";
 import { monoAspectRatios, monoImageVariants } from "@/lib/mono/contracts";
 import {
   MONO_IMAGE2_TEMPLATES,
@@ -52,11 +53,14 @@ export function useSelectImage2Template() {
   const currentTemplateId = useImage2Mode((state) => state.selectedTemplateId);
   const selectTemplate = useImage2Mode((state) => state.selectTemplate);
   const setAspectRatio = useImage2Mode((state) => state.setAspectRatio);
+  const setStructuredSubject = useImage2Mode((state) => state.setStructuredSubject);
 
   return async (template: MonoImage2Template) => {
     const current = getMonoImage2Template(currentTemplateId);
     if (Boolean(current?.structuredMode) !== Boolean(template.structuredMode)) {
       await aui.composer().clearAttachments();
+      setStructuredSubject(0, undefined);
+      setStructuredSubject(1, undefined);
     } else {
       await removeTemplateReferenceAttachments(aui);
     }
@@ -188,15 +192,18 @@ export function Image2ComposerContext() {
   const active = useImage2Mode((state) => state.active);
   const selectedTemplateId = useImage2Mode((state) => state.selectedTemplateId);
   const attachmentCount = useAuiState((state) => state.composer.attachments.length);
+  const composerText = useAuiState((state) => state.composer.text);
   const template = getMonoImage2Template(selectedTemplateId);
   if (!active) return null;
 
-  const tooMany = !template?.structuredMode && attachmentCount > 6;
+  const subjectCount = countSubjectDirectives(composerText);
+  const totalReferences = attachmentCount + subjectCount;
+  const tooMany = !template?.structuredMode && totalReferences > 6;
   if (!tooMany) return null;
 
   return (
     <div className="px-2 text-xs">
-      <p className="text-destructive">参考图最多 6 张，请移除多余图片。</p>
+      <p className="text-destructive">附件和主体图片合计最多 6 张，请移除 {totalReferences - 6} 项。</p>
     </div>
   );
 }
@@ -240,6 +247,10 @@ export function Image2StructuredSlots() {
   const aui = useAui();
   const attachments = useAuiState((state) => state.composer.attachments) as readonly SlotAttachment[];
   const rebuilding = useRef(false);
+  const structuredSubjectIds = useImage2Mode((state) => state.structuredSubjectIds);
+  const setStructuredSubject = useImage2Mode((state) => state.setStructuredSubject);
+  const openSubjectLibrary = useImage2Mode((state) => state.openSubjectLibrary);
+  const subjects = useMonoSubjectCatalog((state) => state.subjects);
 
   const slots = useMemo(() => mapSlots(attachments), [attachments]);
 
@@ -266,18 +277,28 @@ export function Image2StructuredSlots() {
     })();
   }, [attachments, aui, template]);
 
+  useEffect(() => {
+    structuredSubjectIds.forEach((subjectId, index) => {
+      if (!subjectId) return;
+      const attachment = attachments.find((item) => item.name.startsWith(SLOT_PREFIXES[index]));
+      if (attachment) void aui.composer().attachment({ id: attachment.id }).remove();
+    });
+  }, [attachments, aui, structuredSubjectIds]);
+
   if (!template) return null;
   const slotLabels = ["产品图", template.structuredMode === "replace-product" ? "场景参考图" : "穿戴参考图"];
 
   const setSlot = async (slotIndex: number, file: File) => {
     const existing = mapSlots(aui.composer().getState().attachments as readonly SlotAttachment[])[slotIndex];
     if (existing) await aui.composer().attachment({ id: existing.id }).remove();
+    setStructuredSubject(slotIndex as 0 | 1, undefined);
     await aui.composer().addAttachment(withSlotPrefix(file, slotIndex));
   };
 
   const clearSlot = async (slotIndex: number) => {
     const existing = mapSlots(aui.composer().getState().attachments as readonly SlotAttachment[])[slotIndex];
     if (existing) await aui.composer().attachment({ id: existing.id }).remove();
+    setStructuredSubject(slotIndex as 0 | 1, undefined);
   };
 
   return (
@@ -288,26 +309,30 @@ export function Image2StructuredSlots() {
           index={index}
           label={label}
           attachment={slots[index]}
+          subject={subjects.find((subject) => subject.id === structuredSubjectIds[index])}
           onPick={(file) => void setSlot(index, file)}
           onClear={() => void clearSlot(index)}
+          onPickSubject={() => openSubjectLibrary(index as 0 | 1)}
         />
       ))}
     </div>
   );
 }
 
-function StructuredSlot({ index, label, attachment, onPick, onClear }: {
+function StructuredSlot({ index, label, attachment, subject, onPick, onClear, onPickSubject }: {
   index: number;
   label: string;
   attachment?: SlotAttachment;
+  subject?: MonoSubjectView;
   onPick: (file: File) => void;
   onClear: () => void;
+  onPickSubject: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const previewUrl = useFilePreview(attachment?.file);
 
   return (
-    <div className="relative">
+    <div className="relative flex flex-col items-start gap-1">
       <input
         ref={inputRef}
         type="file"
@@ -323,15 +348,23 @@ function StructuredSlot({ index, label, attachment, onPick, onClear }: {
       <button
         type="button"
         onClick={() => inputRef.current?.click()}
-        title={attachment ? `更换${label}` : `上传${label}`}
+        title={attachment || subject ? `上传图片替换${label}` : `上传${label}`}
         className={cn(
           "flex h-24 w-32 flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border text-xs transition-colors",
-          attachment
+          attachment || subject
             ? "border-border p-0"
             : "text-muted-foreground hover:bg-muted/60 hover:text-foreground border-dashed",
         )}
       >
-        {attachment && previewUrl ? (
+        {subject ? (
+          <span className="relative block h-full w-full">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={subject.previewUrl} alt={label} className="h-full w-full object-cover" />
+            <span className="bg-background/85 absolute inset-x-0 bottom-0 truncate px-1.5 py-0.5 text-[11px]">
+              {index + 1} · {subject.name}
+            </span>
+          </span>
+        ) : attachment && previewUrl ? (
           <span className="relative block h-full w-full">
             {/* 预览来自本地 File 对象的 objectURL */}
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -347,7 +380,10 @@ function StructuredSlot({ index, label, attachment, onPick, onClear }: {
           </>
         )}
       </button>
-      {attachment ? (
+      <Button type="button" variant="ghost" size="xs" onClick={onPickSubject} className="h-6 px-1.5">
+        从主体库选择
+      </Button>
+      {attachment || subject ? (
         <button
           type="button"
           onClick={onClear}
@@ -376,11 +412,20 @@ function useFilePreview(file?: File) {
 export function useImage2SendBlocked() {
   const active = useImage2Mode((state) => state.active);
   const selectedTemplateId = useImage2Mode((state) => state.selectedTemplateId);
-  const attachmentCount = useAuiState((state) => state.composer.attachments.length);
+  const attachments = useAuiState((state) => state.composer.attachments) as readonly SlotAttachment[];
+  const composerText = useAuiState((state) => state.composer.text);
+  const structuredSubjectIds = useImage2Mode((state) => state.structuredSubjectIds);
   const template = getMonoImage2Template(selectedTemplateId);
   if (!active) return false;
-  if (attachmentCount > 6) return true;
-  return Boolean(template?.structuredMode) && attachmentCount !== 2;
+  if (!template?.structuredMode) return attachments.length + countSubjectDirectives(composerText) > 6;
+  return mapSlots(attachments).filter(Boolean).length + structuredSubjectIds.filter(Boolean).length !== 2;
+}
+
+function countSubjectDirectives(text: string): number {
+  return new Set(
+    [...text.matchAll(/:subject\[[^\]]+\](?:\{name=([^}]+)\})?/gu)]
+      .map((match) => match[1] ?? match[0]),
+  ).size;
 }
 
 function QuickOption<T extends string | number>({ label, value, options, display, suffix = "", onChange }: {

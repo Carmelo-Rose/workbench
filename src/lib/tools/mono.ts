@@ -2,15 +2,21 @@ import { tool } from "ai";
 import {
   monoAssetInputSchema,
   monoImageGenerationSchema,
+  monoSubjectInputSchema,
+  monoSubjectPatchSchema,
   monoVideoAnalysisSchema,
 } from "@/lib/mono/contracts";
 import {
   cancelJob,
   createAsset,
   createImageGenerationJob,
+  createSubject,
   createVideoAnalysisJob,
   getJob,
+  listSubjects,
   newMonoActor,
+  deleteSubject,
+  updateSubject,
 } from "@/lib/mono/service";
 import { z } from "zod";
 
@@ -38,6 +44,30 @@ export function createMonoTools(context: MonoToolContext = {}) {
       description: "创建视频音画分析任务。适用于用户提供视频 URL 或已登记视频素材，并希望分析内容、镜头、节奏、音频或提示词时调用。",
       inputSchema: monoVideoAnalysisSchema,
       execute: (input) => createVideoAnalysisJob(actor, input),
+    }),
+    mono_list_subjects: tool({
+      description: "列出当前用户可用的私有主体和工作区共享主体。",
+      inputSchema: z.object({}),
+      execute: () => listSubjects(actor),
+    }),
+    mono_create_subject: tool({
+      description: "把已登记的单张图片素材保存为可复用主体，默认仅创建者可见。",
+      inputSchema: monoSubjectInputSchema,
+      execute: (input) => createSubject(actor, input),
+    }),
+    mono_update_subject: tool({
+      description: "重命名主体或修改主体的私有/工作区共享状态。只有创建者可以修改。",
+      inputSchema: monoSubjectPatchSchema.and(z.object({ subjectId: z.string().min(1) })),
+      execute: ({ subjectId, ...patch }) => {
+        const subject = updateSubject(actor, subjectId, patch);
+        if (!subject) throw new Error("主体不存在，或只有创建者可以修改");
+        return subject;
+      },
+    }),
+    mono_delete_subject: tool({
+      description: "删除可复用主体记录，不删除底层图片素材。只有创建者可以删除。",
+      inputSchema: z.object({ subjectId: z.string().min(1) }),
+      execute: ({ subjectId }) => ({ deleted: deleteSubject(actor, subjectId) }),
     }),
     mono_generate_image: tool({
       description: "直接创建 Image2 图片生成任务。支持模板、多参考图、结构化双参考图、画面比例，以及一次生成 1、2、4 或 6 张图片。",

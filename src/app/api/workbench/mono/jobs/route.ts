@@ -1,6 +1,6 @@
 import { actorFromWorkbenchRequest, monoErrorResponse } from "@/lib/mono/http";
 import { monoJobKinds, type MonoJobKind } from "@/lib/mono/contracts";
-import { lightenMonoJob, listJobs } from "@/lib/mono/service";
+import { lightenMonoJob, listJobs, purgeUnfavoriteJobs } from "@/lib/mono/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,6 +20,16 @@ export async function GET(request: Request) {
       limit: Number(url.searchParams.get("limit")) || undefined,
     });
     return Response.json({ jobs: jobs.map(lightenMonoJob) });
+  } catch (error) {
+    return monoErrorResponse(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const actor = actorFromWorkbenchRequest(request);
+    const deleted = purgeUnfavoriteJobs(actor, "image_generation");
+    return Response.json({ deleted });
   } catch (error) {
     return monoErrorResponse(error);
   }

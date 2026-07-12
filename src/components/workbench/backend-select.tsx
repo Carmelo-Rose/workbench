@@ -74,6 +74,7 @@ export const BackendModelContext: FC = () => {
     templateId: state.selectedTemplateId,
     aspectRatio: state.aspectRatio,
     variants: state.variants,
+    structuredSubjectIds: state.structuredSubjectIds,
   })));
   const api = useAui();
 

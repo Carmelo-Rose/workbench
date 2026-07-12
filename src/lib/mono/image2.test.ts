@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import os from "node:os";
 import path from "node:path";
-import { monoImageGenerationSchema } from "./contracts";
+import { monoImageGenerationSchema, monoSubjectInputSchema } from "./contracts";
 import { assertMonoApiAccess } from "./http";
 import { MONO_IMAGE2_TEMPLATES, getMonoImage2Template } from "./image2-templates";
+
+beforeAll(() => {
+  setEnv("WORKBENCH_DB_PATH", path.join(os.tmpdir(), `workbench-image2-suite-${crypto.randomUUID()}.db`));
+});
 
 describe("Image2 template catalog", () => {
   it("migrates all six plugin templates with unique ids", () => {
@@ -40,6 +44,83 @@ describe("Image2 generation contract", () => {
     });
     expect(parsed.structuredReferences).toEqual({ productAssetId: "asset_product", sceneAssetId: "asset_scene" });
   });
+
+  it("validates subject names and ordered subject ids", () => {
+    expect(monoSubjectInputSchema.safeParse({ name: "白色陶瓷杯", assetId: "asset_1" }).success).toBe(true);
+    expect(monoSubjectInputSchema.safeParse({ name: "坏[名称]", assetId: "asset_1" }).success).toBe(false);
+    expect(monoImageGenerationSchema.parse({ prompt: "test", subjectIds: ["subject_b", "subject_a"] }).subjectIds)
+      .toEqual(["subject_b", "subject_a"]);
+  });
+});
+
+describe("Mono subject library", () => {
+  it("keeps private subjects private and workspace subjects shareable", async () => {
+    setEnv("NODE_ENV", "test");
+    setEnv("MONO_LOCAL_DEVELOPMENT", "true");
+    const { createMonoAsset, createMonoSubject, getMonoSubject, listMonoSubjects, updateMonoSubject, deleteMonoSubject } = await import("./store");
+    const owner = { userId: "owner", workspaceId: "subject-workspace", traceId: "owner-trace" };
+    const teammate = { userId: "teammate", workspaceId: "subject-workspace", traceId: "team-trace" };
+    const outsider = { userId: "owner", workspaceId: "other-workspace", traceId: "other-trace" };
+    const asset = createMonoAsset(owner, { sourceUrl: "data:image/png;base64,AA==", mimeType: "image/png" });
+    const subject = createMonoSubject(owner, { name: "产品 A", assetId: asset.id, visibility: "private" })!;
+
+    expect(getMonoSubject(teammate, subject.id)).toBeNull();
+    expect(listMonoSubjects(outsider)).toHaveLength(0);
+    const shared = updateMonoSubject(owner, subject.id, { visibility: "workspace" })!;
+    expect(getMonoSubject(teammate, shared.id)?.name).toBe("产品 A");
+    expect(updateMonoSubject(teammate, shared.id, { name: "越权修改" })).toBeNull();
+    expect(deleteMonoSubject(teammate, shared.id)).toBe(false);
+    expect(deleteMonoSubject(owner, shared.id)).toBe(true);
+    expect(getMonoSubject(owner, shared.id)).toBeNull();
+  });
+
+  it("compiles subject directives and freezes the subject snapshot at submission", async () => {
+    const { createAsset, createImageGenerationJob, createSubject, newMonoActor, updateSubject, deleteSubject } = await import("./service");
+    const actor = newMonoActor({ userId: "compiler", workspaceId: "compiler-workspace" });
+    const asset = createAsset(actor, { sourceUrl: "https://example.com/person.png", mimeType: "image/png" });
+    const subject = createSubject(actor, { name: "模特 A", assetId: asset.id, visibility: "private" });
+    const job = createImageGenerationJob(actor, monoImageGenerationSchema.parse({
+      prompt: `让 :subject[模特 A]{name=${subject.id}} 戴上黑色帽子`,
+      subjectIds: [subject.id],
+    }));
+    expect(job.input.compiledPrompt).toContain("参考图1（模特 A）");
+    expect(job.input.compiledPrompt).toContain("佩戴到");
+    expect(job.input.referenceImageUrls).toEqual(["https://example.com/person.png"]);
+    expect(job.input.subjectSnapshots).toMatchObject([{ id: subject.id, name: "模特 A" }]);
+
+    updateSubject(actor, subject.id, { name: "改名后" });
+    deleteSubject(actor, subject.id);
+    expect(job.input.compiledPrompt).toContain("模特 A");
+    expect(job.input.compiledPrompt).not.toContain("改名后");
+  });
+
+  it("rejects a combined attachment and subject reference count above six", async () => {
+    const { createAsset, createImageGenerationJob, createSubject, newMonoActor } = await import("./service");
+    const actor = newMonoActor({ userId: "limit", workspaceId: "limit-workspace" });
+    const asset = createAsset(actor, { sourceUrl: "https://example.com/subject.png", mimeType: "image/png" });
+    const subject = createSubject(actor, { name: "上限主体", assetId: asset.id, visibility: "private" });
+    const references = Array.from({ length: 6 }, (_, index) => `https://example.com/ref-${index}.png`);
+    expect(() => createImageGenerationJob(actor, monoImageGenerationSchema.parse({
+      prompt: `:subject[上限主体]{name=${subject.id}}`,
+      subjectIds: [subject.id],
+      referenceImageUrls: references,
+    }))).toThrow("最多允许 6 张");
+  });
+
+  it("preserves both positional slots when a structured template uses the same asset twice", async () => {
+    const { createAsset, createImageGenerationJob, newMonoActor } = await import("./service");
+    const actor = newMonoActor({ userId: "slots", workspaceId: "slot-workspace" });
+    const asset = createAsset(actor, { sourceUrl: "https://example.com/shared-slot.png", mimeType: "image/png" });
+    const job = createImageGenerationJob(actor, monoImageGenerationSchema.parse({
+      prompt: "same asset in two roles",
+      templateId: "tpl-replace-product",
+      structuredReferences: { productAssetId: asset.id, sceneAssetId: asset.id },
+    }));
+    expect(job.input.referenceImageUrls).toEqual([
+      "https://example.com/shared-slot.png",
+      "https://example.com/shared-slot.png",
+    ]);
+  });
 });
 
 describe("Mono platform authentication", () => {
@@ -68,6 +149,59 @@ describe("Mono platform authentication", () => {
 });
 
 describe("Workbench Image2 route", () => {
+  it("creates, lists, updates, previews, and deletes subjects through the browser bridge", async () => {
+    setEnv("NODE_ENV", "test");
+    setEnv("MONO_LOCAL_DEVELOPMENT", "true");
+    const { POST: createAsset } = await import("@/app/api/workbench/mono/assets/route");
+    const { GET: listSubjects, POST: createSubject } = await import("@/app/api/workbench/mono/subjects/route");
+    const subjectRoute = await import("@/app/api/workbench/mono/subjects/[id]/route");
+    const { GET: previewAsset } = await import("@/app/api/workbench/mono/assets/[id]/content/route");
+    const headers = { "Content-Type": "application/json", Origin: "http://localhost" };
+
+    const assetResponse = await createAsset(new Request("http://localhost/api/workbench/mono/assets", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sourceUrl: "data:image/png;base64,AA==", mimeType: "image/png", name: "subject-api" }),
+    }));
+    const { asset } = await assetResponse.json() as { asset: { id: string } };
+    const created = await createSubject(new Request("http://localhost/api/workbench/mono/subjects", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "API 主体", assetId: asset.id }),
+    }));
+    const { subject } = await created.json() as { subject: { id: string; editable: boolean; previewUrl: string } };
+    expect(created.status).toBe(201);
+    expect(subject.editable).toBe(true);
+    expect(subject.previewUrl).toContain(asset.id);
+
+    const listed = await listSubjects(new Request("http://localhost/api/workbench/mono/subjects", { headers }));
+    expect((await listed.json() as { subjects: { id: string }[] }).subjects.map((item) => item.id)).toContain(subject.id);
+    const patched = await subjectRoute.PATCH(new Request(`http://localhost/api/workbench/mono/subjects/${subject.id}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({ name: "更新后的主体", visibility: "workspace" }),
+    }), { params: Promise.resolve({ id: subject.id }) });
+    expect((await patched.json() as { subject: { name: string; visibility: string } }).subject)
+      .toMatchObject({ name: "更新后的主体", visibility: "workspace" });
+
+    const preview = await previewAsset(new Request(`http://localhost/api/workbench/mono/assets/${asset.id}/content`, { headers }), {
+      params: Promise.resolve({ id: asset.id }),
+    });
+    expect(preview.status).toBe(200);
+    expect(preview.headers.get("content-type")).toBe("image/png");
+
+    const deleted = await subjectRoute.DELETE(new Request(`http://localhost/api/workbench/mono/subjects/${subject.id}`, {
+      method: "DELETE",
+      headers,
+    }), { params: Promise.resolve({ id: subject.id }) });
+    expect(deleted.status).toBe(204);
+    // Deleting a subject intentionally retains the underlying asset.
+    const retainedAsset = await previewAsset(new Request(`http://localhost/api/workbench/mono/assets/${asset.id}/content`, { headers }), {
+      params: Promise.resolve({ id: asset.id }),
+    });
+    expect(retainedAsset.status).toBe(200);
+  });
+
   it("submits one idempotent batch job through the trusted local bridge", async () => {
     setEnv("NODE_ENV", "test");
     setEnv("MONO_LOCAL_DEVELOPMENT", "true");
@@ -189,6 +323,36 @@ describe("Workbench Image2 route", () => {
     }));
     const relistedPayload = await relisted.json() as { jobs: { id: string }[] };
     expect(relistedPayload.jobs.map((item) => item.id)).not.toContain(job.id);
+  });
+
+  it("purges one terminal history entry and clears only terminal unfavorite entries", async () => {
+    setEnv("NODE_ENV", "test");
+    setEnv("MONO_LOCAL_DEVELOPMENT", "true");
+    const actor = { userId: "local-user", workspaceId: "default", traceId: "purge-test" };
+    const { claimMonoJob, completeMonoJob, createMonoJob, getMonoJob, setMonoJobFavorite } = await import("./store");
+    const jobA = createMonoJob(actor, "image_generation", { prompt: "purge A" });
+    const jobB = createMonoJob(actor, "image_generation", { prompt: "keep favorite" });
+    const jobC = createMonoJob(actor, "image_generation", { prompt: "purge C" });
+    for (const job of [jobA, jobB, jobC]) {
+      claimMonoJob(job.id);
+      completeMonoJob(job.id, { slots: [] });
+    }
+    setMonoJobFavorite(actor, jobB.id, true);
+
+    const jobRoute = await import("@/app/api/workbench/mono/jobs/[id]/route");
+    const jobsRoute = await import("@/app/api/workbench/mono/jobs/route");
+    const headers = { Origin: "http://localhost" };
+    const single = await jobRoute.DELETE(
+      new Request(`http://localhost/api/workbench/mono/jobs/${jobA.id}?purge=true`, { method: "DELETE", headers }),
+      { params: Promise.resolve({ id: jobA.id }) },
+    );
+    expect(single.status).toBe(204);
+    expect(getMonoJob(actor, jobA.id)).toBeNull();
+
+    const cleared = await jobsRoute.DELETE(new Request("http://localhost/api/workbench/mono/jobs", { method: "DELETE", headers }));
+    expect((await cleared.json() as { deleted: number }).deleted).toBeGreaterThanOrEqual(1);
+    expect(getMonoJob(actor, jobB.id)?.favorite).toBe(true);
+    expect(getMonoJob(actor, jobC.id)).toBeNull();
   });
 });
 

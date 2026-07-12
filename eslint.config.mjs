@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    ".claude/worktrees/**",
     // Vendored from assistant-ui packages/ui so Mono can run the Base shell
     // without resolving a second assistant-ui runtime from the source repo.
     "src/components/assistant-ui/**",

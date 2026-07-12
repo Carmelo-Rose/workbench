@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ImageOffIcon, LoaderCircleIcon, StarIcon } from "lucide-react";
+import { ImageOffIcon, LoaderCircleIcon, StarIcon, Trash2Icon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useAui } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { useImage2Mode } from "@/lib/image2-mode";
 import type { MonoImageGenerationSlot, MonoJob } from "@/lib/mono/contracts";
 import { getMonoImage2Template, type MonoImage2TemplateId } from "@/lib/mono/image2-templates";
 import { SLOT_PREFIXES } from "@/components/workbench/Image2ChatMode";
+import { useMonoSubjectCatalog } from "@/lib/mono/subject-client";
 
 /** 列表接口返回的瘦身任务：referenceImageUrls 被替换为 referenceImageCount。 */
 type HistoryJobInput = {
@@ -25,6 +26,7 @@ type HistoryJobInput = {
   aspectRatio?: string;
   variants?: number;
   referenceImageCount?: number;
+  subjectSnapshots?: { id: string; name: string; sourceUrl: string }[];
 };
 
 function jobInput(job: MonoJob): HistoryJobInput {
@@ -52,6 +54,7 @@ export function Image2HistorySheet({ open, onOpenChange }: {
   const [jobs, setJobs] = useState<MonoJob[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [reusingId, setReusingId] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
   const router = useRouter();
   const aui = useAui();
 
@@ -118,11 +121,24 @@ export function Image2HistorySheet({ open, onOpenChange }: {
         selectedTemplateId: template?.id,
         aspectRatio: (input.aspectRatio as never) ?? "9:16",
         variants: (input.variants as never) ?? 1,
+        structuredSubjectIds: [undefined, undefined],
       });
-      aui.composer().setText(input.prompt ?? "");
+      await useMonoSubjectCatalog.getState().load(true);
+      const visibleIds = new Set(useMonoSubjectCatalog.getState().subjects.map((subject) => subject.id));
+      let restoredPrompt = input.prompt ?? "";
+      for (const snapshot of input.subjectSnapshots ?? []) {
+        if (!visibleIds.has(snapshot.id)) {
+          restoredPrompt = restoredPrompt.replace(
+            new RegExp(`:subject\\[[^\\]]+\\]\\{name=${escapeRegExp(snapshot.id)}\\}`, "gu"),
+            `@${snapshot.name}`,
+          );
+        }
+      }
+      aui.composer().setText(restoredPrompt);
       await aui.composer().clearAttachments();
       const references = Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls : [];
-      await Promise.all(references.slice(0, 6).map(async (url, index) => {
+      const subjectSources = new Set((input.subjectSnapshots ?? []).filter((subject) => visibleIds.has(subject.id)).map((subject) => subject.sourceUrl));
+      await Promise.all(references.filter((url) => !subjectSources.has(url)).slice(0, 6).map(async (url, index) => {
         try {
           const blob = await (await fetch(url)).blob();
           const name = template?.structuredMode
@@ -142,6 +158,20 @@ export function Image2HistorySheet({ open, onOpenChange }: {
     }
   };
 
+  const deleteJob = async (jobId: string) => {
+    const response = await fetch(`/api/workbench/mono/jobs/${encodeURIComponent(jobId)}?purge=true`, { method: "DELETE" });
+    if (!response.ok) throw new Error("历史删除失败");
+    setJobs((current) => current?.filter((job) => job.id !== jobId) ?? current);
+  };
+
+  const clearUnfavorite = async () => {
+    if (!confirmClear) { setConfirmClear(true); return; }
+    const response = await fetch("/api/workbench/mono/jobs", { method: "DELETE" });
+    if (!response.ok) { setLoadError(true); return; }
+    setJobs((current) => current?.filter((job) => job.favorite || !["succeeded", "failed", "cancelled"].includes(job.status)) ?? current);
+    setConfirmClear(false);
+  };
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-md">
@@ -155,6 +185,9 @@ export function Image2HistorySheet({ open, onOpenChange }: {
           </Button>
           <Button variant={favoriteOnly ? "secondary" : "ghost"} size="xs" onClick={() => setFavoriteOnly(true)}>
             收藏
+          </Button>
+          <Button variant={confirmClear ? "destructive" : "ghost"} size="xs" className="ml-auto" onClick={() => void clearUnfavorite()}>
+            <Trash2Icon />{confirmClear ? "确认清空未收藏" : "清空未收藏"}
           </Button>
         </div>
         <div className="flex-1 space-y-2 overflow-y-auto px-4 pb-6">
@@ -177,6 +210,7 @@ export function Image2HistorySheet({ open, onOpenChange }: {
                 reusing={reusingId === job.id}
                 onToggleFavorite={() => void toggleFavorite(job)}
                 onReuse={() => void reuse(job)}
+                onDelete={() => void deleteJob(job.id)}
               />
             ))
           )}
@@ -186,12 +220,14 @@ export function Image2HistorySheet({ open, onOpenChange }: {
   );
 }
 
-function HistoryItem({ job, reusing, onToggleFavorite, onReuse }: {
+function HistoryItem({ job, reusing, onToggleFavorite, onReuse, onDelete }: {
   job: MonoJob;
   reusing: boolean;
   onToggleFavorite: () => void;
   onReuse: () => void;
+  onDelete: () => void;
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const input = jobInput(job);
   const template = getMonoImage2Template(input.templateId);
   const images = jobSlots(job)
@@ -243,7 +279,22 @@ function HistoryItem({ job, reusing, onToggleFavorite, onReuse }: {
         <Button variant="outline" size="xs" onClick={onReuse} disabled={reusing}>
           {reusing ? "正在恢复…" : "复用参数"}
         </Button>
+        {["succeeded", "failed", "cancelled"].includes(job.status) ? (
+          <Button
+            variant={confirmDelete ? "destructive" : "ghost"}
+            size={confirmDelete ? "xs" : "icon-xs"}
+            title="删除历史"
+            onClick={() => {
+              if (!confirmDelete) { setConfirmDelete(true); return; }
+              onDelete();
+            }}
+          ><Trash2Icon />{confirmDelete ? "确认" : null}</Button>
+        ) : null}
       </div>
     </div>
   );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

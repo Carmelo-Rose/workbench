@@ -14,4 +14,7 @@ npm run mono:mcp
 The endpoint is `http://127.0.0.1:8787/mcp`. Configure Hermes with that remote
 MCP URL and its bearer token only after its deployment confirms Streamable HTTP
 MCP support. `mono_generate_image` uses the same server-side batch contract as
-the Workbench Image2 workspace and direct chat tool.
+the Workbench Image2 workspace and direct chat tool. Subject records stay in the
+Workbench database; MCP clients use `mono_list_subjects`, `mono_create_subject`,
+`mono_update_subject`, and `mono_delete_subject`, then pass ordered `subjectIds`
+to image generation without storing subject images inside Hermes.

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { actorFromWorkbenchRequest, MonoHttpError, monoErrorResponse, parseMonoJson } from "@/lib/mono/http";
-import { getJob, cancelJob, lightenMonoJob, setJobFavorite } from "@/lib/mono/service";
+import { getJob, cancelJob, lightenMonoJob, purgeJob, setJobFavorite } from "@/lib/mono/service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +42,10 @@ export async function DELETE(request: Request, context: Context) {
   try {
     const actor = actorFromWorkbenchRequest(request);
     const { id } = await context.params;
+    if (new URL(request.url).searchParams.get("purge") === "true") {
+      if (!purgeJob(actor, id)) throw new MonoHttpError(409, "只有已结束的任务可以从历史中删除");
+      return new Response(null, { status: 204 });
+    }
     const job = cancelJob(actor, id);
     if (!job) throw new MonoHttpError(404, "任务不存在或已无权访问");
     return Response.json({ job });

@@ -15,7 +15,8 @@ import { createImageToPromptTool } from "@/lib/tools/image-to-prompt";
 import { createMonoTools } from "@/lib/tools/mono";
 import { monoAspectRatios, type MonoImageGenerationInput, type MonoJob } from "@/lib/mono/contracts";
 import { getMonoImage2Template, monoImage2TemplateIds } from "@/lib/mono/image2-templates";
-import { createImageGenerationJob, newMonoActor } from "@/lib/mono/service";
+import { createAsset, createImageGenerationJob, getSubject, newMonoActor } from "@/lib/mono/service";
+import { subjectIdsFromPrompt } from "@/lib/mono/subject-compiler";
 
 export const maxDuration = 60;
 
@@ -34,7 +35,23 @@ const image2ChatConfigSchema = z.object({
   templateId: z.enum(monoImage2TemplateIds).optional(),
   aspectRatio: z.enum(monoAspectRatios).default("9:16"),
   variants: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(6)]).default(1),
+  structuredSubjectIds: z.array(z.string().nullable()).length(2).default([null, null]),
 });
+
+type ImageAttachmentPart = { url: string; filename?: string };
+
+function latestImageAttachmentParts(messages: UIMessage[]): ImageAttachmentPart[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role !== "user") continue;
+    return message.parts
+      .flatMap((part): ImageAttachmentPart[] => part.type === "file" && part.mediaType.startsWith("image/")
+        ? [{ url: part.url, ...(part.filename ? { filename: part.filename } : {}) }]
+        : [])
+      .slice(0, 6);
+  }
+  return [];
+}
 
 function latestUserText(messages: UIMessage[]): string {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -49,16 +66,7 @@ function latestUserText(messages: UIMessage[]): string {
 }
 
 function latestImageAttachments(messages: UIMessage[]): string[] {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.role !== "user") continue;
-    return message.parts
-      .filter((part) => part.type === "file" && part.mediaType.startsWith("image/"))
-      .map((part) => part.type === "file" ? part.url : "")
-      .filter(Boolean)
-      .slice(0, 6);
-  }
-  return [];
+  return latestImageAttachmentParts(messages).map((part) => part.url);
 }
 
 function latestUserMessageId(messages: UIMessage[]): string | undefined {
@@ -106,6 +114,7 @@ export async function POST(req: Request) {
       threadId: id,
       prompt: latestUserText(messages),
       attachments: imageAttachments,
+      attachmentParts: latestImageAttachmentParts(messages),
       config: image2Config.data,
     });
   }
@@ -165,30 +174,56 @@ function image2Response({
   threadId,
   prompt,
   attachments,
+  attachmentParts,
   config,
 }: {
   messages: UIMessage[];
   threadId?: string;
   prompt: string;
   attachments: string[];
+  attachmentParts: ImageAttachmentPart[];
   config: z.infer<typeof image2ChatConfigSchema>;
 }) {
-  const input: MonoImageGenerationInput = {
-    prompt: prompt.trim() || getMonoImage2Template(config.templateId)?.prompt || "请根据参考图创建图片",
-    templateId: config.templateId,
-    // 模板参考图在前端以普通附件进入消息，服务端不再重复注入。
-    templateReferencesEnabled: false,
-    referenceAssetIds: [],
-    referenceImageUrls: attachments,
-    aspectRatio: config.aspectRatio,
-    variants: config.variants,
-    idempotencyKey: `image2:${threadId ?? "thread"}:${latestUserMessageId(messages) ?? randomUUID()}`,
-  };
   const actor = newMonoActor({
     sessionId: threadId,
     userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",
     workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
   });
+  const template = getMonoImage2Template(config.templateId);
+  let structuredReferences: MonoImageGenerationInput["structuredReferences"];
+  if (template?.structuredMode) {
+    const claimedAttachments = [0, 1].map((slot) =>
+      attachmentParts.find((part) => part.filename?.startsWith(`参考图${slot + 1}-`)),
+    );
+    const leftovers = attachmentParts.filter((part) => !claimedAttachments.includes(part));
+    const assetIds = [0, 1].map((slot) => {
+      const subjectId = config.structuredSubjectIds[slot];
+      if (subjectId) {
+        const subject = getSubject(actor, subjectId);
+        if (!subject) throw new Error("双槽中选择的主体不存在或已无权访问");
+        return subject.assetId;
+      }
+      const part = claimedAttachments[slot] ?? leftovers.shift();
+      if (!part) return undefined;
+      return createAsset(actor, { sourceUrl: part.url, mimeType: "image/*", name: part.filename }).id;
+    });
+    if (assetIds[0] && assetIds[1]) {
+      structuredReferences = { productAssetId: assetIds[0], sceneAssetId: assetIds[1] };
+    }
+  }
+  const input: MonoImageGenerationInput = {
+    prompt: prompt.trim() || template?.prompt || "请根据参考图创建图片",
+    templateId: config.templateId,
+    // 模板参考图在前端以普通附件进入消息，服务端不再重复注入。
+    templateReferencesEnabled: false,
+    referenceAssetIds: [],
+    referenceImageUrls: template?.structuredMode ? [] : attachments,
+    structuredReferences,
+    subjectIds: template?.structuredMode ? [] : subjectIdsFromPrompt(prompt),
+    aspectRatio: config.aspectRatio,
+    variants: config.variants,
+    idempotencyKey: `image2:${threadId ?? "thread"}:${latestUserMessageId(messages) ?? randomUUID()}`,
+  };
   const job = createImageGenerationJob(actor, input);
   const publicJob = redactJobReferences(job);
   const toolCallId = `tool_${randomUUID()}`;
@@ -210,11 +245,22 @@ function image2Response({
 
 function redactJobReferences(job: MonoJob): MonoJob {
   const references = Array.isArray(job.input.referenceImageUrls) ? job.input.referenceImageUrls : [];
+  const subjectSnapshots = Array.isArray(job.input.subjectSnapshots)
+    ? job.input.subjectSnapshots.map((snapshot) => {
+        if (typeof snapshot !== "object" || snapshot === null) return snapshot;
+        const redacted = { ...(snapshot as Record<string, unknown>) };
+        delete redacted.sourceUrl;
+        return redacted;
+      })
+    : job.input.subjectSnapshots;
+  const input = { ...job.input };
+  delete input.compiledPrompt;
   return {
     ...job,
     input: {
-      ...job.input,
+      ...input,
       referenceImageUrls: references.map((_, index) => `attachment:${index + 1}`),
+      subjectSnapshots,
     },
   };
 }

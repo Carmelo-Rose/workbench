@@ -54,6 +54,46 @@ function createMonoMcpServer() {
     body: JSON.stringify(input),
   })));
 
+  server.registerTool("mono_list_subjects", {
+    title: "List Mono subjects",
+    description: "List private and workspace-shared image subjects visible to the configured Mono actor.",
+    inputSchema: {},
+  }, async () => toolText(await callMono("/api/mono/subjects")));
+
+  server.registerTool("mono_create_subject", {
+    title: "Create Mono subject",
+    description: "Create a reusable one-image subject from an existing Mono asset.",
+    inputSchema: {
+      name: z.string().min(1).max(40),
+      assetId: z.string().min(1),
+      visibility: z.enum(["private", "workspace"]).optional(),
+    },
+  }, async (input) => toolText(await callMono("/api/mono/subjects", {
+    method: "POST",
+    body: JSON.stringify(input),
+  })));
+
+  server.registerTool("mono_update_subject", {
+    title: "Update Mono subject",
+    description: "Rename a subject or change its private/workspace visibility. Only the creator can update it.",
+    inputSchema: {
+      subjectId: z.string().min(1),
+      name: z.string().min(1).max(40).optional(),
+      visibility: z.enum(["private", "workspace"]).optional(),
+    },
+  }, async ({ subjectId, ...patch }) => toolText(await callMono(`/api/mono/subjects/${encodeURIComponent(subjectId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  })));
+
+  server.registerTool("mono_delete_subject", {
+    title: "Delete Mono subject",
+    description: "Delete a reusable subject record without deleting its underlying asset.",
+    inputSchema: { subjectId: z.string().min(1) },
+  }, async ({ subjectId }) => toolText(await callMono(`/api/mono/subjects/${encodeURIComponent(subjectId)}`, {
+    method: "DELETE",
+  })));
+
   server.registerTool("mono_analyze_image", {
     title: "Analyze image prompt",
     description: "Reverse an image into reusable Chinese and English creation prompts.",
@@ -96,6 +136,7 @@ function createMonoMcpServer() {
         productAssetId: z.string().min(1),
         sceneAssetId: z.string().min(1),
       }).optional(),
+      subjectIds: z.array(z.string().min(1)).max(6).optional(),
       aspectRatio: z.enum(["1:1", "3:4", "9:16", "4:3", "16:9"]).optional(),
       variants: z.union([z.literal(1), z.literal(2), z.literal(4), z.literal(6)]).optional(),
       model: z.string().optional(),

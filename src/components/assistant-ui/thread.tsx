@@ -39,6 +39,7 @@ import {
 } from "@/components/assistant-ui/tool-group";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ThreadBackdrop } from "@/components/workbench/thread-backdrop";
+import { SubjectLibrarySheet } from "@/components/workbench/SubjectLibrary";
 import {
   Image2ComposerContext,
   Image2ModeControl,
@@ -64,6 +65,7 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   type ToolCallMessagePartComponent,
+  unstable_defaultDirectiveFormatter,
   unstable_useMentionAdapter,
   unstable_useSlashCommandAdapter,
   useAui,
@@ -100,12 +102,15 @@ import {
   SlashIcon,
   SquareIcon,
   WrenchIcon,
+  UsersIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { VideoAnalysisLauncher } from "@/components/workbench/VideoAnalysisLauncher";
 import {
   createContext,
   useContext,
+  useEffect,
+  useMemo,
   useRef,
   useState,
   type ComponentType,
@@ -113,6 +118,7 @@ import {
   type PropsWithChildren,
   type ReactNode,
 } from "react";
+import { useMonoSubjectCatalog } from "@/lib/mono/subject-client";
 
 export type ThreadGroupPart = MessagePrimitive.GroupedParts.GroupPart;
 
@@ -510,6 +516,7 @@ const slashIconMap: Record<string, FC<{ className?: string }>> = {
 
 function DirectiveChip(props: DirectiveChipProps) {
   const { directiveId, directiveType, label } = props;
+  const subject = useMonoSubjectCatalog((state) => state.subjects.find((item) => item.id === directiveId));
   const showWrench = directiveType !== "command";
   return (
     <span
@@ -517,7 +524,10 @@ function DirectiveChip(props: DirectiveChipProps) {
       data-directive-type={directiveType}
       data-directive-id={directiveId}
     >
-      {showWrench && (
+      {directiveType === "subject" && subject ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={subject.previewUrl} alt="" className="size-4 rounded-sm object-cover" />
+      ) : showWrench && (
         <span className="aui-directive-chip-icon">
           <WrenchIcon className="size-3" />
         </span>
@@ -528,8 +538,48 @@ function DirectiveChip(props: DirectiveChipProps) {
 }
 
 const Composer: FC = () => {
-  const mention = unstable_useMentionAdapter({ fallbackIcon: WrenchIcon });
+  const image2Active = useImage2Mode((state) => state.active);
+  const openSubjectLibrary = useImage2Mode((state) => state.openSubjectLibrary);
+  const subjects = useMonoSubjectCatalog((state) => state.subjects);
+  const loadSubjects = useMonoSubjectCatalog((state) => state.load);
   const structuredTemplate = useImage2StructuredTemplate();
+  useEffect(() => {
+    if (image2Active) void loadSubjects();
+  }, [image2Active, loadSubjects]);
+  const mentionCategories = useMemo(() => image2Active && !structuredTemplate ? [{
+    id: "subjects",
+    label: "主体",
+    items: [
+      ...subjects.map((subject) => ({
+        id: subject.id,
+        type: "subject",
+        label: subject.name,
+        description: subject.visibility === "workspace" ? "工作区主体" : "我的主体",
+        icon: "subject",
+        metadata: { previewUrl: subject.previewUrl },
+      })),
+      {
+        id: "__subject_library",
+        type: "subject-action",
+        label: subjects.length ? "管理主体库" : "创建主体",
+        description: "上传图片或从生成历史创建",
+        icon: "subject-library",
+      },
+    ],
+  }] : undefined, [image2Active, structuredTemplate, subjects]);
+  const mention = unstable_useMentionAdapter({
+    categories: mentionCategories,
+    includeModelContextTools: mentionCategories ? { category: { id: "tools", label: "工具" } } : true,
+    fallbackIcon: WrenchIcon,
+    iconMap: { "subject-library": UsersIcon },
+    formatter: {
+      serialize: (item) => item.type === "subject-action" ? "" : unstable_defaultDirectiveFormatter.serialize(item),
+      parse: unstable_defaultDirectiveFormatter.parse,
+    },
+    onInserted: (item) => {
+      if (item.type === "subject-action") openSubjectLibrary();
+    },
+  });
   const slash = unstable_useSlashCommandAdapter({
     commands: slashCommands,
     iconMap: slashIconMap,
@@ -563,6 +613,7 @@ const Composer: FC = () => {
           {...slash}
           emptyItemsLabel="No matching commands"
         />
+        <SubjectLibrarySheet />
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
@@ -576,6 +627,7 @@ const ComposerPlusMenu: FC = () => {
   const router = useRouter();
   const image2Active = useImage2Mode((state) => state.active);
   const activateImage2 = useImage2Mode((state) => state.activate);
+  const openSubjectLibrary = useImage2Mode((state) => state.openSubjectLibrary);
 
   return (
     <DropdownMenu>
@@ -609,6 +661,10 @@ const ComposerPlusMenu: FC = () => {
           <SparklesIcon />
           创建图片
           {image2Active ? <CheckIcon className="ml-auto" /> : null}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openSubjectLibrary()}>
+          <UsersIcon />
+          主体库
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

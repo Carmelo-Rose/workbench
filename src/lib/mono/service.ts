@@ -11,9 +11,15 @@ import type {
   MonoImageGenerationSlot,
   MonoJob,
   MonoJobKind,
+  MonoSubject,
+  MonoSubjectInput,
+  MonoSubjectPatch,
+  MonoSubjectSnapshot,
   MonoVideoAnalysisInput,
 } from "./contracts";
 import { getMonoImage2Template } from "./image2-templates";
+import { MonoHttpError } from "./http";
+import { compileSubjectPrompt, subjectIdsFromPrompt } from "./subject-compiler";
 import {
   cancelMonoJob,
   claimMonoJob,
@@ -21,13 +27,20 @@ import {
   completeMonoJob,
   createMonoAsset,
   createMonoJob,
+  createMonoSubject,
+  deleteMonoSubject,
   failMonoJob,
   getMonoAsset,
   getMonoJob,
+  getMonoSubject,
   listMonoJobs,
+  listMonoSubjects,
+  purgeMonoJob,
+  purgeUnfavoriteMonoJobs,
   requeueInterruptedMonoJobs,
   setMonoJobFavorite,
   updateMonoJobResult,
+  updateMonoSubject,
 } from "./store";
 
 const MAX_IMAGE_ATTEMPTS = 3;
@@ -49,6 +62,28 @@ function getAssetSource(actor: MonoActor, assetId: string): string {
 
 export function createAsset(actor: MonoActor, input: Omit<MonoAsset, "id" | "workspaceId" | "userId" | "createdAt">): MonoAsset {
   return createMonoAsset(actor, input);
+}
+
+export function createSubject(actor: MonoActor, input: MonoSubjectInput): MonoSubject {
+  const subject = createMonoSubject(actor, input);
+  if (!subject) throw new MonoHttpError(400, "主体图片素材不存在，或不属于当前工作区");
+  return subject;
+}
+
+export function listSubjects(actor: MonoActor): MonoSubject[] {
+  return listMonoSubjects(actor);
+}
+
+export function getSubject(actor: MonoActor, subjectId: string): MonoSubject | null {
+  return getMonoSubject(actor, subjectId);
+}
+
+export function updateSubject(actor: MonoActor, subjectId: string, patch: MonoSubjectPatch): MonoSubject | null {
+  return updateMonoSubject(actor, subjectId, patch);
+}
+
+export function deleteSubject(actor: MonoActor, subjectId: string): boolean {
+  return deleteMonoSubject(actor, subjectId);
 }
 
 export async function analyzeImage(
@@ -87,8 +122,21 @@ export function createImageGenerationJob(actor: MonoActor, input: MonoImageGener
   const template = getMonoImage2Template(input.templateId);
   if (input.templateId && !template) throw new Error("Image2 模板不存在");
 
+  const orderedSubjectIds = [...new Set([
+    ...subjectIdsFromPrompt(input.prompt),
+    ...input.subjectIds,
+  ])];
+  const subjectSnapshots: MonoSubjectSnapshot[] = orderedSubjectIds.map((subjectId) => {
+    const subject = getMonoSubject(actor, subjectId);
+    if (!subject) throw new MonoHttpError(403, "主体不存在，或当前用户无权使用");
+    const asset = getMonoAsset(actor, subject.assetId);
+    if (!asset) throw new MonoHttpError(400, `主体“${subject.name}”的图片素材不存在`);
+    return { id: subject.id, name: subject.name, assetId: subject.assetId, sourceUrl: asset.sourceUrl };
+  });
+
   let referenceImageUrls: string[];
   if (template?.structuredMode) {
+    if (subjectSnapshots.length > 0) throw new MonoHttpError(400, "结构化双槽模板请在槽位中选择主体，不支持内联 @主体");
     const directReferences = [
       ...input.referenceImageUrls,
       ...input.referenceAssetIds.map((assetId) => getAssetSource(actor, assetId)),
@@ -107,13 +155,23 @@ export function createImageGenerationJob(actor: MonoActor, input: MonoImageGener
         : []),
       ...input.referenceImageUrls,
       ...input.referenceAssetIds.map((assetId) => getAssetSource(actor, assetId)),
+      ...subjectSnapshots.map((subject) => subject.sourceUrl),
     ];
   }
-  referenceImageUrls = [...new Set(referenceImageUrls)].slice(0, 6);
+  // Structured templates are positional. Preserve both slots even when the
+  // user intentionally selects the same source for product and scene.
+  if (!template?.structuredMode) referenceImageUrls = [...new Set(referenceImageUrls)];
+  if (referenceImageUrls.length > 6) {
+    throw new MonoHttpError(400, `参考图与主体图片合计 ${referenceImageUrls.length} 张，最多允许 6 张`);
+  }
+
+  const compiledPrompt = compileSubjectPrompt(input.prompt, referenceImageUrls, subjectSnapshots);
 
   const job = createMonoJob(actor, "image_generation", {
     prompt: input.prompt,
-    compiledPrompt: input.prompt,
+    compiledPrompt,
+    subjectIds: orderedSubjectIds,
+    subjectSnapshots,
     templateId: template?.id ?? null,
     structuredMode: template?.structuredMode ?? null,
     referenceImageUrls,
@@ -148,6 +206,14 @@ export function setJobFavorite(actor: MonoActor, jobId: string, favorite: boolea
   return setMonoJobFavorite(actor, jobId, favorite);
 }
 
+export function purgeJob(actor: MonoActor, jobId: string): boolean {
+  return purgeMonoJob(actor, jobId);
+}
+
+export function purgeUnfavoriteJobs(actor: MonoActor, kind: MonoJobKind): number {
+  return purgeUnfavoriteMonoJobs(actor, kind);
+}
+
 /**
  * 列表/写操作响应用的瘦身版：入参参考图是 data URL（可达数十 MB），
  * 替换为数量；结果图是远端 URL，保留供缩略图使用。复用参数走单条 GET 取全量。
@@ -156,6 +222,15 @@ export function lightenMonoJob(job: MonoJob): MonoJob & { input: { referenceImag
   const references = Array.isArray(job.input.referenceImageUrls) ? job.input.referenceImageUrls : [];
   const input = { ...job.input };
   delete input.referenceImageUrls;
+  delete input.compiledPrompt;
+  if (Array.isArray(input.subjectSnapshots)) {
+    input.subjectSnapshots = input.subjectSnapshots.map((snapshot) => {
+      if (typeof snapshot !== "object" || snapshot === null) return snapshot;
+      const light = { ...(snapshot as Record<string, unknown>) };
+      delete light.sourceUrl;
+      return light;
+    });
+  }
   return { ...job, input: { ...input, referenceImageCount: references.length } };
 }
 

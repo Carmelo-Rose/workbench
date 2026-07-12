@@ -151,6 +151,9 @@ const Items: FC<ItemsProps> = ({
                   ? item.metadata.icon
                   : undefined;
               const Icon = resolveIcon(iconKey, iconMap, fallbackIcon);
+              const previewUrl = typeof item.metadata?.previewUrl === "string"
+                ? item.metadata.previewUrl
+                : undefined;
               return (
                 <ComposerPrimitive.Unstable_TriggerPopoverItem
                   key={item.id}
@@ -159,11 +162,14 @@ const Items: FC<ItemsProps> = ({
                   className="hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-2 text-start transition-colors outline-none"
                 >
                   <span className="flex items-center gap-2 text-sm font-medium">
-                    <Icon className="text-primary size-3.5" />
+                    {previewUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={previewUrl} alt="" className="size-6 rounded-md object-cover" />
+                    ) : <Icon className="text-primary size-3.5" />}
                     {item.label}
                   </span>
                   {item.description && (
-                    <span className="text-muted-foreground ms-5.5 text-xs leading-tight">
+                    <span className={cn("text-muted-foreground text-xs leading-tight", previewUrl ? "ms-8" : "ms-5.5")}>
                       {item.description}
                     </span>
                   )}

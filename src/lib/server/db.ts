@@ -35,6 +35,20 @@ CREATE TABLE IF NOT EXISTS mono_assets (
 );
 CREATE INDEX IF NOT EXISTS mono_assets_workspace_created
   ON mono_assets(workspace_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS mono_subjects (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  owner_user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  asset_id TEXT NOT NULL REFERENCES mono_assets(id),
+  visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private', 'workspace')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mono_subjects_workspace_updated
+  ON mono_subjects(workspace_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS mono_subjects_owner_updated
+  ON mono_subjects(owner_user_id, updated_at DESC);
 CREATE TABLE IF NOT EXISTS mono_jobs (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
@@ -73,7 +87,7 @@ function ensureSchema(db: DatabaseSync): void {
   if (!jobColumns.some((column) => column.name === "favorite")) {
     db.exec("ALTER TABLE mono_jobs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0");
   }
-  db.exec("PRAGMA user_version = 3");
+  db.exec("PRAGMA user_version = 4");
 }
 
 function openDb(): DatabaseSync {
