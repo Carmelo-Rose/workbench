@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { MonoImageBatchGallery, useMonoJobPolling } from "@/components/workbench/MonoImageBatch";
 import type { MonoAsset, MonoImageGenerationInput, MonoJob } from "@/lib/mono/contracts";
+import { takeImage2Prompt } from "@/lib/mono/image2-handoff";
 import {
   MONO_IMAGE2_TEMPLATES,
   getMonoImage2Template,
@@ -29,7 +30,10 @@ type ReferenceDraft = { id: string; assetId?: string; sourceUrl: string; name: s
 export function Image2Workspace() {
   const router = useRouter();
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>();
-  const [prompt, setPrompt] = useState("");
+  // 对话里的「用它生图」把反推出的提示词经 sessionStorage 交接进来。
+  const [prompt, setPrompt] = useState(() =>
+    typeof window === "undefined" ? "" : takeImage2Prompt() ?? "",
+  );
   const [aspectRatio, setAspectRatio] = useState<MonoImageGenerationInput["aspectRatio"]>("9:16");
   const [variants, setVariants] = useState<MonoImageGenerationInput["variants"]>(1);
   const [references, setReferences] = useState<ReferenceDraft[]>([]);

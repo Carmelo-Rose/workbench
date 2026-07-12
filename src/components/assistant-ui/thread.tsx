@@ -86,9 +86,11 @@ import {
   WrenchIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { VideoAnalysisLauncher } from "@/components/workbench/VideoAnalysisLauncher";
 import {
   createContext,
   useContext,
+  useRef,
   useState,
   type ComponentType,
   type FC,
@@ -249,16 +251,18 @@ const SUGGESTION_GROUPS: SuggestionGroup[] = [
     icon: <SparklesIcon />,
     options: [
       {
+        // 点击直接拉起图片选择器，见 activateSuggestion。
         label: "反推图片",
-        prompt: "我想上传一张参考图，请将它反推成可复用的 AI 生图提示词。",
+        prompt: "反推这张图片，生成可复用的 AI 生图提示词。",
       },
       {
         label: "生成图片",
         prompt: "生成一张电商产品主图：白色陶瓷马克杯，干净白底，柔和自然光，45 度俯拍，高清商业摄影，1:1。",
       },
       {
+        // 点击弹出链接输入卡，见 activateSuggestion。
         label: "分析视频",
-        prompt: "我想分析一段视频，请提示我上传视频或粘贴公开视频链接。",
+        prompt: "我想分析一段视频，请提示我粘贴公开视频链接。",
       },
     ],
   },
@@ -336,6 +340,8 @@ const ThreadSuggestions: FC = () => {
   const router = useRouter();
   const tilt = useTilt();
   const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
+  const [videoDialogOpen, setVideoDialogOpen] = useState(false);
+  const reverseImageInputRef = useRef<HTMLInputElement>(null);
   const expandedGroup = SUGGESTION_GROUPS.find(
     (group) => group.label === expandedLabel,
   );
@@ -348,9 +354,27 @@ const ThreadSuggestions: FC = () => {
     });
   };
 
+  // 反推是「输入先行」任务：选完图直接连附件带指令一起发出，
+  // 不经过“AI 请你上传”的空转回合。
+  const reverseImage = async (file: File) => {
+    if (aui.thread().getState().isRunning) return;
+    const composer = aui.composer();
+    await composer.addAttachment(file);
+    composer.setText("反推这张图片，生成可复用的 AI 生图提示词。");
+    composer.send();
+  };
+
   const activateSuggestion = (label: string, prompt: string) => {
     if (label === "生成图片") {
       router.push("/mono/image2");
+      return;
+    }
+    if (label === "反推图片") {
+      reverseImageInputRef.current?.click();
+      return;
+    }
+    if (label === "分析视频") {
+      setVideoDialogOpen(true);
       return;
     }
     sendPrompt(prompt);
@@ -358,6 +382,22 @@ const ThreadSuggestions: FC = () => {
 
   return (
     <div className="aui-thread-welcome-suggestions flex w-full flex-col gap-2 px-4">
+      <input
+        ref={reverseImageInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void reverseImage(file);
+        }}
+      />
+      <VideoAnalysisLauncher
+        open={videoDialogOpen}
+        onOpenChange={setVideoDialogOpen}
+        onSubmit={sendPrompt}
+      />
       <div className="w-full scrollbar-none overflow-x-auto">
         <div className="mx-auto flex w-max items-center gap-2">
           {SUGGESTION_GROUPS.map((group) => (
