@@ -5,7 +5,7 @@ import { CheckIcon, CopyIcon, SparklesIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, type FC } from "react";
 import { Button } from "@/components/ui/button";
-import { stashImage2Prompt } from "@/lib/mono/image2-handoff";
+import { useImage2Mode } from "@/lib/image2-mode";
 import type {
   ImageToPromptArgs,
   ImageToPromptResult,
@@ -58,7 +58,7 @@ export const ImageToPromptToolUI = makeAssistantToolUI<
   },
 });
 
-/** 反推的下一步动作：留在对话里复制，或带着提示词进 Image2 工作台。 */
+/** 反推的下一步动作：留在对话里复制，或带着提示词进 Image2 创建图片模式。 */
 const PromptActions: FC<{ prompt: string }> = ({ prompt }) => {
   const router = useRouter();
   const [copied, setCopied] = useState(false);
@@ -73,9 +73,11 @@ const PromptActions: FC<{ prompt: string }> = ({ prompt }) => {
     }
   };
 
+  // 这张卡片深埋在消息树里，这里的 aui.composer() 解析到的不是主 composer，
+  // 所以只把 prompt 落进全局的 pendingPrompt，由顶层的 Image2ModeSync 代为写入。
   const generate = () => {
-    stashImage2Prompt(prompt);
-    router.push("/mono/image2");
+    useImage2Mode.getState().activateWithPrompt(prompt);
+    router.push("/?mode=image2");
   };
 
   return (
