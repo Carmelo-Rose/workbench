@@ -95,6 +95,43 @@ describe("Workbench Image2 route", () => {
     const { getMonoJob } = await import("./store");
     expect(getMonoJob({ userId: "other", workspaceId: "other", traceId: "trace_other" }, firstPayload.job.id)).toBeNull();
   });
+
+  it("creates an Image2 tool message through /api/chat without following the selected backend", async () => {
+    setEnv("NODE_ENV", "test");
+    setEnv("MONO_LOCAL_DEVELOPMENT", "true");
+    const { POST } = await import("@/app/api/chat/route");
+    const response = await POST(new Request("http://localhost/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: "thread_image2_chat",
+        config: {
+          modelName: "hermes",
+          image2: {
+            active: true,
+            templateId: "tpl-replace-product",
+            aspectRatio: "3:4",
+            variants: 2,
+          },
+        },
+        messages: [{
+          id: "user_image2_chat",
+          role: "user",
+          parts: [
+            { type: "text", text: "把产品放进这个场景" },
+            { type: "file", mediaType: "image/png", filename: "product.png", url: "data:image/png;base64,AA==" },
+            { type: "file", mediaType: "image/png", filename: "scene.png", url: "data:image/png;base64,AQ==" },
+          ],
+        }],
+      }),
+    }));
+    const streamText = await response.text();
+    expect(response.status).toBe(200);
+    expect(streamText).toContain("mono_generate_image");
+    expect(streamText).toContain("tool-output-available");
+    expect(streamText).toContain("thread_image2_chat");
+    expect(streamText).toContain('"mode":"image2"');
+  });
 });
 
 function setEnv(key: string, value: string | undefined) {

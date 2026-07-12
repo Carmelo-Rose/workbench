@@ -16,11 +16,10 @@ import {
   SunIcon,
 } from "lucide-react";
 import { useEffect, useState, type FC, type ReactNode } from "react";
-import { usePathname } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { ThreadListSidebar } from "@/components/assistant-ui/threadlist-sidebar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI";
-import { Image2Workspace } from "@/components/workbench/Image2Workspace";
 import {
   MonoAnalyzeVideoToolUI,
   MonoCancelJobToolUI,
@@ -81,6 +80,7 @@ import {
 } from "@/lib/theme";
 import { serverThreadListAdapter } from "@/lib/server-threads";
 import { createHistoryProvider } from "@/lib/thread-history";
+import { useImage2Mode } from "@/lib/image2-mode";
 
 /** 会话历史落在服务端 SQLite（/api/threads），首次加载自动迁移旧 localStorage。 */
 const threadListAdapter = {
@@ -109,10 +109,26 @@ export const Assistant = () => {
       <MonoGetJobToolUI />
       <MonoCancelJobToolUI />
       <BackendModelContext />
+      <Image2ModeSync />
       <ThreadTitleSync />
       <AssistantShell />
     </AssistantRuntimeProvider>
   );
+};
+
+const Image2ModeSync: FC = () => {
+  const searchParams = useSearchParams();
+  const active = useImage2Mode((state) => state.active);
+  const activate = useImage2Mode((state) => state.activate);
+  const deactivate = useImage2Mode((state) => state.deactivate);
+  const requested = searchParams.get("mode") === "image2";
+
+  useEffect(() => {
+    if (requested && !active) activate();
+    if (!requested && active) deactivate();
+  }, [active, activate, deactivate, requested]);
+
+  return null;
 };
 
 /** 首轮问答结束后为无标题线程生成标题（取首条用户消息摘要）。 */
@@ -223,8 +239,6 @@ const ThemeToggle: FC<{
 };
 
 const AssistantShell: FC = () => {
-  const pathname = usePathname();
-  const isImage2Workspace = pathname === "/mono/image2";
   const [styleId, setStyleId] = useState<ThreadStyleId>(loadThreadStyle);
   const [companion, setCompanion] = useState<CompanionId>(loadCompanion);
   const [themePref, setThemePref] = useState<ThemePref>(loadThemePref);
@@ -290,16 +304,12 @@ const AssistantShell: FC = () => {
               </BreadcrumbItem>
               <BreadcrumbSeparator className="hidden md:block" />
               <BreadcrumbItem>
-                {isImage2Workspace ? (
-                  <BreadcrumbPage className="font-medium">Image2</BreadcrumbPage>
-                ) : (
-                  <StylePicker value={styleId} onChange={handleStyleChange} />
-                )}
+                <StylePicker value={styleId} onChange={handleStyleChange} />
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
           <span className="text-border mx-1 hidden select-none md:block">·</span>
-          {isImage2Workspace ? null : <ThreadTitle />}
+          <ThreadTitle />
           <div className="ml-auto flex items-center gap-1.5">
             <HeaderBackendStatus onClick={() => openSettings("connections")} />
             <ThemeToggle value={themePref} onChange={handleThemeChange} />
@@ -325,7 +335,7 @@ const AssistantShell: FC = () => {
             key={styleId}
             className="fade-in animate-in h-full duration-200"
           >
-            {isImage2Workspace ? <Image2Workspace /> : <ActiveThread />}
+            <ActiveThread />
           </div>
         </main>
       </SidebarInset>

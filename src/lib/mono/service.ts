@@ -86,11 +86,17 @@ export function createImageGenerationJob(actor: MonoActor, input: MonoImageGener
 
   let referenceImageUrls: string[];
   if (template?.structuredMode) {
-    if (!input.structuredReferences) throw new Error("该模板需要产品图和参考图");
-    referenceImageUrls = [
-      getAssetSource(actor, input.structuredReferences.productAssetId),
-      getAssetSource(actor, input.structuredReferences.sceneAssetId),
+    const directReferences = [
+      ...input.referenceImageUrls,
+      ...input.referenceAssetIds.map((assetId) => getAssetSource(actor, assetId)),
     ];
+    referenceImageUrls = input.structuredReferences
+      ? [
+          getAssetSource(actor, input.structuredReferences.productAssetId),
+          getAssetSource(actor, input.structuredReferences.sceneAssetId),
+        ]
+      : directReferences.slice(0, 2);
+    if (referenceImageUrls.length !== 2) throw new Error("该模板需要产品图和参考图");
   } else {
     referenceImageUrls = [
       ...(input.templateReferencesEnabled && template?.referenceImageUrl
