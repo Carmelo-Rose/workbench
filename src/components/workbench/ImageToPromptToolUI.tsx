@@ -1,6 +1,11 @@
 "use client";
 
 import { makeAssistantToolUI } from "@assistant-ui/react";
+import { CheckIcon, CopyIcon, SparklesIcon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useState, type FC } from "react";
+import { Button } from "@/components/ui/button";
+import { useImage2Mode } from "@/lib/image2-mode";
 import type {
   ImageToPromptArgs,
   ImageToPromptResult,
@@ -15,6 +20,7 @@ export const ImageToPromptToolUI = makeAssistantToolUI<
   ImageToPromptResult
 >({
   toolName: "image_to_prompt",
+  display: "standalone",
   render: ({ args, result }) => {
     return (
       <div className="my-3 w-full overflow-hidden rounded-2xl border border-border/70 bg-card/80 shadow-sm backdrop-blur">
@@ -34,9 +40,12 @@ export const ImageToPromptToolUI = makeAssistantToolUI<
           ) : null}
 
           {result?.prompt ? (
-            <pre className="text-foreground whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">
-              {result.prompt}
-            </pre>
+            <>
+              <pre className="text-foreground whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">
+                {result.prompt}
+              </pre>
+              <PromptActions prompt={result.prompt} />
+            </>
           ) : (
             <div className="text-muted-foreground flex items-center gap-2 text-sm">
               <span className="bg-muted-foreground h-1.5 w-1.5 animate-pulse rounded-full" />
@@ -48,3 +57,39 @@ export const ImageToPromptToolUI = makeAssistantToolUI<
     );
   },
 });
+
+/** 反推的下一步动作：留在对话里复制，或带着提示词进 Image2 创建图片模式。 */
+const PromptActions: FC<{ prompt: string }> = ({ prompt }) => {
+  const router = useRouter();
+  const [copied, setCopied] = useState(false);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(prompt);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // 剪贴板权限被拒时静默失败，用户仍可手动选中文本复制。
+    }
+  };
+
+  // 这张卡片深埋在消息树里，这里的 aui.composer() 解析到的不是主 composer，
+  // 所以只把 prompt 落进全局的 pendingPrompt，由顶层的 Image2ModeSync 代为写入。
+  const generate = () => {
+    useImage2Mode.getState().activateWithPrompt(prompt);
+    router.push("/?mode=image2");
+  };
+
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      <Button variant="outline" size="sm" onClick={() => void copy()}>
+        {copied ? <CheckIcon /> : <CopyIcon />}
+        {copied ? "已复制" : "复制提示词"}
+      </Button>
+      <Button size="sm" onClick={generate}>
+        <SparklesIcon />
+        用它生图
+      </Button>
+    </div>
+  );
+};

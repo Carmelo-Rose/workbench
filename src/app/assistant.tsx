@@ -3,6 +3,7 @@
 import {
   AssistantRuntimeProvider,
   useAssistantRuntime,
+  useAui,
   useAuiState,
   useRemoteThreadListRuntime,
 } from "@assistant-ui/react";
@@ -118,15 +119,26 @@ export const Assistant = () => {
 
 const Image2ModeSync: FC = () => {
   const searchParams = useSearchParams();
+  const aui = useAui();
   const active = useImage2Mode((state) => state.active);
   const activate = useImage2Mode((state) => state.activate);
   const deactivate = useImage2Mode((state) => state.deactivate);
+  const pendingPrompt = useImage2Mode((state) => state.pendingPrompt);
+  const consumePendingPrompt = useImage2Mode((state) => state.consumePendingPrompt);
   const requested = searchParams.get("mode") === "image2";
 
   useEffect(() => {
     if (requested && !active) activate();
     if (!requested && active) deactivate();
   }, [active, activate, deactivate, requested]);
+
+  // 反推结果卡片（消息树深处）拿不到 composer 的 ambient scope，
+  // 所以只在这里落一个待写入的 pendingPrompt，由这个顶层组件代为写入。
+  useEffect(() => {
+    if (!active || !pendingPrompt) return;
+    aui.composer().setText(pendingPrompt);
+    consumePendingPrompt();
+  }, [active, pendingPrompt, aui, consumePendingPrompt]);
 
   return null;
 };

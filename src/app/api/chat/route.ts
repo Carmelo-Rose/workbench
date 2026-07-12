@@ -76,6 +76,13 @@ function forcedToolName(userText: string, hasImageAttachment: boolean) {
   ) {
     return "image_to_prompt" as const;
   }
+  // 视频意图必须先于生图判断：「反推视频提示词」这类请求也含“生…图”字样。
+  if (
+    /(分析|反推|拆解|解析).{0,12}视频|视频.{0,12}(分析|反推|拆解)|analy[sz]e.{0,20}video/i.test(text) &&
+    /https?:\/\//i.test(text)
+  ) {
+    return "mono_analyze_video" as const;
+  }
   if (/(生图|生成.*图|画.*图|绘制.*图|generate.*image|create.*image)/i.test(text)) {
     return "mono_generate_image" as const;
   }

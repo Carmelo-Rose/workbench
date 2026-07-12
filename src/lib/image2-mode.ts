@@ -9,7 +9,11 @@ type Image2ModeState = {
   selectedTemplateId?: MonoImage2TemplateId;
   aspectRatio: MonoImageGenerationInput["aspectRatio"];
   variants: MonoImageGenerationInput["variants"];
+  /** 从消息树（如反推结果卡）跨组件交给 composer 的待写入文本，见 Image2ModeSync。 */
+  pendingPrompt?: string;
   activate: () => void;
+  activateWithPrompt: (prompt: string) => void;
+  consumePendingPrompt: () => void;
   deactivate: () => void;
   reset: () => void;
   selectTemplate: (templateId: MonoImage2TemplateId) => void;
@@ -22,11 +26,14 @@ const defaults = {
   selectedTemplateId: undefined,
   aspectRatio: "9:16" as const,
   variants: 1 as const,
+  pendingPrompt: undefined,
 };
 
 export const useImage2Mode = create<Image2ModeState>((set) => ({
   ...defaults,
   activate: () => set({ active: true }),
+  activateWithPrompt: (pendingPrompt) => set({ active: true, pendingPrompt }),
+  consumePendingPrompt: () => set({ pendingPrompt: undefined }),
   deactivate: () => set({ active: false }),
   reset: () => set(defaults),
   selectTemplate: (selectedTemplateId) => set({ active: true, selectedTemplateId }),
