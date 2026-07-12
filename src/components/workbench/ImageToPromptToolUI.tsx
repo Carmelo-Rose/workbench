@@ -17,9 +17,9 @@ export const ImageToPromptToolUI = makeAssistantToolUI<
   toolName: "image_to_prompt",
   render: ({ args, result }) => {
     return (
-      <div className="my-2 w-full overflow-hidden rounded-2xl border border-black/10 bg-white/70 backdrop-blur">
-        <div className="flex items-center gap-2 border-b border-black/5 px-4 py-2.5 text-xs text-black/50">
-          <span className="inline-block h-2 w-2 rounded-full bg-black" />
+      <div className="my-3 w-full overflow-hidden rounded-2xl border border-border/70 bg-card/80 shadow-sm backdrop-blur">
+        <div className="text-muted-foreground flex items-center gap-2 border-b border-border/60 px-4 py-3 text-xs">
+          <span className="bg-foreground inline-block size-2 rounded-full" />
           图 → 提示词
         </div>
 
@@ -29,17 +29,17 @@ export const ImageToPromptToolUI = makeAssistantToolUI<
             <img
               src={args.imageUrl}
               alt="待反推的图片"
-              className="mb-3 max-h-56 w-auto rounded-lg border border-black/5 object-contain"
+              className="mb-3 max-h-56 w-auto rounded-xl border border-border/70 object-contain"
             />
           ) : null}
 
           {result?.prompt ? (
-            <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-black/80">
+            <pre className="text-foreground whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">
               {result.prompt}
             </pre>
           ) : (
-            <div className="flex items-center gap-2 text-sm text-black/40">
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-black/40" />
+            <div className="text-muted-foreground flex items-center gap-2 text-sm">
+              <span className="bg-muted-foreground h-1.5 w-1.5 animate-pulse rounded-full" />
               正在反推提示词…
             </div>
           )}

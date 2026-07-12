@@ -1,0 +1,5 @@
+{
+  "name": "mono-mcp-adapter",
+  "private": true,
+  "type": "module"
+}

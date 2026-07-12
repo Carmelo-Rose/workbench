@@ -24,7 +24,51 @@ CREATE TABLE IF NOT EXISTS messages (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (thread_id, id)
 );
+CREATE TABLE IF NOT EXISTS mono_assets (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  source_url TEXT NOT NULL,
+  mime_type TEXT,
+  name TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mono_assets_workspace_created
+  ON mono_assets(workspace_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS mono_jobs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('video_analysis', 'image_generation')),
+  status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+  input_json TEXT NOT NULL,
+  result_json TEXT,
+  error TEXT,
+  idempotency_key TEXT,
+  trace_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  started_at INTEGER,
+  completed_at INTEGER,
+  UNIQUE(workspace_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS mono_jobs_workspace_updated
+  ON mono_jobs(workspace_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS mono_job_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id TEXT NOT NULL REFERENCES mono_jobs(id) ON DELETE CASCADE,
+  event_type TEXT NOT NULL,
+  detail_json TEXT,
+  created_at INTEGER NOT NULL
+);
 `;
+
+function ensureSchema(db: DatabaseSync): void {
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(DDL);
+  db.exec("PRAGMA user_version = 2");
+}
 
 function openDb(): DatabaseSync {
   const dbPath =
@@ -32,10 +76,7 @@ function openDb(): DatabaseSync {
     path.join(process.cwd(), "data", "workbench.db");
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec(DDL);
-  db.exec("PRAGMA user_version = 1");
+  ensureSchema(db);
   console.log(`[workbench] sqlite db at ${dbPath}`);
   return db;
 }
@@ -47,5 +88,8 @@ const globalForDb = globalThis as typeof globalThis & {
 
 export function getDb(): DatabaseSync {
   globalForDb.__workbenchDb ??= openDb();
+  // Dev HMR can retain an older connection after DDL changes. All statements
+  // are idempotent, so reapplying them also serves as a lightweight migration.
+  ensureSchema(globalForDb.__workbenchDb);
   return globalForDb.__workbenchDb;
 }

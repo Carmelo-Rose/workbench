@@ -16,9 +16,18 @@ import {
   SunIcon,
 } from "lucide-react";
 import { useEffect, useState, type FC, type ReactNode } from "react";
+import { usePathname } from "next/navigation";
 import { ThreadListSidebar } from "@/components/assistant-ui/threadlist-sidebar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI";
+import { Image2Workspace } from "@/components/workbench/Image2Workspace";
+import {
+  MonoAnalyzeVideoToolUI,
+  MonoCancelJobToolUI,
+  MonoCreateAssetToolUI,
+  MonoGenerateImageToolUI,
+  MonoGetJobToolUI,
+} from "@/components/workbench/MonoToolUI";
 import {
   BackendModelContext,
   HeaderBackendStatus,
@@ -94,6 +103,11 @@ export const Assistant = () => {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <ImageToPromptToolUI />
+      <MonoGenerateImageToolUI />
+      <MonoAnalyzeVideoToolUI />
+      <MonoCreateAssetToolUI />
+      <MonoGetJobToolUI />
+      <MonoCancelJobToolUI />
       <BackendModelContext />
       <ThreadTitleSync />
       <AssistantShell />
@@ -209,6 +223,8 @@ const ThemeToggle: FC<{
 };
 
 const AssistantShell: FC = () => {
+  const pathname = usePathname();
+  const isImage2Workspace = pathname === "/mono/image2";
   const [styleId, setStyleId] = useState<ThreadStyleId>(loadThreadStyle);
   const [companion, setCompanion] = useState<CompanionId>(loadCompanion);
   const [themePref, setThemePref] = useState<ThemePref>(loadThemePref);
@@ -274,12 +290,16 @@ const AssistantShell: FC = () => {
               </BreadcrumbItem>
               <BreadcrumbSeparator className="hidden md:block" />
               <BreadcrumbItem>
-                <StylePicker value={styleId} onChange={handleStyleChange} />
+                {isImage2Workspace ? (
+                  <BreadcrumbPage className="font-medium">Image2</BreadcrumbPage>
+                ) : (
+                  <StylePicker value={styleId} onChange={handleStyleChange} />
+                )}
               </BreadcrumbItem>
             </BreadcrumbList>
           </Breadcrumb>
           <span className="text-border mx-1 hidden select-none md:block">·</span>
-          <ThreadTitle />
+          {isImage2Workspace ? null : <ThreadTitle />}
           <div className="ml-auto flex items-center gap-1.5">
             <HeaderBackendStatus onClick={() => openSettings("connections")} />
             <ThemeToggle value={themePref} onChange={handleThemeChange} />
@@ -305,7 +325,7 @@ const AssistantShell: FC = () => {
             key={styleId}
             className="fade-in animate-in h-full duration-200"
           >
-            <ActiveThread />
+            {isImage2Workspace ? <Image2Workspace /> : <ActiveThread />}
           </div>
         </main>
       </SidebarInset>

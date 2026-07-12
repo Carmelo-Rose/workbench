@@ -51,6 +51,32 @@ npm run dev                  # http://localhost:3000
 见 [.env.example](.env.example)。必填 `CHAT_API_KEY`；
 Hermes / 视觉模型按需配置。
 
+### Mono Creative Service
+
+Mono 的图片反推、视频分析和 Image2 生成现在由 Workbench 的服务端 API 承载：
+
+- `GET /mono/image2` 打开模板、参考图、结构化双槽和批次结果工作区
+- `POST /api/mono/assets` 登记 URL 或 data URL 素材
+- `POST /api/mono/analyze/image` 同步图片反推
+- `POST /api/mono/analyze/video`、`POST /api/mono/generate/image` 创建异步任务
+- `GET` / `DELETE /api/mono/jobs/:id` 查询或取消任务
+
+Image2 支持插件迁移来的 6 个模板、最多 6 张参考图，以及一次生成 1、2、4、6
+张图片。页面、direct Agent 工具和 MCP adapter 共用同一批次任务契约。
+
+外部平台 API 默认拒绝访问，必须设置 `MONO_PLATFORM_API_KEY`。本地开发时由
+`MONO_LOCAL_DEVELOPMENT=true` 显式启用 Workbench 单用户身份桥；生产环境不会
+接受该开关。供应商凭据仅保存在服务端环境变量中。运行独立 Streamable HTTP MCP adapter：
+
+```bash
+MONO_MCP_API_KEY=client-token \
+MONO_PLATFORM_API_KEY=platform-token \
+npm run mono:mcp
+```
+
+MCP 默认监听 `http://127.0.0.1:8787/mcp`，并转发至 Workbench 的
+`http://127.0.0.1:3000`。Hermes 只有确认支持远程 Streamable HTTP MCP 后才应配置该地址。
+
 ## 常用命令
 
 ```bash
@@ -58,6 +84,7 @@ npm run dev     # 开发（Turbopack）
 npm run build   # 生产构建
 npm run start   # 生产启动
 npm run lint    # ESLint
+npm test        # Image2 契约与 API 集成测试
 ```
 
 ## 目录速览

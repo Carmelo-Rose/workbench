@@ -1,5 +1,9 @@
+"use client";
+
 import type * as React from "react";
-import { MessagesSquare, SettingsIcon } from "lucide-react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { ImageIcon, MessagesSquare, SettingsIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -25,6 +29,9 @@ export function ThreadListSidebar({
 }: React.ComponentProps<typeof Sidebar> & {
   onOpenSettings?: () => void;
 }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const isImage2 = pathname === "/mono/image2";
   return (
     <Sidebar {...props}>
       <SidebarHeader className="aui-sidebar-header mb-2">
@@ -51,7 +58,25 @@ export function ThreadListSidebar({
         </div>
       </SidebarHeader>
       <SidebarContent className="aui-sidebar-content px-2">
-        <ThreadList />
+        <SidebarMenu className="mb-2">
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild isActive={isImage2} tooltip="Image2 图像生成">
+              <Link href="/mono/image2">
+                <ImageIcon />
+                <span>Image2 图像生成</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+        <div
+          onClickCapture={(event) => {
+            if (isImage2 && (event.target as HTMLElement).closest("[data-slot='aui_thread-list-item-trigger']")) {
+              router.push("/");
+            }
+          }}
+        >
+          <ThreadList onNewThread={isImage2 ? () => router.push("/") : undefined} />
+        </div>
       </SidebarContent>
       <SidebarFooter className="aui-sidebar-footer">
         <SidebarMenu>

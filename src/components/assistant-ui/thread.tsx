@@ -73,7 +73,7 @@ import {
   FileTextIcon,
   GlobeIcon,
   HelpCircleIcon,
-  ImageIcon,
+  SparklesIcon,
   LanguagesIcon,
   LightbulbIcon,
   MicIcon,
@@ -85,6 +85,7 @@ import {
   SquareIcon,
   WrenchIcon,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import {
   createContext,
   useContext,
@@ -244,20 +245,20 @@ type SuggestionGroup = {
 
 const SUGGESTION_GROUPS: SuggestionGroup[] = [
   {
-    label: "图像提示词",
-    icon: <ImageIcon />,
+    label: "Mono",
+    icon: <SparklesIcon />,
     options: [
       {
-        label: "把参考图反推成提示词",
-        prompt: "我想上传一张参考图，请用 image_to_prompt 工具把它反推成可复用的生图提示词",
+        label: "反推图片",
+        prompt: "我想上传一张参考图，请将它反推成可复用的 AI 生图提示词。",
       },
       {
-        label: "写一组产品图提示词",
-        prompt: "帮我写一组电商产品主图的生图提示词：白底、柔光、45 度俯拍，主体是一只陶瓷马克杯",
+        label: "生成图片",
+        prompt: "生成一张电商产品主图：白色陶瓷马克杯，干净白底，柔和自然光，45 度俯拍，高清商业摄影，1:1。",
       },
       {
-        label: "优化一段提示词",
-        prompt: "帮我优化这段生图提示词，让画面更有电影感：一个人在雨夜的城市街头行走",
+        label: "分析视频",
+        prompt: "我想分析一段视频，请提示我上传视频或粘贴公开视频链接。",
       },
     ],
   },
@@ -332,6 +333,7 @@ const suggestionChipClass =
 
 const ThreadSuggestions: FC = () => {
   const aui = useAui();
+  const router = useRouter();
   const tilt = useTilt();
   const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
   const expandedGroup = SUGGESTION_GROUPS.find(
@@ -344,6 +346,14 @@ const ThreadSuggestions: FC = () => {
       content: [{ type: "text", text: prompt }],
       runConfig: aui.composer().getState().runConfig,
     });
+  };
+
+  const activateSuggestion = (label: string, prompt: string) => {
+    if (label === "生成图片") {
+      router.push("/mono/image2");
+      return;
+    }
+    sendPrompt(prompt);
   };
 
   return (
@@ -383,7 +393,7 @@ const ThreadSuggestions: FC = () => {
                 variant="ghost"
                 {...tilt}
                 className={suggestionChipClass}
-                onClick={() => sendPrompt(option.prompt)}
+                onClick={() => activateSuggestion(option.label, option.prompt)}
               >
                 {option.label}
               </Button>

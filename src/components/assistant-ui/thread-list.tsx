@@ -24,10 +24,10 @@ import {
   type FC,
 } from "react";
 
-export const ThreadList: FC = () => {
+export const ThreadList: FC<{ onNewThread?: () => void }> = ({ onNewThread }) => {
   return (
     <ThreadListRoot>
-      <ThreadListNew />
+      <ThreadListNew onClick={onNewThread} />
       <ThreadListItems />
     </ThreadListRoot>
   );

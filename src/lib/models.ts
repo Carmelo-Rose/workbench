@@ -13,10 +13,17 @@ function requireEnv(name: string): string {
  * 负责聊天与决定何时调用工具，本身不需要视觉能力。
  */
 export function chatModel() {
+  const baseURL = process.env.CHAT_BASE_URL ?? "https://api.deepseek.com/v1";
+  // Qwen thinking mode rejects forced tool_choice. Mono's direct Agent uses
+  // forced calls for explicit image actions, so keep these requests non-thinking.
+  const isDashScope = /(?:dashscope|maas)\.aliyuncs\.com/i.test(baseURL);
   const provider = createOpenAICompatible({
     name: "workbench-chat",
-    baseURL: process.env.CHAT_BASE_URL ?? "https://api.deepseek.com/v1",
+    baseURL,
     apiKey: requireEnv("CHAT_API_KEY"),
+    ...(isDashScope
+      ? { transformRequestBody: (body) => ({ ...body, enable_thinking: false }) }
+      : {}),
   });
   return provider(process.env.CHAT_MODEL ?? "deepseek-chat");
 }
