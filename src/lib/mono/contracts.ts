@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { monoImage2TemplateIds } from "./image2-templates";
 
-export const monoJobKinds = ["video_analysis", "image_generation"] as const;
+export const monoJobKinds = ["video_analysis", "image_generation", "matting"] as const;
 export const monoJobStatuses = [
   "queued",
   "running",
@@ -41,6 +41,23 @@ export const monoVideoAnalysisSchema = z.object({
 }).refine((input) => Boolean(input.assetId || input.videoUrl), {
   message: "assetId 或 videoUrl 至少提供一个",
 });
+
+/** 工具层用 base（附件可在 execute 时兜底注入），API 层用带 refine 的完整版。 */
+export const monoMattingBaseSchema = z.object({
+  assetId: z.string().min(1).optional(),
+  mediaUrl: z.string().url().optional(),
+  mediaType: z.enum(["image", "video"]).default("image"),
+  /** 换背景：纯色（#RRGGBB）留空则输出透明背景。 */
+  backgroundColor: z.string().regex(/^#[0-9a-fA-F]{6}$/u, "背景色必须是 #RRGGBB").optional(),
+  /** 换背景：已登记的背景图素材。 */
+  backgroundAssetId: z.string().min(1).optional(),
+  idempotencyKey: z.string().min(1).max(180).optional(),
+});
+
+export const monoMattingSchema = monoMattingBaseSchema.refine(
+  (input) => Boolean(input.assetId || input.mediaUrl),
+  { message: "assetId 或 mediaUrl 至少提供一个" },
+);
 
 export const monoAspectRatios = ["1:1", "3:4", "9:16", "4:3", "16:9"] as const;
 export const monoImageVariants = [1, 2, 4, 6] as const;
@@ -108,6 +125,7 @@ export type MonoActor = z.infer<typeof monoActorSchema>;
 export type MonoAssetInput = z.infer<typeof monoAssetInputSchema>;
 export type MonoImageAnalysisInput = z.infer<typeof monoImageAnalysisSchema>;
 export type MonoVideoAnalysisInput = z.infer<typeof monoVideoAnalysisSchema>;
+export type MonoMattingInput = z.infer<typeof monoMattingSchema>;
 export type MonoImageGenerationInput = z.infer<typeof monoImageGenerationSchema>;
 export type MonoImageGenerationSlot = z.infer<typeof monoImageGenerationSlotSchema>;
 export type MonoImageGenerationResult = z.infer<typeof monoImageGenerationResultSchema>;
@@ -121,6 +139,8 @@ export type MonoAsset = MonoAssetInput & {
   id: string;
   workspaceId: string;
   userId: string;
+  /** 落在本地对象存储时的 key；此时 sourceUrl 为 storage:<key> 哨兵。 */
+  storageKey?: string;
   createdAt: number;
 };
 

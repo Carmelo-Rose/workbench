@@ -27,7 +27,16 @@ import {
   MonoCreateAssetToolUI,
   MonoGenerateImageToolUI,
   MonoGetJobToolUI,
+  MonoMattingToolUI,
 } from "@/components/workbench/MonoToolUI";
+import {
+  CollectorBatchesToolUI,
+  CollectorSearchToolUI,
+  LuopanEventsToolUI,
+  LuopanRoundsToolUI,
+  LuopanSnapshotToolUI,
+  LuopanTrendToolUI,
+} from "@/components/workbench/CollectorToolUI";
 import {
   BackendModelContext,
   HeaderBackendStatus,
@@ -109,6 +118,13 @@ export const Assistant = () => {
       <MonoCreateAssetToolUI />
       <MonoGetJobToolUI />
       <MonoCancelJobToolUI />
+      <MonoMattingToolUI />
+      <LuopanRoundsToolUI />
+      <LuopanSnapshotToolUI />
+      <LuopanTrendToolUI />
+      <LuopanEventsToolUI />
+      <CollectorBatchesToolUI />
+      <CollectorSearchToolUI />
       <BackendModelContext />
       <Image2ModeSync />
       <ThreadTitleSync />

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, type FC } from "react";
-import { PlaySquareIcon } from "lucide-react";
+import { useRef, useState, type FC } from "react";
+import { LoaderCircleIcon, PlaySquareIcon, UploadIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -41,6 +41,9 @@ export const VideoAnalysisLauncher: FC<{
   const [url, setUrl] = useState("");
   const [focusLabel, setFocusLabel] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const trimmedUrl = url.trim();
   const urlValid = isHttpUrl(trimmedUrl);
@@ -50,6 +53,13 @@ export const VideoAnalysisLauncher: FC<{
     setUrl("");
     setFocusLabel(null);
     setTouched(false);
+    setUploading(false);
+    setUploadError(null);
+  };
+
+  const focusSuffix = () => {
+    const focus = FOCUS_OPTIONS.find((option) => option.label === focusLabel);
+    return focus ? `，${focus.instruction}` : "";
   };
 
   const submit = () => {
@@ -57,12 +67,33 @@ export const VideoAnalysisLauncher: FC<{
       setTouched(true);
       return;
     }
-    const focus = FOCUS_OPTIONS.find((option) => option.label === focusLabel);
-    onSubmit(
-      `分析这个视频：${trimmedUrl}${focus ? `，${focus.instruction}` : ""}`,
-    );
+    onSubmit(`分析这个视频：${trimmedUrl}${focusSuffix()}`);
     onOpenChange(false);
     reset();
+  };
+
+  // 本地视频先流式上传落盘，再以素材 id 发起分析（大文件不过 data URL）。
+  const uploadAndSubmit = async (file: File) => {
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const response = await fetch("/api/workbench/mono/uploads", {
+        method: "POST",
+        headers: {
+          "Content-Type": file.type || "video/mp4",
+          "x-workbench-filename": encodeURIComponent(file.name),
+        },
+        body: file,
+      });
+      const payload = (await response.json()) as { asset?: { id: string }; error?: string };
+      if (!response.ok || !payload.asset) throw new Error(payload.error ?? "上传失败");
+      onSubmit(`分析视频素材 ${payload.asset.id}（${file.name}）${focusSuffix()}`);
+      onOpenChange(false);
+      reset();
+    } catch (error) {
+      setUploadError(error instanceof Error ? error.message : "上传失败，请重试");
+      setUploading(false);
+    }
   };
 
   return (
@@ -80,7 +111,7 @@ export const VideoAnalysisLauncher: FC<{
             分析视频
           </DialogTitle>
           <DialogDescription>
-            粘贴公开视频链接，选择分析重点。本地视频上传即将支持。
+            粘贴公开视频链接或上传本地视频，选择分析重点。
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
@@ -126,9 +157,36 @@ export const VideoAnalysisLauncher: FC<{
               </button>
             ))}
           </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="video/*"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void uploadAndSubmit(file);
+            }}
+          />
+          {uploadError ? (
+            <p className="text-destructive text-xs">{uploadError}</p>
+          ) : null}
         </div>
         <DialogFooter>
-          <Button onClick={submit} disabled={!trimmedUrl} className="rounded-full">
+          <Button
+            variant="outline"
+            className="rounded-full"
+            disabled={uploading}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            {uploading ? (
+              <LoaderCircleIcon className="size-4 animate-spin" />
+            ) : (
+              <UploadIcon className="size-4" />
+            )}
+            {uploading ? "正在上传" : "上传本地视频"}
+          </Button>
+          <Button onClick={submit} disabled={!trimmedUrl || uploading} className="rounded-full">
             开始分析
           </Button>
         </DialogFooter>

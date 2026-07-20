@@ -291,6 +291,34 @@ const SUGGESTION_GROUPS: SuggestionGroup[] = [
         label: "分析视频",
         prompt: "我想分析一段视频，请提示我粘贴公开视频链接。",
       },
+      {
+        // 点击直接拉起图片选择器，见 activateSuggestion。
+        label: "抠像换背景",
+        prompt: "把这张图片做主体抠像，输出透明背景。",
+      },
+    ],
+  },
+  {
+    label: "电商数据",
+    icon: <ChartColumnIcon />,
+    options: [
+      {
+        label: "看榜单异动",
+        prompt: "查询最新一轮抖音罗盘短视频榜的异动事件（新进榜和排名急升），帮我解读哪些商品值得关注，按优先级给出理由。",
+      },
+      {
+        label: "查商品排名轨迹",
+        prompt: "我想查一个商品在抖音罗盘短视频榜的排名轨迹，请先问我商品 ID 或先列出最近的异动商品让我选。",
+      },
+      {
+        label: "检索采集内容",
+        prompt: "列出已导入的抓取批次，然后帮我检索分析其中的内容：总结标题风格、互动数据分布，找出表现最好的几条。",
+      },
+      {
+        // 点击拉起 XLSX/CSV 文件选择器，见 activateSuggestion。
+        label: "导入采集结果",
+        prompt: "导入抓取结果文件。",
+      },
     ],
   },
   {
@@ -370,7 +398,10 @@ const ThreadSuggestions: FC = () => {
   const tilt = useTilt();
   const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
   const [videoDialogOpen, setVideoDialogOpen] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const reverseImageInputRef = useRef<HTMLInputElement>(null);
+  const mattingInputRef = useRef<HTMLInputElement>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const expandedGroup = SUGGESTION_GROUPS.find(
     (group) => group.label === expandedLabel,
   );
@@ -393,6 +424,38 @@ const ThreadSuggestions: FC = () => {
     composer.send();
   };
 
+  // 抠像也是「输入先行」：选完图连附件带指令直接发出，
+  // 服务端 forcedToolName 命中 mono_matting 后由工具卡接管进度。
+  const mattingImage = async (file: File) => {
+    if (aui.thread().getState().isRunning) return;
+    const composer = aui.composer();
+    await composer.addAttachment(file);
+    composer.setText("把这张图片做主体抠像，输出透明背景。");
+    composer.send();
+  };
+
+  // 导入抓取结果（douyin_Playwright 的 XLSX/CSV），成功后直接让 AI 分析这批数据。
+  const importCollectorFile = async (file: File) => {
+    setImportError(null);
+    try {
+      const response = await fetch("/api/workbench/collector/import", {
+        method: "POST",
+        headers: { "x-workbench-filename": encodeURIComponent(file.name) },
+        body: file,
+      });
+      const payload = (await response.json()) as {
+        batch?: { batchId: string; platform: string; itemCount: number };
+        error?: string;
+      };
+      if (!response.ok || !payload.batch) throw new Error(payload.error ?? "导入失败");
+      sendPrompt(
+        `我刚导入了一批抓取数据（批次 ${payload.batch.batchId}，平台 ${payload.batch.platform}，共 ${payload.batch.itemCount} 条）。请用 collector_search_items 查看这批内容，总结标题风格与互动数据分布，并指出表现最好的几条和可复用的选题方向。`,
+      );
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : "导入失败，请重试");
+    }
+  };
+
   const activateSuggestion = (label: string, prompt: string) => {
     if (label === "生成图片") {
       activateImage2();
@@ -405,6 +468,14 @@ const ThreadSuggestions: FC = () => {
     }
     if (label === "分析视频") {
       setVideoDialogOpen(true);
+      return;
+    }
+    if (label === "抠像换背景") {
+      mattingInputRef.current?.click();
+      return;
+    }
+    if (label === "导入采集结果") {
+      importInputRef.current?.click();
       return;
     }
     sendPrompt(prompt);
@@ -425,6 +496,31 @@ const ThreadSuggestions: FC = () => {
           if (file) void reverseImage(file);
         }}
       />
+      <input
+        ref={mattingInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void mattingImage(file);
+        }}
+      />
+      <input
+        ref={importInputRef}
+        type="file"
+        accept=".xlsx,.csv"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void importCollectorFile(file);
+        }}
+      />
+      {importError ? (
+        <p className="text-destructive mx-auto text-xs">{importError}</p>
+      ) : null}
       <VideoAnalysisLauncher
         open={videoDialogOpen}
         onOpenChange={setVideoDialogOpen}

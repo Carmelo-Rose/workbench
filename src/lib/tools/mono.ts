@@ -2,6 +2,7 @@ import { tool } from "ai";
 import {
   monoAssetInputSchema,
   monoImageGenerationSchema,
+  monoMattingBaseSchema,
   monoSubjectInputSchema,
   monoSubjectPatchSchema,
   monoVideoAnalysisSchema,
@@ -10,6 +11,7 @@ import {
   cancelJob,
   createAsset,
   createImageGenerationJob,
+  createMattingJob,
   createSubject,
   createVideoAnalysisJob,
   getJob,
@@ -24,6 +26,8 @@ type MonoToolContext = {
   sessionId?: string;
   userId?: string;
   workspaceId?: string;
+  /** 最近一条用户消息里的图片附件，供抠像等工具在缺少显式素材时兜底。 */
+  attachmentUrl?: string;
 };
 
 /** One registry powers direct AI SDK tools and the MCP adapter's business calls. */
@@ -68,6 +72,18 @@ export function createMonoTools(context: MonoToolContext = {}) {
       description: "删除可复用主体记录，不删除底层图片素材。只有创建者可以删除。",
       inputSchema: z.object({ subjectId: z.string().min(1) }),
       execute: ({ subjectId }) => ({ deleted: deleteSubject(actor, subjectId) }),
+    }),
+    mono_matting: tool({
+      description: "人物/主体抠像换背景任务。输入已登记素材 id 或公开媒体 URL（图片、视频均可）；用户直接发图片附件时可都不填。可选纯色背景（#RRGGBB）或背景图素材，缺省输出透明背景。",
+      inputSchema: monoMattingBaseSchema,
+      execute: (input) => {
+        let assetId = input.assetId;
+        if (!assetId && !input.mediaUrl) {
+          if (!context.attachmentUrl) throw new Error("请提供素材 id、媒体 URL，或直接附上图片");
+          assetId = createAsset(actor, { sourceUrl: context.attachmentUrl, mimeType: "image/*" }).id;
+        }
+        return createMattingJob(actor, { ...input, assetId });
+      },
     }),
     mono_generate_image: tool({
       description: "直接创建 Image2 图片生成任务。支持模板、多参考图、结构化双参考图、画面比例，以及一次生成 1、2、4 或 6 张图片。",

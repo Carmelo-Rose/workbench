@@ -12,6 +12,7 @@ import { chatModel, hermesModel } from "@/lib/models";
 import { defaultBackend, isBackendId, type BackendId } from "@/lib/backends";
 import { WORKBENCH_SYSTEM } from "@/lib/prompts";
 import { createImageToPromptTool } from "@/lib/tools/image-to-prompt";
+import { createCollectorTools } from "@/lib/tools/collector";
 import { createMonoTools } from "@/lib/tools/mono";
 import { monoAspectRatios, type MonoImageGenerationInput, type MonoJob } from "@/lib/mono/contracts";
 import { getMonoImage2Template, monoImage2TemplateIds } from "@/lib/mono/image2-templates";
@@ -87,12 +88,22 @@ function forcedToolName(userText: string, hasImageAttachment: boolean) {
   // 视频意图必须先于生图判断：「反推视频提示词」这类请求也含“生…图”字样。
   if (
     /(分析|反推|拆解|解析).{0,12}视频|视频.{0,12}(分析|反推|拆解)|analy[sz]e.{0,20}video/i.test(text) &&
-    /https?:\/\//i.test(text)
+    /https?:\/\/|asset_[0-9a-f]/i.test(text)
   ) {
     return "mono_analyze_video" as const;
   }
+  if (
+    /(抠像|抠图|去背景|去除背景|换背景|remove\s*background|matting)/i.test(text) &&
+    (hasImageAttachment || /https?:\/\/|asset_[0-9a-f]/i.test(text))
+  ) {
+    return "mono_matting" as const;
+  }
   if (/(生图|生成.*图|画.*图|绘制.*图|generate.*image|create.*image)/i.test(text)) {
     return "mono_generate_image" as const;
+  }
+  // 罗盘榜单问数：明确提到罗盘/榜单异动时直接查差分事件。
+  if (/(罗盘|短视频榜|商品卡榜|新进榜|急升|榜单.{0,6}(异动|变化|事件))/i.test(text)) {
+    return "luopan_query_events" as const;
   }
   return undefined;
 }
@@ -124,6 +135,11 @@ export async function POST(req: Request) {
     image_to_prompt: createImageToPromptTool(attachmentUrl),
     ...createMonoTools({
       sessionId: id,
+      userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",
+      workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
+      attachmentUrl,
+    }),
+    ...createCollectorTools({
       userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",
       workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
     }),

@@ -1,0 +1,22 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{{INPUT_MEDIA}}"
+    }
+  },
+  "2": {
+    "class_type": "BiRefNet",
+    "inputs": {
+      "image": ["1", 0],
+      "model": "BiRefNet-general"
+    }
+  },
+  "3": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["2", 0],
+      "filename_prefix": "workbench-matting"
+    }
+  }
+}

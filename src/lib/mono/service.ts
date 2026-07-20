@@ -11,6 +11,7 @@ import type {
   MonoImageGenerationSlot,
   MonoJob,
   MonoJobKind,
+  MonoMattingInput,
   MonoSubject,
   MonoSubjectInput,
   MonoSubjectPatch,
@@ -19,6 +20,13 @@ import type {
 } from "./contracts";
 import { getMonoImage2Template } from "./image2-templates";
 import { MonoHttpError } from "./http";
+import {
+  downloadComfyOutput,
+  loadComfyWorkflow,
+  runComfyWorkflow,
+  uploadComfyInput,
+} from "./comfyui";
+import { readObjectBuffer, saveObjectBuffer } from "@/lib/storage";
 import { compileSubjectPrompt, subjectIdsFromPrompt } from "./subject-compiler";
 import {
   cancelMonoJob,
@@ -54,14 +62,33 @@ function imageSource(sourceUrl: string): URL | string {
   return sourceUrl.startsWith("data:") ? sourceUrl : new URL(sourceUrl);
 }
 
+/** 存储素材对外的可取回 URL（外部处理服务用它拉取内容）。 */
+function publicAssetUrl(assetId: string): string {
+  const baseUrl = process.env.WORKBENCH_PUBLIC_URL ?? "http://127.0.0.1:3000";
+  return new URL(`/api/workbench/mono/assets/${encodeURIComponent(assetId)}/content`, baseUrl).toString();
+}
+
 function getAssetSource(actor: MonoActor, assetId: string): string {
   const asset = getMonoAsset(actor, assetId);
   if (!asset) throw new Error("素材不存在，或不属于当前工作区");
-  return asset.sourceUrl;
+  return asset.storageKey ? publicAssetUrl(asset.id) : asset.sourceUrl;
 }
 
 export function createAsset(actor: MonoActor, input: Omit<MonoAsset, "id" | "workspaceId" | "userId" | "createdAt">): MonoAsset {
   return createMonoAsset(actor, input);
+}
+
+/** 上传落盘后的素材登记：sourceUrl 用 storage: 哨兵，内容走 content 路由取回。 */
+export function createStoredAsset(
+  actor: MonoActor,
+  input: { storageKey: string; mimeType?: string; name?: string },
+): MonoAsset {
+  return createMonoAsset(actor, {
+    sourceUrl: `storage:${input.storageKey}`,
+    mimeType: input.mimeType,
+    name: input.name,
+    storageKey: input.storageKey,
+  });
 }
 
 export function createSubject(actor: MonoActor, input: MonoSubjectInput): MonoSubject {
@@ -113,6 +140,25 @@ export function createVideoAnalysisJob(actor: MonoActor, input: MonoVideoAnalysi
     videoUrl,
     focus: input.focus ?? "请总结视频内容、镜头语言、节奏、音频和可复用的创作提示词。",
     model: input.model ?? process.env.MONO_VIDEO_MODEL ?? "mono-video-analysis",
+  }, input.idempotencyKey);
+  scheduleMonoWorker();
+  return job;
+}
+
+export function createMattingJob(actor: MonoActor, input: MonoMattingInput): MonoJob {
+  // 只存引用不存内容：runner 用 job 自带的 actor 信息在执行时解析素材字节。
+  if (input.assetId && !getMonoAsset(actor, input.assetId)) {
+    throw new MonoHttpError(400, "素材不存在，或不属于当前工作区");
+  }
+  if (input.backgroundAssetId && !getMonoAsset(actor, input.backgroundAssetId)) {
+    throw new MonoHttpError(400, "背景图素材不存在，或不属于当前工作区");
+  }
+  const job = createMonoJob(actor, "matting", {
+    assetId: input.assetId ?? null,
+    mediaUrl: input.mediaUrl ?? null,
+    mediaType: input.mediaType,
+    backgroundColor: input.backgroundColor ?? null,
+    backgroundAssetId: input.backgroundAssetId ?? null,
   }, input.idempotencyKey);
   scheduleMonoWorker();
   return job;
@@ -283,6 +329,8 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
   try {
     if (job.kind === "video_analysis") {
       completeMonoJob(job.id, await runVideoAnalysis(job.input, controller.signal));
+    } else if (job.kind === "matting") {
+      completeMonoJob(job.id, await runMatting(job, controller.signal));
     } else {
       const result = await runImageGenerationBatch(job.id, job.input, controller.signal);
       completeMonoJob(
@@ -317,6 +365,100 @@ async function runVideoAnalysis(input: Record<string, unknown>, signal: AbortSig
   const text = data?.data ?? data?.text ?? data?.result;
   if (typeof text !== "string" || text.length === 0) throw new Error("视频分析服务没有返回可用结果");
   return { text, model: data?.model ?? input.model, provider: data?.upstream ?? "mono-video" };
+}
+
+type SourceBytes = { buffer: Buffer; filename: string; mimeType?: string };
+
+/** 把素材引用（storage / data URL / http URL）解析成字节，供 ComfyUI 上传。 */
+async function resolveSourceBytes(
+  actor: MonoActor,
+  assetId: string | null,
+  url: string | null,
+  signal: AbortSignal,
+): Promise<SourceBytes> {
+  if (assetId) {
+    const asset = getMonoAsset(actor, assetId);
+    if (!asset) throw new Error("素材不存在，或不属于当前工作区");
+    if (asset.storageKey) {
+      return {
+        buffer: await readObjectBuffer(asset.storageKey),
+        filename: asset.name ?? asset.storageKey.slice(3),
+        mimeType: asset.mimeType,
+      };
+    }
+    return resolveSourceBytes(actor, null, asset.sourceUrl, signal);
+  }
+  if (!url) throw new Error("缺少素材来源");
+  if (url.startsWith("data:")) {
+    const match = url.match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/u);
+    if (!match) throw new Error("素材内容格式无效");
+    const buffer = match[2]
+      ? Buffer.from(match[3], "base64")
+      : Buffer.from(decodeURIComponent(match[3]), "utf8");
+    return { buffer, filename: "input", mimeType: match[1] || undefined };
+  }
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error(`素材下载失败：HTTP ${response.status}`);
+  const filename = decodeURIComponent(new URL(url).pathname.split("/").pop() || "input");
+  return {
+    buffer: Buffer.from(await response.arrayBuffer()),
+    filename,
+    mimeType: response.headers.get("content-type") ?? undefined,
+  };
+}
+
+const EXTENSION_MIME: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif",
+  mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
+};
+
+function mimeFromFilename(filename: string): string | undefined {
+  const extension = filename.match(/\.([0-9a-z]+)$/iu)?.[1]?.toLowerCase();
+  return extension ? EXTENSION_MIME[extension] : undefined;
+}
+
+async function runMatting(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
+  const actor = newMonoActor({ userId: job.userId, workspaceId: job.workspaceId, traceId: job.traceId });
+  const input = job.input;
+  const mediaType = input.mediaType === "video" ? "video" : "image";
+
+  updateMonoJobResult(job.id, { stage: "uploading" });
+  const media = await resolveSourceBytes(
+    actor,
+    typeof input.assetId === "string" ? input.assetId : null,
+    typeof input.mediaUrl === "string" ? input.mediaUrl : null,
+    signal,
+  );
+  const values: Record<string, string> = {
+    INPUT_MEDIA: await uploadComfyInput(media.buffer, media.filename, media.mimeType, signal),
+    BACKGROUND_COLOR: typeof input.backgroundColor === "string" ? input.backgroundColor : "",
+    BACKGROUND_MEDIA: "",
+  };
+  if (typeof input.backgroundAssetId === "string" && input.backgroundAssetId) {
+    const background = await resolveSourceBytes(actor, input.backgroundAssetId, null, signal);
+    values.BACKGROUND_MEDIA = await uploadComfyInput(background.buffer, background.filename, background.mimeType, signal);
+  }
+
+  // 图片走 BiRefNet、视频走 RVM 之类的选择完全由工作流文件决定。
+  const workflow = await loadComfyWorkflow(`matting-${mediaType}`, values);
+  const outputs = await runComfyWorkflow(workflow, signal, (stage) => updateMonoJobResult(job.id, { stage }));
+
+  updateMonoJobResult(job.id, { stage: "downloading" });
+  const primary = outputs[0];
+  const stored = await saveObjectBuffer(await downloadComfyOutput(primary, signal), primary.filename);
+  const resultAsset = createStoredAsset(actor, {
+    storageKey: stored.key,
+    mimeType: mimeFromFilename(primary.filename),
+    name: primary.filename,
+  });
+  return {
+    assetId: resultAsset.id,
+    url: `/api/workbench/mono/assets/${encodeURIComponent(resultAsset.id)}/content`,
+    filename: primary.filename,
+    mediaType,
+    outputs: outputs.length,
+    provider: "comfyui",
+  };
 }
 
 async function runImageGenerationBatch(
