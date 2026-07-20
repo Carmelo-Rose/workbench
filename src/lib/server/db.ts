@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS mono_job_events (
   detail_json TEXT,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS api_config (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
 `;
 
 function ensureSchema(db: DatabaseSync): void {

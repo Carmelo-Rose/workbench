@@ -41,7 +41,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
       execute: (input) => createAsset(actor, input),
     }),
     mono_analyze_video: tool({
-      description: "创建视频音画分析任务。适用于用户提供视频 URL 或已登记视频素材，并希望分析内容、镜头、节奏、音频或提示词时调用。",
+      description: "创建视频音画分析任务。适用于用户提供视频直链、抖音分享链接或已登记视频素材，并希望分析内容、镜头、节奏、音频或提示词时调用。",
       inputSchema: monoVideoAnalysisSchema,
       execute: (input) => createVideoAnalysisJob(actor, input),
     }),

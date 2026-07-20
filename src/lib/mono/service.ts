@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { generateText } from "ai";
 import { visionModel } from "@/lib/models";
+import { getConfigValue } from "@/lib/server/api-config";
 import { buildImagePromptInstruction } from "@/lib/prompts";
 import type {
   MonoActor,
@@ -112,7 +113,7 @@ export function createVideoAnalysisJob(actor: MonoActor, input: MonoVideoAnalysi
   const job = createMonoJob(actor, "video_analysis", {
     videoUrl,
     focus: input.focus ?? "请总结视频内容、镜头语言、节奏、音频和可复用的创作提示词。",
-    model: input.model ?? process.env.MONO_VIDEO_MODEL ?? "mono-video-analysis",
+    model: input.model ?? getConfigValue("MONO_VIDEO_MODEL") ?? "mono-video-analysis",
   }, input.idempotencyKey);
   scheduleMonoWorker();
   return job;
@@ -177,7 +178,7 @@ export function createImageGenerationJob(actor: MonoActor, input: MonoImageGener
     referenceImageUrls,
     aspectRatio: input.aspectRatio,
     variants: input.variants,
-    model: template?.model ?? input.model ?? process.env.MONO_IMAGE_MODEL ?? "gpt-image-2-vip",
+    model: template?.model ?? input.model ?? getConfigValue("MONO_IMAGE_MODEL") ?? "gpt-image-2-vip",
   }, input.idempotencyKey);
   scheduleMonoWorker();
   return job;
@@ -300,14 +301,44 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
   }
 }
 
-async function runVideoAnalysis(input: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
-  const endpoint = process.env.MONO_VIDEO_ANALYZE_URL;
-  const apiKey = process.env.MONO_VIDEO_API_KEY;
-  if (!endpoint || !apiKey) throw new Error("视频分析未配置：请设置 MONO_VIDEO_ANALYZE_URL 和 MONO_VIDEO_API_KEY");
+const DOUYIN_SHARE_RE = /^https?:\/\/(?:v\.douyin\.com\/[A-Za-z0-9_-]+\/?|www\.douyin\.com\/video\/\d+)/i;
+
+/**
+ * 抖音分享链接是网页而非视频文件，先经解析服务换成可直接分析的视频直链。
+ * 解析端点复用 Mono veFaaS 的 video/resolve 协议：POST { sourceUrl, platform }。
+ * 未显式配置 MONO_VIDEO_RESOLVE_URL 时，按约定从 analyze 端点推导同级路径。
+ */
+async function resolveShareVideoUrl(sourceUrl: string, apiKey: string, signal: AbortSignal): Promise<string> {
+  if (!DOUYIN_SHARE_RE.test(sourceUrl)) return sourceUrl;
+  const endpoint = getConfigValue("MONO_VIDEO_RESOLVE_URL")
+    ?? getConfigValue("MONO_VIDEO_ANALYZE_URL")?.replace(/\/video\/analyze\/?$/, "/video/resolve");
+  if (!endpoint || endpoint === getConfigValue("MONO_VIDEO_ANALYZE_URL")) {
+    throw new Error("检测到抖音分享链接，但未配置解析服务：请设置 MONO_VIDEO_RESOLVE_URL");
+  }
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ videoUrl: input.videoUrl, prompt: input.focus, model: input.model }),
+    body: JSON.stringify({ sourceUrl, platform: "douyin" }),
+    signal,
+  });
+  const data = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok || data?.success === false) {
+    throw new Error(typeof data?.error === "string" ? data.error : `抖音链接解析服务返回 HTTP ${response.status}`);
+  }
+  const videoUrl = data?.videoUrl ?? data?.downloadUrl;
+  if (typeof videoUrl !== "string" || videoUrl.length === 0) throw new Error("抖音链接解析成功，但未返回可分析的视频地址");
+  return videoUrl;
+}
+
+async function runVideoAnalysis(input: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
+  const endpoint = getConfigValue("MONO_VIDEO_ANALYZE_URL");
+  const apiKey = getConfigValue("MONO_VIDEO_API_KEY");
+  if (!endpoint || !apiKey) throw new Error("视频分析未配置：请设置 MONO_VIDEO_ANALYZE_URL 和 MONO_VIDEO_API_KEY");
+  const videoUrl = await resolveShareVideoUrl(String(input.videoUrl ?? ""), apiKey, signal);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ videoUrl, prompt: input.focus, model: input.model }),
     signal,
   });
   const data = await response.json().catch(() => null) as Record<string, unknown> | null;
@@ -363,8 +394,8 @@ async function runImageGenerationBatch(
 }
 
 async function runSingleImageGeneration(input: Record<string, unknown>, signal: AbortSignal): Promise<string> {
-  const baseUrl = process.env.MONO_IMAGE_BASE_URL;
-  const apiKey = process.env.MONO_IMAGE_API_KEY;
+  const baseUrl = getConfigValue("MONO_IMAGE_BASE_URL");
+  const apiKey = getConfigValue("MONO_IMAGE_API_KEY");
   if (!baseUrl || !apiKey) throw new Error("图片生成未配置：请设置 MONO_IMAGE_BASE_URL 和 MONO_IMAGE_API_KEY");
   const generateUrl = process.env.MONO_IMAGE_GENERATE_URL ?? new URL("/v1/api/generate", baseUrl).toString();
   const response = await fetch(generateUrl, {

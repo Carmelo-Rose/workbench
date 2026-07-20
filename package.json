@@ -2,7 +2,11 @@
   "name": "workbench",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
+    "postinstall": "node scripts/patch-assistant-ui-mention-trigger.mjs",
     "dev": "next dev",
     "build": "next build",
     "test": "vitest run",

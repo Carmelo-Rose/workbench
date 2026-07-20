@@ -13,9 +13,9 @@ export const WORKBENCH_SYSTEM = `你是 Workbench，一个面向创作者的 AI 
 - 图片反推、视频分析和图片生成的工具卡是对应结果的主要呈现；工具返回后不要重复卡片中的过程、状态或内容。`;
 
 export function buildImagePromptInstruction(focus?: string): string {
-  const base = `请仔细观察这张图片，反推出可用于 AI 文生图（如 Midjourney / 可灵 / 即梦）的高质量提示词。
+  const base = `请仔细观察这张图片，反推出可用于 AI 文生图（如 Midjourney / 可灵 / 即梦）的高质量中文提示词。
 要求：
-1. 先给出一段【中文提示词】，再给出对应的【English Prompt】。
+1. 只输出一段完整的中文提示词，不要输出英文版本。
 2. 覆盖主体、风格、构图、光影、色调、镜头/质感等要素，具体、可复现。
 3. 只输出提示词本身，不要额外解释。`;
   return focus ? `${base}\n特别侧重：${focus}` : base;

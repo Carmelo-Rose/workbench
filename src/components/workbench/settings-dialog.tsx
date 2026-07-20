@@ -8,6 +8,7 @@ import {
   DatabaseIcon,
   DownloadIcon,
   InfoIcon,
+  KeyRoundIcon,
   Link2Icon,
   MonitorIcon,
   MoonIcon,
@@ -28,6 +29,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   CONN_STATE_LABEL,
   StatusDot,
@@ -54,12 +56,14 @@ import { cn } from "@/lib/utils";
 export type SettingsSection =
   | "connections"
   | "capabilities"
+  | "apiConfig"
   | "appearance"
   | "data";
 
 const SECTIONS: { id: SettingsSection; name: string; icon: ReactNode }[] = [
   { id: "connections", name: "连接与模式", icon: <CableIcon /> },
   { id: "capabilities", name: "Agent 能力", icon: <SparklesIcon /> },
+  { id: "apiConfig", name: "API 配置", icon: <KeyRoundIcon /> },
   { id: "appearance", name: "外观", icon: <PaletteIcon /> },
   { id: "data", name: "数据", icon: <DatabaseIcon /> },
 ];
@@ -122,6 +126,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
           <div className="min-h-0 flex-1 overflow-y-auto p-5">
             {section === "connections" && <ConnectionsSection />}
             {section === "capabilities" && <CapabilitiesSection />}
+            {section === "apiConfig" && <ApiConfigSection />}
             {section === "appearance" && <AppearanceSection {...rest} />}
             {section === "data" && <DataSection />}
           </div>
@@ -329,6 +334,176 @@ const CapabilitiesSection: FC = () => {
         items={BACKENDS.direct.capabilities}
         icons={DIRECT_CAPABILITY_ICONS}
       />
+    </div>
+  );
+};
+
+/* -------------------------------- API 配置 -------------------------------- */
+
+type ConfigFieldView = {
+  key: string;
+  secret: boolean;
+  value: string;
+  source: "custom" | "env" | "unset";
+};
+
+type ConfigGroups = Record<string, ConfigFieldView[]>;
+
+const GROUP_META: Record<string, { label: string; sub: string }> = {
+  chat: { label: "对话（Chat）", sub: "驱动主对话的模型。" },
+  vision: {
+    label: "图片 / 视频反推（视觉理解）",
+    sub: "用于「反推图片」与「分析视频」，需要能看图/看视频的模型。",
+  },
+  monoVideo: {
+    label: "视频分析服务（Mono）",
+    sub: "第三方视频理解服务地址，与上面的视觉模型是两套独立通道。",
+  },
+  monoImage: { label: "生图服务（Mono）", sub: "AI 生图服务地址。" },
+};
+
+const FIELD_LABEL: Record<string, string> = {
+  CHAT_BASE_URL: "Base URL",
+  CHAT_API_KEY: "API Key",
+  CHAT_MODEL: "模型",
+  VISION_BASE_URL: "Base URL",
+  VISION_API_KEY: "API Key",
+  VISION_MODEL: "模型",
+  MONO_VIDEO_ANALYZE_URL: "分析端点 URL",
+  MONO_VIDEO_RESOLVE_URL: "分享链接解析 URL（可选）",
+  MONO_VIDEO_API_KEY: "API Key",
+  MONO_VIDEO_MODEL: "模型",
+  MONO_IMAGE_BASE_URL: "Base URL",
+  MONO_IMAGE_API_KEY: "API Key",
+  MONO_IMAGE_MODEL: "模型",
+};
+
+const SOURCE_LABEL: Record<ConfigFieldView["source"], string> = {
+  custom: "自定义",
+  env: ".env.local",
+  unset: "未配置",
+};
+
+const ApiConfigGroup: FC<{
+  groupId: string;
+  fields: ConfigFieldView[];
+  onSaved: (groups: ConfigGroups) => void;
+}> = ({ groupId, fields, onSaved }) => {
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const meta = GROUP_META[groupId];
+  const dirty = Object.keys(draft).length > 0;
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(draft),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { groups: ConfigGroups };
+        onSaved(data.groups);
+        setDraft({});
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border p-4">
+      <div className="mb-3">
+        <p className="text-sm font-medium">{meta?.label ?? groupId}</p>
+        {meta?.sub && <p className="text-muted-foreground mt-0.5 text-xs">{meta.sub}</p>}
+      </div>
+      <div className="flex flex-col gap-3">
+        {fields.map((field) => (
+          <div key={field.key} className="flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground text-xs">
+                {FIELD_LABEL[field.key] ?? field.key}
+              </span>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px] font-medium",
+                  field.source === "custom" && "bg-accent text-accent-foreground",
+                  field.source === "env" && "text-muted-foreground border",
+                  field.source === "unset" && "text-destructive/80 border border-destructive/30",
+                )}
+              >
+                {SOURCE_LABEL[field.source]}
+              </span>
+            </div>
+            <Input
+              type={field.secret ? "password" : "text"}
+              value={draft[field.key] ?? (field.secret ? "" : field.value)}
+              placeholder={field.secret ? (field.value || "未配置，输入以设置") : undefined}
+              onChange={(e) =>
+                setDraft((d) => ({ ...d, [field.key]: e.target.value }))
+              }
+              className="h-8 font-mono text-xs"
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <Button
+          size="sm"
+          className="h-7 rounded-full px-3 text-xs"
+          disabled={!dirty || saving}
+          onClick={() => void save()}
+        >
+          保存
+        </Button>
+        {dirty && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 rounded-full px-3 text-xs"
+            onClick={() => setDraft({})}
+          >
+            取消修改
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ApiConfigSection: FC = () => {
+  const [groups, setGroups] = useState<ConfigGroups | null>(null);
+
+  const load = () => {
+    fetch("/api/config")
+      .then((res) => res.json())
+      .then((data: { groups: ConfigGroups }) => setGroups(data.groups));
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div>
+      <SectionTitle sub="改这里立即生效，不用重启进程；留空保存会清除覆盖并回落到 .env.local。密钥保存后仅展示末 4 位。">
+        API 配置
+      </SectionTitle>
+      {!groups ? (
+        <p className="text-muted-foreground text-xs">加载中…</p>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {Object.entries(groups).map(([groupId, fields]) => (
+            <ApiConfigGroup
+              key={groupId}
+              groupId={groupId}
+              fields={fields}
+              onSaved={setGroups}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 };

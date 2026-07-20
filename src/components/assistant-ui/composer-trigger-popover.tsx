@@ -5,6 +5,7 @@ import {
   ComposerPrimitive,
   unstable_defaultDirectiveFormatter,
   unstable_useTriggerPopoverScopeContext,
+  useAui,
   type Unstable_DirectiveFormatter,
   type Unstable_TriggerItem,
 } from "@assistant-ui/react";
@@ -48,6 +49,14 @@ type ComposerTriggerPopoverBaseProps = Omit<
   emptyItemsLabel?: string;
   /** Label shown while an async adapter is resolving items. @default "Loading…" */
   loadingLabel?: string;
+  /**
+   * Items with `metadata.actionOnly: true` run this instead of the normal
+   * directive-insertion flow (which — via the Lexical `DirectivePlugin` —
+   * always inserts a chip and never surfaces `directive.onInserted`). Use
+   * this for menu entries that open a side panel rather than referencing
+   * something inline (e.g. "create subject").
+   */
+  onActionItem?: (item: Unstable_TriggerItem) => void;
 };
 
 type ComposerTriggerPopoverProps = ComposerTriggerPopoverBaseProps &
@@ -117,21 +126,39 @@ const Categories: FC<CategoriesProps> = ({
 );
 
 type ItemsProps = {
+  triggerChar: string;
   iconMap: Record<string, IconComponent> | undefined;
   fallbackIcon: IconComponent;
   backLabel: string;
   emptyLabel: string;
   loadingLabel: string;
+  onActionItem: ((item: Unstable_TriggerItem) => void) | undefined;
 };
 
 const Items: FC<ItemsProps> = ({
+  triggerChar,
   iconMap,
   fallbackIcon,
   backLabel,
   emptyLabel,
   loadingLabel,
+  onActionItem,
 }) => {
-  const { isLoading } = unstable_useTriggerPopoverScopeContext();
+  const aui = useAui();
+  const { isLoading, query, close } = unstable_useTriggerPopoverScopeContext();
+
+  const runAction = (item: Unstable_TriggerItem) => {
+    // Best-effort: strip the still-uncommitted "@query" text left behind
+    // once the trigger deactivates. Only applies when the cursor is at the
+    // end of that text (the common case while actively typing a mention).
+    const composer = aui.composer();
+    const text = composer.getState().text;
+    const suffix = triggerChar + query;
+    if (text.endsWith(suffix)) composer.setText(text.slice(0, -suffix.length));
+    close();
+    onActionItem?.(item);
+  };
+
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverItems>
       {(items) => (
@@ -154,11 +181,19 @@ const Items: FC<ItemsProps> = ({
               const previewUrl = typeof item.metadata?.previewUrl === "string"
                 ? item.metadata.previewUrl
                 : undefined;
+              const actionOnly = item.metadata?.actionOnly === true;
               return (
                 <ComposerPrimitive.Unstable_TriggerPopoverItem
                   key={item.id}
                   item={item}
                   index={index}
+                  onClick={actionOnly ? (event) => {
+                    // Skip the library's default select handler (which would
+                    // otherwise always insert a directive chip — see
+                    // `onActionItem` doc comment above).
+                    event.preventDefault();
+                    runAction(item);
+                  } : undefined}
                   className="hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-2 text-start transition-colors outline-none"
                 >
                   <span className="flex items-center gap-2 text-sm font-medium">
@@ -199,9 +234,11 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
   emptyCategoriesLabel = "No items available",
   emptyItemsLabel = "No matching items",
   loadingLabel = "Loading…",
+  onActionItem,
   className,
   directive,
   action,
+  char,
   ...props
 }) => {
   const warnedRef = useRef(false);
@@ -223,6 +260,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
         "aui-composer-trigger-popover bg-popover text-popover-foreground absolute start-0 bottom-full z-50 mb-2 w-64 overflow-hidden rounded-xl border shadow-lg",
         className,
       )}
+      char={char}
       {...props}
     >
       {directive ? (
@@ -243,11 +281,13 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
         emptyLabel={emptyCategoriesLabel}
       />
       <Items
+        triggerChar={char}
         iconMap={iconMap}
         fallbackIcon={fallbackIcon}
         backLabel={backLabel}
         emptyLabel={emptyItemsLabel}
         loadingLabel={loadingLabel}
+        onActionItem={onActionItem}
       />
     </ComposerPrimitive.Unstable_TriggerPopover>
   );

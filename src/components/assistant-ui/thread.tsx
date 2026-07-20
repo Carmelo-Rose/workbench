@@ -71,6 +71,7 @@ import {
   useAui,
   useAuiState,
   type Unstable_SlashCommand,
+  type Unstable_TriggerItem,
 } from "@assistant-ui/react";
 import {
   LexicalComposerInput,
@@ -89,6 +90,7 @@ import {
   FileTextIcon,
   GlobeIcon,
   HelpCircleIcon,
+  ImageIcon,
   SparklesIcon,
   LanguagesIcon,
   LightbulbIcon,
@@ -517,6 +519,11 @@ const slashIconMap: Record<string, FC<{ className?: string }>> = {
 function DirectiveChip(props: DirectiveChipProps) {
   const { directiveId, directiveType, label } = props;
   const subject = useMonoSubjectCatalog((state) => state.subjects.find((item) => item.id === directiveId));
+  // "创建主体/管理主体库" is an action, not a real reference — it's handled by
+  // ComposerTriggerPopover's onActionItem (click) / onDirectiveSelect
+  // (keyboard Enter/Tab safety net, see Composer). Render nothing so a stray
+  // Enter/Tab selection doesn't leave a dead-looking chip behind.
+  if (directiveType === "subject-action") return null;
   const showWrench = directiveType !== "command";
   return (
     <span
@@ -527,6 +534,10 @@ function DirectiveChip(props: DirectiveChipProps) {
       {directiveType === "subject" && subject ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={subject.previewUrl} alt="" className="size-4 rounded-sm object-cover" />
+      ) : directiveType === "ref" ? (
+        <span className="aui-directive-chip-icon">
+          <ImageIcon className="size-3" />
+        </span>
       ) : showWrench && (
         <span className="aui-directive-chip-icon">
           <WrenchIcon className="size-3" />
@@ -546,40 +557,71 @@ const Composer: FC = () => {
   useEffect(() => {
     if (image2Active) void loadSubjects();
   }, [image2Active, loadSubjects]);
-  const mentionCategories = useMemo(() => image2Active && !structuredTemplate ? [{
-    id: "subjects",
-    label: "主体",
-    items: [
-      ...subjects.map((subject) => ({
-        id: subject.id,
-        type: "subject",
-        label: subject.name,
-        description: subject.visibility === "workspace" ? "工作区主体" : "我的主体",
-        icon: "subject",
-        metadata: { previewUrl: subject.previewUrl },
-      })),
-      {
-        id: "__subject_library",
-        type: "subject-action",
-        label: subjects.length ? "管理主体库" : "创建主体",
-        description: "上传图片或从生成历史创建",
-        icon: "subject-library",
-      },
-    ],
-  }] : undefined, [image2Active, structuredTemplate, subjects]);
+  // 当前已上传的图片附件也进 @ 候选（对齐 Mono 插件的「参考图N」虚拟候选）。
+  // 编号即附件顺序，与服务端编译提示词时 referenceImageUrls 的编号一致，
+  // 所以 chip 只需序列化成纯文本「参考图N」，无需升格为主体。
+  const composerAttachments = useAuiState((state) => state.composer.attachments);
+  const imageAttachments = useMemo(
+    () => composerAttachments.filter((attachment) => attachment.type === "image"),
+    [composerAttachments],
+  );
+  const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const previews: Record<string, string> = {};
+    for (const attachment of imageAttachments) {
+      if (attachment.file) previews[attachment.id] = URL.createObjectURL(attachment.file);
+    }
+    setAttachmentPreviews(previews);
+    return () => Object.values(previews).forEach((url) => URL.revokeObjectURL(url));
+  }, [imageAttachments]);
+  // Flat list, not a category: mirrors the reference Mono plugin's "@"
+  // picker, which shows subjects (+ a pinned create/manage action)
+  // immediately — no drill-down step.
+  const mentionItems = useMemo(() => image2Active && !structuredTemplate ? [
+    ...subjects.map((subject) => ({
+      id: subject.id,
+      type: "subject",
+      label: subject.name,
+      description: subject.visibility === "workspace" ? "工作区主体" : "我的主体",
+      icon: "subject",
+      metadata: { previewUrl: subject.previewUrl },
+    })),
+    ...imageAttachments.map((attachment, index) => ({
+      id: `ref:${attachment.id}`,
+      type: "ref",
+      label: `参考图${index + 1}`,
+      description: "本次上传的参考图",
+      icon: "subject",
+      metadata: { previewUrl: attachmentPreviews[attachment.id] },
+    })),
+    {
+      id: "__subject_library",
+      type: "subject-action",
+      label: subjects.length ? "管理主体库" : "创建主体",
+      description: "上传图片或从生成历史创建",
+      icon: "subject-library",
+      metadata: { actionOnly: true },
+    },
+  ] : undefined, [image2Active, structuredTemplate, subjects, imageAttachments, attachmentPreviews]);
   const mention = unstable_useMentionAdapter({
-    categories: mentionCategories,
-    includeModelContextTools: mentionCategories ? { category: { id: "tools", label: "工具" } } : true,
+    items: mentionItems,
+    includeModelContextTools: true,
     fallbackIcon: WrenchIcon,
-    iconMap: { "subject-library": UsersIcon },
+    iconMap: { subject: UsersIcon, "subject-library": UsersIcon },
     formatter: {
-      serialize: (item) => item.type === "subject-action" ? "" : unstable_defaultDirectiveFormatter.serialize(item),
+      // Defense in depth: keyboard Enter/Tab still goes through the normal
+      // directive-insertion path (see onDirectiveSelect below), so this
+      // keeps the action item's chip contributing no text even there.
+      // 「参考图N」chip 序列化为纯文本，服务端编译按附件顺序对号入座。
+      serialize: (item) => item.type === "subject-action" ? ""
+        : item.type === "ref" ? item.label
+        : unstable_defaultDirectiveFormatter.serialize(item),
       parse: unstable_defaultDirectiveFormatter.parse,
     },
-    onInserted: (item) => {
-      if (item.type === "subject-action") openSubjectLibrary();
-    },
   });
+  const openSubjectLibraryFromDirective = (item: Unstable_TriggerItem) => {
+    if (item.type === "subject-action") openSubjectLibrary();
+  };
   const slash = unstable_useSlashCommandAdapter({
     commands: slashCommands,
     iconMap: slashIconMap,
@@ -599,6 +641,7 @@ const Composer: FC = () => {
             {structuredTemplate ? <Image2StructuredSlots /> : <ComposerAttachments />}
             <LexicalComposerInput
               directiveChip={DirectiveChip}
+              directivePluginProps={{ onDirectiveSelect: openSubjectLibraryFromDirective }}
               placeholder="Send a message... (@ to mention, / for commands)"
               className="aui-composer-input [&_.aui-lexical-placeholder]:text-muted-foreground/80 relative max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none [&_.aui-directive-chip]:inline-flex [&_.aui-directive-chip]:items-baseline [&_.aui-directive-chip]:gap-1 [&_.aui-directive-chip]:rounded-md [&_.aui-directive-chip]:bg-blue-100 [&_.aui-directive-chip]:px-1.5 [&_.aui-directive-chip]:py-0.5 [&_.aui-directive-chip]:text-[13px] [&_.aui-directive-chip]:leading-none [&_.aui-directive-chip]:font-medium [&_.aui-directive-chip]:text-blue-700 dark:[&_.aui-directive-chip]:bg-blue-900/50 dark:[&_.aui-directive-chip]:text-blue-300 [&_.aui-directive-chip-icon]:self-center [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:right-0 [&_.aui-lexical-placeholder]:left-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1"
             />
@@ -606,7 +649,7 @@ const Composer: FC = () => {
           </div>
         </ComposerPrimitive.AttachmentDropzone>
 
-        <ComposerTriggerPopover char="@" {...mention} />
+        <ComposerTriggerPopover char="@" {...mention} onActionItem={openSubjectLibraryFromDirective} />
 
         <ComposerTriggerPopover
           char="/"

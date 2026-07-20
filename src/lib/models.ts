@@ -1,9 +1,10 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { getConfigValue, type ApiConfigKey } from "@/lib/server/api-config";
 
-function requireEnv(name: string): string {
-  const value = process.env[name];
+function requireConfig(name: ApiConfigKey): string {
+  const value = getConfigValue(name);
   if (!value) {
-    throw new Error(`缺少环境变量 ${name}，请在 workbench/.env.local 中配置`);
+    throw new Error(`缺少配置 ${name}，请在设置页的「API 配置」里填写，或在 .env.local 中配置`);
   }
   return value;
 }
@@ -13,19 +14,19 @@ function requireEnv(name: string): string {
  * 负责聊天与决定何时调用工具，本身不需要视觉能力。
  */
 export function chatModel() {
-  const baseURL = process.env.CHAT_BASE_URL ?? "https://api.deepseek.com/v1";
+  const baseURL = getConfigValue("CHAT_BASE_URL") ?? "https://api.deepseek.com/v1";
   // Qwen thinking mode rejects forced tool_choice. Mono's direct Agent uses
   // forced calls for explicit image actions, so keep these requests non-thinking.
   const isDashScope = /(?:dashscope|maas)\.aliyuncs\.com/i.test(baseURL);
   const provider = createOpenAICompatible({
     name: "workbench-chat",
     baseURL,
-    apiKey: requireEnv("CHAT_API_KEY"),
+    apiKey: requireConfig("CHAT_API_KEY"),
     ...(isDashScope
       ? { transformRequestBody: (body) => ({ ...body, enable_thinking: false }) }
       : {}),
   });
-  return provider(process.env.CHAT_MODEL ?? "deepseek-chat");
+  return provider(getConfigValue("CHAT_MODEL") ?? "deepseek-chat");
 }
 
 /**
@@ -109,27 +110,31 @@ const hermesFetch: typeof fetch = async (input, init) => {
  * 对这里而言它就是一个"模型"。前端按请求切换，见 /api/chat 与 lib/backends.ts。
  */
 export function hermesModel() {
+  const value = process.env.HERMES_API_KEY;
+  if (!value) {
+    throw new Error("缺少环境变量 HERMES_API_KEY，请在 workbench/.env.local 中配置");
+  }
   const provider = createOpenAICompatible({
     name: "hermes",
     baseURL: process.env.HERMES_BASE_URL ?? "http://127.0.0.1:8642/v1",
-    apiKey: requireEnv("HERMES_API_KEY"),
+    apiKey: value,
     fetch: hermesFetch,
   });
   return provider(process.env.HERMES_MODEL ?? "hermes-agent");
 }
 
 /**
- * 视觉模型：供 image_to_prompt 工具内部调用。
- * 需要能看图，默认走 DashScope 的 OpenAI 兼容端点（Qwen-VL）。
+ * 视觉模型：供 image_to_prompt 工具内部调用（图片反推、视频反推共用）。
+ * 需要能看图/看视频，默认走 DashScope 的 OpenAI 兼容端点（Qwen-VL）。
  * 与对话大脑解耦——两者各走各的 baseURL / key / model。
  */
 export function visionModel() {
   const provider = createOpenAICompatible({
     name: "workbench-vision",
     baseURL:
-      process.env.VISION_BASE_URL ??
+      getConfigValue("VISION_BASE_URL") ??
       "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    apiKey: requireEnv("VISION_API_KEY"),
+    apiKey: requireConfig("VISION_API_KEY"),
   });
-  return provider(process.env.VISION_MODEL ?? "qwen-vl-max");
+  return provider(getConfigValue("VISION_MODEL") ?? "qwen-vl-max");
 }

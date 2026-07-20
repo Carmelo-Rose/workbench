@@ -14,7 +14,7 @@ export type ImageToPromptResult = {
 
 /**
  * 第一根竖切的工具：图 → 提示词。
- * 内部调用视觉模型（Qwen-VL 等），把一张图反推成中英双语的文生图提示词。
+ * 内部调用视觉模型（Qwen-VL 等），把一张图反推成中文文生图提示词。
  * 复用了 Mono 插件里 callQwenAPI 的思路——本质就是给视觉模型发图 + 反推指令。
  */
 /**
@@ -25,7 +25,7 @@ export type ImageToPromptResult = {
 export function createImageToPromptTool(attachedImageUrl?: string) {
   return tool({
     description:
-      "把当前对话附件或指定图片反推成可用于 AI 文生图的中英双语提示词。有当前图片附件时直接调用，不要向用户索取 URL。",
+      "把当前对话附件或指定图片反推成可用于 AI 文生图的中文提示词。有当前图片附件时直接调用，不要向用户索取 URL。",
     inputSchema: z.object({
       imageUrl: z
         .string()

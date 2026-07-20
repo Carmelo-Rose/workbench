@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 /**
  * 「分析视频」的入口卡：点建议 chip 后先收输入（链接 + 分析重点），
  * 一次确认就把完整意图发进对话，由 mono_analyze_video 工具卡接管进度。
+ * 输入既可以是视频直链，也可以整段粘贴平台分享口令（自动提取其中的链接）。
  */
 const FOCUS_OPTIONS = [
   { label: "总结要点", instruction: "总结视频的内容要点和叙事结构" },
@@ -24,13 +25,39 @@ const FOCUS_OPTIONS = [
   { label: "提取口播文案", instruction: "提取视频中的口播文案和字幕要点" },
 ] as const;
 
-function isHttpUrl(value: string) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
+// 与 Mono 插件同源的链接提取规则：先按平台专属模式匹配，最后兜底匹配任意 URL。
+const VIDEO_URL_PATTERNS = [
+  /https?:\/\/v\.douyin\.com\/[A-Za-z0-9_\-]+\/?/,
+  /https?:\/\/www\.douyin\.com\/video\/\d+/,
+  /https?:\/\/v\.kuaishou\.com\/[A-Za-z0-9_\-]+\/?/,
+  /https?:\/\/www\.kuaishou\.com\/short-video\/[A-Za-z0-9_\-]+/,
+  /https?:\/\/www\.xiaohongshu\.com\/(?:explore|discovery\/item)\/[A-Za-z0-9]+/,
+  /https?:\/\/xhslink\.com\/[A-Za-z0-9_\-]+\/?/,
+  /https?:\/\/www\.tiktok\.com\/@[^\/\s]+\/video\/\d+/,
+  /https?:\/\/vm\.tiktok\.com\/[A-Za-z0-9_\-]+\/?/,
+  /https?:\/\/www\.bilibili\.com\/video\/[A-Za-z0-9]+/,
+  /https?:\/\/b23\.tv\/[A-Za-z0-9_\-]+\/?/,
+  /https?:\/\/[^\s，。；]+/,
+] as const;
+
+function extractVideoUrl(text: string): string | null {
+  for (const pattern of VIDEO_URL_PATTERNS) {
+    const match = text.match(pattern);
+    if (match) return match[0];
   }
+  return null;
+}
+
+type Platform = { name: string; shareOnly: boolean };
+
+// shareOnly 平台的链接是分享页而非视频直链，需要服务端解析；目前仅接了抖音。
+function detectPlatform(url: string): Platform | null {
+  if (/douyin\.com/i.test(url)) return { name: "抖音", shareOnly: true };
+  if (/kuaishou\.com/i.test(url)) return { name: "快手", shareOnly: true };
+  if (/xiaohongshu\.com|xhslink\.com/i.test(url)) return { name: "小红书", shareOnly: true };
+  if (/tiktok\.com/i.test(url)) return { name: "TikTok", shareOnly: true };
+  if (/bilibili\.com|b23\.tv/i.test(url)) return { name: "B站", shareOnly: true };
+  return null;
 }
 
 export const VideoAnalysisLauncher: FC<{
@@ -38,28 +65,32 @@ export const VideoAnalysisLauncher: FC<{
   onOpenChange: (open: boolean) => void;
   onSubmit: (prompt: string) => void;
 }> = ({ open, onOpenChange, onSubmit }) => {
-  const [url, setUrl] = useState("");
+  const [text, setText] = useState("");
   const [focusLabel, setFocusLabel] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
 
-  const trimmedUrl = url.trim();
-  const urlValid = isHttpUrl(trimmedUrl);
-  const showError = touched && trimmedUrl !== "" && !urlValid;
+  const trimmed = text.trim();
+  const detectedUrl = trimmed ? extractVideoUrl(trimmed) : null;
+  const platform = detectedUrl ? detectPlatform(detectedUrl) : null;
+  // 仅抖音的分享页有服务端解析；其余平台分享页拦下，直链一律放行。
+  const unsupportedPlatform = platform?.shareOnly && platform.name !== "抖音";
+  const submittable = Boolean(detectedUrl) && !unsupportedPlatform;
+  const showNoUrlError = touched && trimmed !== "" && !detectedUrl;
 
   const reset = () => {
-    setUrl("");
+    setText("");
     setFocusLabel(null);
     setTouched(false);
   };
 
   const submit = () => {
-    if (!urlValid) {
+    if (!submittable || !detectedUrl) {
       setTouched(true);
       return;
     }
     const focus = FOCUS_OPTIONS.find((option) => option.label === focusLabel);
     onSubmit(
-      `分析这个视频：${trimmedUrl}${focus ? `，${focus.instruction}` : ""}`,
+      `分析这个视频：${detectedUrl}${focus ? `，${focus.instruction}` : ""}`,
     );
     onOpenChange(false);
     reset();
@@ -80,29 +111,42 @@ export const VideoAnalysisLauncher: FC<{
             分析视频
           </DialogTitle>
           <DialogDescription>
-            粘贴公开视频链接，选择分析重点。本地视频上传即将支持。
+            粘贴视频直链，或整段抖音分享口令，选择分析重点。本地视频上传即将支持。
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
-          <input
-            type="url"
-            value={url}
+          <textarea
+            value={text}
             autoFocus
-            onChange={(event) => setUrl(event.target.value)}
+            rows={2}
+            onChange={(event) => setText(event.target.value)}
             onBlur={() => setTouched(true)}
             onKeyDown={(event) => {
-              if (event.key === "Enter") submit();
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                submit();
+              }
             }}
-            placeholder="https://example.com/video.mp4"
-            aria-invalid={showError}
+            placeholder="https://example.com/video.mp4 或「8.32 复制打开抖音…」分享口令"
+            aria-invalid={showNoUrlError}
             className={cn(
-              "bg-background h-10 w-full rounded-lg border px-3 text-sm outline-none transition-colors focus:ring-2",
-              showError && "border-destructive",
+              "bg-background w-full resize-none rounded-lg border px-3 py-2 text-sm outline-none transition-colors focus:ring-2",
+              showNoUrlError && "border-destructive",
             )}
           />
-          {showError ? (
+          {detectedUrl ? (
+            unsupportedPlatform ? (
+              <p className="text-destructive text-xs">
+                检测到{platform!.name}分享链接，暂仅支持抖音分享链接或视频直链
+              </p>
+            ) : (
+              <p className="text-muted-foreground text-xs break-all">
+                已识别{platform ? `${platform.name}链接` : "链接"}：{detectedUrl}
+              </p>
+            )
+          ) : showNoUrlError ? (
             <p className="text-destructive text-xs">
-              请输入 http(s) 开头的完整视频链接
+              未检测到有效链接，请粘贴 http(s) 视频直链或分享口令
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">
@@ -128,7 +172,7 @@ export const VideoAnalysisLauncher: FC<{
           </div>
         </div>
         <DialogFooter>
-          <Button onClick={submit} disabled={!trimmedUrl} className="rounded-full">
+          <Button onClick={submit} disabled={!submittable} className="rounded-full">
             开始分析
           </Button>
         </DialogFooter>
