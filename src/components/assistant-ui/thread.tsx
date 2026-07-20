@@ -78,6 +78,7 @@ import {
   type DirectiveChipProps,
 } from "@assistant-ui/react-lexical";
 import {
+  ActivityIcon,
   ArrowDownIcon,
   ArrowUpIcon,
   BotIcon,
@@ -87,12 +88,10 @@ import {
   ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
-  FileTextIcon,
-  GlobeIcon,
-  HelpCircleIcon,
   ImageIcon,
+  ScissorsIcon,
+  SearchIcon,
   SparklesIcon,
-  LanguagesIcon,
   LightbulbIcon,
   MicIcon,
   MoreHorizontalIcon,
@@ -103,11 +102,21 @@ import {
   RefreshCwIcon,
   SlashIcon,
   SquareIcon,
+  TrendingUpIcon,
+  UploadIcon,
+  VideoIcon,
   WrenchIcon,
   UsersIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { VideoAnalysisLauncher } from "@/components/workbench/VideoAnalysisLauncher";
+import {
+  CapabilityActionsProvider,
+  useCapabilityActions,
+} from "@/components/workbench/CapabilityActions";
+import {
+  CAPABILITY_GROUPS,
+  SLASH_CAPABILITIES,
+} from "@/lib/workbench/capabilities";
 import {
   createContext,
   useContext,
@@ -184,6 +193,7 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
       }}
     >
       <ThreadBackdrop active={isEmpty} />
+      <CapabilityActionsProvider>
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         data-slot="aui_thread-viewport"
@@ -227,6 +237,7 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
           </AuiIf>
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
+      </CapabilityActionsProvider>
 
       <SelectionToolbar />
     </ThreadPrimitive.Root>
@@ -268,284 +279,62 @@ const ThreadWelcome: FC = () => {
   );
 };
 
-type SuggestionGroup = {
-  label: string;
-  icon: ReactNode;
-  options: { label: string; prompt: string }[];
+// 图标键 → lucide 组件：欢迎页分组 chip 与 `/` 命令共用（数据在 capabilities.ts）。
+const capabilityIconMap: Record<string, FC<{ className?: string }>> = {
+  sparkles: SparklesIcon,
+  chart: ChartColumnIcon,
+  bot: BotIcon,
+  "pencil-line": PencilLineIcon,
+  lightbulb: LightbulbIcon,
+  image: ImageIcon,
+  video: VideoIcon,
+  scissors: ScissorsIcon,
+  activity: ActivityIcon,
+  "trending-up": TrendingUpIcon,
+  search: SearchIcon,
+  upload: UploadIcon,
 };
 
-const SUGGESTION_GROUPS: SuggestionGroup[] = [
-  {
-    label: "Mono",
-    icon: <SparklesIcon />,
-    options: [
-      {
-        // 点击直接拉起图片选择器，见 activateSuggestion。
-        label: "反推图片",
-        prompt: "反推这张图片，生成可复用的 AI 生图提示词。",
-      },
-      {
-        label: "生成图片",
-        prompt: "生成一张电商产品主图：白色陶瓷马克杯，干净白底，柔和自然光，45 度俯拍，高清商业摄影，1:1。",
-      },
-      {
-        // 点击弹出链接输入卡，见 activateSuggestion。
-        label: "分析视频",
-        prompt: "我想分析一段视频，请提示我粘贴公开视频链接。",
-      },
-      {
-        // 点击直接拉起图片选择器，见 activateSuggestion。
-        label: "抠像换背景",
-        prompt: "把这张图片做主体抠像，输出透明背景。",
-      },
-    ],
-  },
-  {
-    label: "电商数据",
-    icon: <ChartColumnIcon />,
-    options: [
-      {
-        label: "看榜单异动",
-        prompt: "查询最新一轮抖音罗盘短视频榜的异动事件（新进榜和排名急升），帮我解读哪些商品值得关注，按优先级给出理由。",
-      },
-      {
-        label: "查商品排名轨迹",
-        prompt: "我想查一个商品在抖音罗盘短视频榜的排名轨迹，请先问我商品 ID 或先列出最近的异动商品让我选。",
-      },
-      {
-        label: "检索采集内容",
-        prompt: "列出已导入的抓取批次，然后帮我检索分析其中的内容：总结标题风格、互动数据分布，找出表现最好的几条。",
-      },
-      {
-        // 点击拉起 XLSX/CSV 文件选择器，见 activateSuggestion。
-        label: "导入采集结果",
-        prompt: "导入抓取结果文件。",
-      },
-    ],
-  },
-  {
-    label: "Agent 能力",
-    icon: <BotIcon />,
-    options: [
-      {
-        label: "你能调用哪些工具？",
-        prompt: "介绍一下你当前可以调用的工具和能力，各举一个使用场景",
-      },
-      {
-        label: "测试跨轮记忆",
-        prompt: "记住：我的品牌主色是黛蓝色（#2E4057）。之后设计类的建议都要基于它。",
-      },
-      {
-        label: "多步拆解任务",
-        prompt: "我要为一款新咖啡豆做一页宣传落地页，请先列出执行步骤，再逐步产出每一步的内容",
-      },
-    ],
-  },
-  {
-    label: "创作",
-    icon: <PencilLineIcon />,
-    options: [
-      {
-        label: "产品发布文案",
-        prompt: "为一个 AI 创作工作台的新版本写一段 200 字以内的发布文案，克制、专业",
-      },
-      {
-        label: "小红书图文脚本",
-        prompt: "帮我写一篇介绍手冲咖啡入门的小红书图文脚本，包含每张配图的画面描述",
-      },
-      {
-        label: "视频分镜脚本",
-        prompt: "为 30 秒的产品宣传短视频写分镜脚本，产品是一款便携榨汁杯",
-      },
-    ],
-  },
-  {
-    label: "分析",
-    icon: <ChartColumnIcon />,
-    options: [
-      {
-        label: "对比两种方案",
-        prompt: "用表格对比服务端持有 API key 按次计费与用户自带 key 两种商业模式的优劣",
-      },
-      {
-        label: "拆解竞品卖点",
-        prompt: "假设竞品是一个浏览器里的 AI 修图插件，帮我拆解它可能的核心卖点和差异化机会",
-      },
-    ],
-  },
-  {
-    label: "头脑风暴",
-    icon: <LightbulbIcon />,
-    options: [
-      {
-        label: "插件新功能点子",
-        prompt: "为一个面向创作者的 Chrome 侧边栏 AI 插件头脑风暴 5 个新功能，按实现难度排序",
-      },
-      {
-        label: "激活码运营玩法",
-        prompt: "围绕图像/视频生成配额激活码，头脑风暴几种拉新和复购的运营玩法",
-      },
-    ],
-  },
-];
+const CapabilityIcon: FC<{ iconKey?: string; className?: string }> = ({
+  iconKey,
+  className,
+}) => {
+  const Icon = iconKey ? capabilityIconMap[iconKey] : undefined;
+  return Icon ? <Icon className={className} /> : null;
+};
 
 const suggestionChipClass =
   "aui-thread-welcome-suggestion text-foreground hover:bg-muted bg-background/60 border-border/60 h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap backdrop-blur-[2px] transition-colors [&_svg]:size-4";
 
 const ThreadSuggestions: FC = () => {
-  const aui = useAui();
-  const router = useRouter();
+  const { run } = useCapabilityActions();
   const image2Active = useImage2Mode((state) => state.active);
-  const activateImage2 = useImage2Mode((state) => state.activate);
   const tilt = useTilt();
-  const [expandedLabel, setExpandedLabel] = useState<string | null>(null);
-  const [videoDialogOpen, setVideoDialogOpen] = useState(false);
-  const [importError, setImportError] = useState<string | null>(null);
-  const reverseImageInputRef = useRef<HTMLInputElement>(null);
-  const mattingInputRef = useRef<HTMLInputElement>(null);
-  const importInputRef = useRef<HTMLInputElement>(null);
-  const expandedGroup = SUGGESTION_GROUPS.find(
-    (group) => group.label === expandedLabel,
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const expandedGroup = CAPABILITY_GROUPS.find(
+    (group) => group.id === expandedId,
   );
-
-  const sendPrompt = (prompt: string) => {
-    if (aui.thread().getState().isRunning) return;
-    aui.thread().append({
-      content: [{ type: "text", text: prompt }],
-      runConfig: aui.composer().getState().runConfig,
-    });
-  };
-
-  // 反推是「输入先行」任务：选完图直接连附件带指令一起发出，
-  // 不经过“AI 请你上传”的空转回合。
-  const reverseImage = async (file: File) => {
-    if (aui.thread().getState().isRunning) return;
-    const composer = aui.composer();
-    await composer.addAttachment(file);
-    composer.setText("反推这张图片，生成可复用的 AI 生图提示词。");
-    composer.send();
-  };
-
-  // 抠像也是「输入先行」：选完图连附件带指令直接发出，
-  // 服务端 forcedToolName 命中 mono_matting 后由工具卡接管进度。
-  const mattingImage = async (file: File) => {
-    if (aui.thread().getState().isRunning) return;
-    const composer = aui.composer();
-    await composer.addAttachment(file);
-    composer.setText("把这张图片做主体抠像，输出透明背景。");
-    composer.send();
-  };
-
-  // 导入抓取结果（douyin_Playwright 的 XLSX/CSV），成功后直接让 AI 分析这批数据。
-  const importCollectorFile = async (file: File) => {
-    setImportError(null);
-    try {
-      const response = await fetch("/api/workbench/collector/import", {
-        method: "POST",
-        headers: { "x-workbench-filename": encodeURIComponent(file.name) },
-        body: file,
-      });
-      const payload = (await response.json()) as {
-        batch?: { batchId: string; platform: string; itemCount: number };
-        error?: string;
-      };
-      if (!response.ok || !payload.batch) throw new Error(payload.error ?? "导入失败");
-      sendPrompt(
-        `我刚导入了一批抓取数据（批次 ${payload.batch.batchId}，平台 ${payload.batch.platform}，共 ${payload.batch.itemCount} 条）。请用 collector_search_items 查看这批内容，总结标题风格与互动数据分布，并指出表现最好的几条和可复用的选题方向。`,
-      );
-    } catch (error) {
-      setImportError(error instanceof Error ? error.message : "导入失败，请重试");
-    }
-  };
-
-  const activateSuggestion = (label: string, prompt: string) => {
-    if (label === "生成图片") {
-      activateImage2();
-      router.push("/?mode=image2");
-      return;
-    }
-    if (label === "反推图片") {
-      reverseImageInputRef.current?.click();
-      return;
-    }
-    if (label === "分析视频") {
-      setVideoDialogOpen(true);
-      return;
-    }
-    if (label === "抠像换背景") {
-      mattingInputRef.current?.click();
-      return;
-    }
-    if (label === "导入采集结果") {
-      importInputRef.current?.click();
-      return;
-    }
-    sendPrompt(prompt);
-  };
 
   if (image2Active) return <Image2TemplateRail />;
 
   return (
     <div className="aui-thread-welcome-suggestions flex w-full flex-col gap-2 px-4">
-      <input
-        ref={reverseImageInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          event.target.value = "";
-          if (file) void reverseImage(file);
-        }}
-      />
-      <input
-        ref={mattingInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          event.target.value = "";
-          if (file) void mattingImage(file);
-        }}
-      />
-      <input
-        ref={importInputRef}
-        type="file"
-        accept=".xlsx,.csv"
-        className="hidden"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          event.target.value = "";
-          if (file) void importCollectorFile(file);
-        }}
-      />
-      {importError ? (
-        <p className="text-destructive mx-auto text-xs">{importError}</p>
-      ) : null}
-      <VideoAnalysisLauncher
-        open={videoDialogOpen}
-        onOpenChange={setVideoDialogOpen}
-        onSubmit={sendPrompt}
-      />
       <div className="w-full scrollbar-none overflow-x-auto">
         <div className="mx-auto flex w-max items-center gap-2">
-          {SUGGESTION_GROUPS.map((group) => (
+          {CAPABILITY_GROUPS.map((group) => (
             <Button
-              key={group.label}
+              key={group.id}
               variant="ghost"
               {...tilt}
               className={cn(
                 suggestionChipClass,
-                group.label === expandedLabel && "bg-muted",
+                group.id === expandedId && "bg-muted",
               )}
               onClick={() =>
-                setExpandedLabel(
-                  group.label === expandedLabel ? null : group.label,
-                )
+                setExpandedId(group.id === expandedId ? null : group.id)
               }
             >
-              {group.icon}
+              <CapabilityIcon iconKey={group.iconKey} />
               {group.label}
             </Button>
           ))}
@@ -553,17 +342,17 @@ const ThreadSuggestions: FC = () => {
       </div>
       {expandedGroup && (
         <div
-          key={expandedGroup.label}
+          key={expandedGroup.id}
           className="fade-in slide-in-from-top-1 animate-in w-full scrollbar-none overflow-x-auto duration-200"
         >
           <div className="mx-auto flex w-max items-center gap-2">
             {expandedGroup.options.map((option) => (
               <Button
-                key={option.label}
+                key={option.id}
                 variant="ghost"
                 {...tilt}
                 className={suggestionChipClass}
-                onClick={() => activateSuggestion(option.label, option.prompt)}
+                onClick={() => run({ action: option.action, prompt: option.prompt })}
               >
                 {option.label}
               </Button>
@@ -577,40 +366,6 @@ const ThreadSuggestions: FC = () => {
 
 // 模式切换器：直连 / Hermes Agent，选择随每条请求发送到 /api/chat。
 const ModelPicker: FC = () => <BackendPicker />;
-
-const slashCommands: readonly Unstable_SlashCommand[] = [
-  {
-    id: "summarize",
-    description: "Summarize the conversation",
-    icon: "FileText",
-    execute: () => console.log("[mono] /summarize invoked"),
-  },
-  {
-    id: "translate",
-    description: "Translate text to another language",
-    icon: "Languages",
-    execute: () => console.log("[mono] /translate invoked"),
-  },
-  {
-    id: "search",
-    description: "Search the web for information",
-    icon: "Globe",
-    execute: () => console.log("[mono] /search invoked"),
-  },
-  {
-    id: "help",
-    description: "List available commands",
-    icon: "HelpCircle",
-    execute: () => console.log("[mono] /help invoked"),
-  },
-];
-
-const slashIconMap: Record<string, FC<{ className?: string }>> = {
-  FileText: FileTextIcon,
-  Languages: LanguagesIcon,
-  Globe: GlobeIcon,
-  HelpCircle: HelpCircleIcon,
-};
 
 function DirectiveChip(props: DirectiveChipProps) {
   const { directiveId, directiveType, label } = props;
@@ -645,14 +400,15 @@ function DirectiveChip(props: DirectiveChipProps) {
 }
 
 const Composer: FC = () => {
-  const image2Active = useImage2Mode((state) => state.active);
   const openSubjectLibrary = useImage2Mode((state) => state.openSubjectLibrary);
   const subjects = useMonoSubjectCatalog((state) => state.subjects);
   const loadSubjects = useMonoSubjectCatalog((state) => state.load);
   const structuredTemplate = useImage2StructuredTemplate();
+  const { run: runCapability } = useCapabilityActions();
+  // 主体是全模式通用的「引用」，不再只在生图模式加载，让非生图下 @ 也非空。
   useEffect(() => {
-    if (image2Active) void loadSubjects();
-  }, [image2Active, loadSubjects]);
+    void loadSubjects();
+  }, [loadSubjects]);
   // 当前已上传的图片附件也进 @ 候选（对齐 Mono 插件的「参考图N」虚拟候选）。
   // 编号即附件顺序，与服务端编译提示词时 referenceImageUrls 的编号一致，
   // 所以 chip 只需序列化成纯文本「参考图N」，无需升格为主体。
@@ -672,8 +428,9 @@ const Composer: FC = () => {
   }, [imageAttachments]);
   // Flat list, not a category: mirrors the reference Mono plugin's "@"
   // picker, which shows subjects (+ a pinned create/manage action)
-  // immediately — no drill-down step.
-  const mentionItems = useMemo(() => image2Active && !structuredTemplate ? [
+  // immediately — no drill-down step. `@` = 引用，全模式常驻（生图、非生图
+  // 都可插主体/参考图）；仅结构化模板用槽位 UI 时让位，不弹 @ 列表。
+  const mentionItems = useMemo(() => !structuredTemplate ? [
     ...subjects.map((subject) => ({
       id: subject.id,
       type: "subject",
@@ -698,7 +455,7 @@ const Composer: FC = () => {
       icon: "subject-library",
       metadata: { actionOnly: true },
     },
-  ] : undefined, [image2Active, structuredTemplate, subjects, imageAttachments, attachmentPreviews]);
+  ] : undefined, [structuredTemplate, subjects, imageAttachments, attachmentPreviews]);
   const mention = unstable_useMentionAdapter({
     items: mentionItems,
     includeModelContextTools: true,
@@ -718,9 +475,24 @@ const Composer: FC = () => {
   const openSubjectLibraryFromDirective = (item: Unstable_TriggerItem) => {
     if (item.type === "subject-action") openSubjectLibrary();
   };
+  // `/` = 功能命令：取能力注册表里标记 slash 的真能力，execute 复用与欢迎 chip
+  // 同一套 run（填提示词 / 拉起选择器 / 开视频卡 / 切生图模式）。removeOnExecute
+  // 剥掉用户敲的 /xxx；fill 型用 setText 整体替换文本，本就不会残留。
+  const slashCommands = useMemo<Unstable_SlashCommand[]>(
+    () =>
+      SLASH_CAPABILITIES.map((cap) => ({
+        id: cap.id,
+        label: cap.label,
+        description: cap.hint,
+        icon: cap.iconKey,
+        execute: () => runCapability({ action: cap.action, prompt: cap.prompt }),
+      })),
+    [runCapability],
+  );
   const slash = unstable_useSlashCommandAdapter({
     commands: slashCommands,
-    iconMap: slashIconMap,
+    removeOnExecute: true,
+    iconMap: capabilityIconMap,
     fallbackIcon: SlashIcon,
   });
 

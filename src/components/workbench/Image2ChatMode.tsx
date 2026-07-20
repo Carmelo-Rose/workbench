@@ -48,6 +48,18 @@ async function addTemplateReferenceAttachment(aui: Aui, template: MonoImage2Temp
   }
 }
 
+/** 完整退出生图模式：清掉模板参考图附件、重置模式状态、回到普通对话。 */
+export function useExitImage2Mode() {
+  const router = useRouter();
+  const aui = useAui();
+  const reset = useImage2Mode((state) => state.reset);
+  return async () => {
+    await removeTemplateReferenceAttachments(aui);
+    reset();
+    router.replace("/");
+  };
+}
+
 export function useSelectImage2Template() {
   const aui = useAui();
   const currentTemplateId = useImage2Mode((state) => state.selectedTemplateId);
@@ -103,23 +115,15 @@ export function Image2TemplateRail() {
 }
 
 export function Image2ModeControl() {
-  const router = useRouter();
-  const aui = useAui();
   const selectedTemplateId = useImage2Mode((state) => state.selectedTemplateId);
   const aspectRatio = useImage2Mode((state) => state.aspectRatio);
   const variants = useImage2Mode((state) => state.variants);
-  const reset = useImage2Mode((state) => state.reset);
   const setAspectRatio = useImage2Mode((state) => state.setAspectRatio);
   const setVariants = useImage2Mode((state) => state.setVariants);
   const selectTemplate = useSelectImage2Template();
   const activeTemplate = getMonoImage2Template(selectedTemplateId);
   const [historyOpen, setHistoryOpen] = useState(false);
-
-  const exit = async () => {
-    await removeTemplateReferenceAttachments(aui);
-    reset();
-    router.replace("/");
-  };
+  const exit = useExitImage2Mode();
 
   return (
     <span className="bg-muted flex h-7 items-center rounded-full text-xs font-medium">

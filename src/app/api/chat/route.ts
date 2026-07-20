@@ -70,6 +70,17 @@ function latestImageAttachments(messages: UIMessage[]): string[] {
   return latestImageAttachmentParts(messages).map((part) => part.url);
 }
 
+/**
+ * 从最近一条用户消息文本里确定性提取 asset_<uuid> 引用（如"分析视频素材 asset_xxx"）。
+ * 让模型自己在工具参数里手抄这个 36 位 UUID 容易转录出错，这里直接用正则从原文取，
+ * 比模型复述更可靠。
+ */
+function latestVideoAssetId(messages: UIMessage[]): string | undefined {
+  return latestUserText(messages).match(
+    /asset_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+  )?.[0];
+}
+
 function latestUserMessageId(messages: UIMessage[]): string | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === "user") return messages[index].id;
@@ -138,6 +149,7 @@ export async function POST(req: Request) {
       userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",
       workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
       attachmentUrl,
+      videoAssetId: latestVideoAssetId(messages),
     }),
     ...createCollectorTools({
       userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",

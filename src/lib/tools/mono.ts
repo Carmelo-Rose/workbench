@@ -28,6 +28,12 @@ type MonoToolContext = {
   workspaceId?: string;
   /** 最近一条用户消息里的图片附件，供抠像等工具在缺少显式素材时兜底。 */
   attachmentUrl?: string;
+  /**
+   * 从最近一条用户消息文本里用正则确定性提取出的 asset_<uuid> 引用。
+   * 模型自己在工具参数里手抄这个 36 位 UUID 容易转录出错，
+   * 这里优先信任服务端的确定性提取，而不是模型的复述。
+   */
+  videoAssetId?: string;
 };
 
 /** One registry powers direct AI SDK tools and the MCP adapter's business calls. */
@@ -47,7 +53,10 @@ export function createMonoTools(context: MonoToolContext = {}) {
     mono_analyze_video: tool({
       description: "创建视频音画分析任务。适用于用户提供视频直链、抖音分享链接或已登记视频素材，并希望分析内容、镜头、节奏、音频或提示词时调用。",
       inputSchema: monoVideoAnalysisSchema,
-      execute: (input) => createVideoAnalysisJob(actor, input),
+      execute: (input) => createVideoAnalysisJob(actor, {
+        ...input,
+        assetId: context.videoAssetId ?? input.assetId,
+      }),
     }),
     mono_list_subjects: tool({
       description: "列出当前用户可用的私有主体和工作区共享主体。",

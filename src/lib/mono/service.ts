@@ -224,7 +224,7 @@ export function createImageGenerationJob(actor: MonoActor, input: MonoImageGener
     referenceImageUrls,
     aspectRatio: input.aspectRatio,
     variants: input.variants,
-    model: template?.model ?? input.model ?? getConfigValue("MONO_IMAGE_MODEL") ?? "gpt-image-2-vip",
+    model: template?.model ?? input.model ?? getConfigValue("MONO_IMAGE_MODEL") ?? "gpt-image-2",
   }, input.idempotencyKey);
   scheduleMonoWorker();
   return job;
@@ -378,24 +378,56 @@ async function resolveShareVideoUrl(sourceUrl: string, apiKey: string, signal: A
   return videoUrl;
 }
 
+/**
+ * 视频分析复用图片反推的视觉模型配置（VISION_*），不再要求单独的
+ * MONO_VIDEO_ANALYZE_URL/MONO_VIDEO_API_KEY——那是留给外部 Mono 视频服务的可选覆盖。
+ * 走原始 fetch 而非 ai-sdk 的 generateText，是因为 @ai-sdk/openai-compatible
+ * 目前只把 file part 的 image 媒体类型映射成 image_url，视频没有对应支持；
+ * 而火山方舟（doubao 视觉模型）的 chat/completions 协议原生支持 video_url 内容块。
+ */
 async function runVideoAnalysis(input: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
-  const endpoint = getConfigValue("MONO_VIDEO_ANALYZE_URL");
-  const apiKey = getConfigValue("MONO_VIDEO_API_KEY");
-  if (!endpoint || !apiKey) throw new Error("视频分析未配置：请设置 MONO_VIDEO_ANALYZE_URL 和 MONO_VIDEO_API_KEY");
+  const baseUrl = getConfigValue("MONO_VIDEO_ANALYZE_URL")
+    ?? getConfigValue("VISION_BASE_URL")
+    ?? "https://dashscope.aliyuncs.com/compatible-mode/v1";
+  const apiKey = getConfigValue("MONO_VIDEO_API_KEY") ?? getConfigValue("VISION_API_KEY");
+  if (!apiKey) throw new Error("视频分析未配置：请设置 VISION_API_KEY（或 MONO_VIDEO_API_KEY）");
+  const model = (typeof input.model === "string" && input.model)
+    || getConfigValue("MONO_VIDEO_MODEL")
+    || getConfigValue("VISION_MODEL")
+    || "qwen-vl-max";
   const videoUrl = await resolveShareVideoUrl(String(input.videoUrl ?? ""), apiKey, signal);
+  const endpoint = new URL("chat/completions", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ videoUrl, prompt: input.focus, model: input.model }),
+    body: JSON.stringify({
+      model,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: String(input.focus ?? "请总结视频内容、镜头语言、节奏、音频和可复用的创作提示词。") },
+          { type: "video_url", video_url: { url: videoUrl } },
+        ],
+      }],
+    }),
     signal,
   });
   const data = await response.json().catch(() => null) as Record<string, unknown> | null;
-  if (!response.ok || data?.success === false) {
-    throw new Error(typeof data?.error === "string" ? data.error : `视频分析服务返回 HTTP ${response.status}`);
+  if (!response.ok) {
+    const message = nestedString(data ?? {}, "error", "message") ?? `视频分析服务返回 HTTP ${response.status}`;
+    throw new Error(message);
   }
-  const text = data?.data ?? data?.text ?? data?.result;
-  if (typeof text !== "string" || text.length === 0) throw new Error("视频分析服务没有返回可用结果");
-  return { text, model: data?.model ?? input.model, provider: data?.upstream ?? "mono-video" };
+  const text = extractChatText(data);
+  if (!text) throw new Error("视频分析服务没有返回可用结果");
+  return { text, model, provider: "vision" };
+}
+
+function extractChatText(data: Record<string, unknown> | null): string | null {
+  const choices = data?.choices;
+  if (!Array.isArray(choices) || choices.length === 0) return null;
+  const message = (choices[0] as Record<string, unknown> | undefined)?.message;
+  const content = (message as Record<string, unknown> | undefined)?.content;
+  return typeof content === "string" && content.length > 0 ? content : null;
 }
 
 type SourceBytes = { buffer: Buffer; filename: string; mimeType?: string };
@@ -498,7 +530,7 @@ async function runImageGenerationBatch(
   signal: AbortSignal,
 ): Promise<MonoImageGenerationResult> {
   const variants = [1, 2, 4, 6].includes(Number(input.variants)) ? Number(input.variants) : 1;
-  const model = typeof input.model === "string" ? input.model : "gpt-image-2-vip";
+  const model = typeof input.model === "string" ? input.model : "gpt-image-2";
   const slots: MonoImageGenerationSlot[] = Array.from({ length: variants }, (_, index) => ({
     index,
     status: "generating",
