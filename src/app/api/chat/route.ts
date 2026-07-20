@@ -18,6 +18,7 @@ import { monoAspectRatios, type MonoImageGenerationInput, type MonoJob } from "@
 import { getMonoImage2Template, monoImage2TemplateIds } from "@/lib/mono/image2-templates";
 import { createAsset, createImageGenerationJob, getSubject, newMonoActor } from "@/lib/mono/service";
 import { subjectIdsFromPrompt } from "@/lib/mono/subject-compiler";
+import { videoEraseTool } from "@/lib/tools/video-erase";
 
 export const maxDuration = 60;
 
@@ -155,6 +156,7 @@ export async function POST(req: Request) {
       userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",
       workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
     }),
+    video_erase: videoEraseTool,
   };
   const requiredTool = forcedToolName(latestUserText(messages), Boolean(attachmentUrl));
 

@@ -21,6 +21,8 @@ import { useSearchParams } from "next/navigation";
 import { ThreadListSidebar } from "@/components/assistant-ui/threadlist-sidebar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI";
+import { VideoEraseToolUI } from "@/components/workbench/toolbox/JobToolUI";
+import { workbenchAttachmentAdapter } from "@/components/workbench/toolbox/attachment-adapter";
 import {
   MonoAnalyzeVideoToolUI,
   MonoCancelJobToolUI,
@@ -102,7 +104,11 @@ const threadListAdapter = {
 
 // useChatRuntime 内部的 RemoteThreadListRuntime 检测到外层实例后透传，
 // 由外层的 localStorage adapter 接管线程列表与消息历史。
-const useMonoThreadRuntime = () => useChatRuntime();
+// 附件适配器：视频上传到工具箱网关（消息里只留 fileId 标记），其余走默认 data URL。
+const useMonoThreadRuntime = () =>
+  useChatRuntime({
+    adapters: { attachments: workbenchAttachmentAdapter },
+  });
 
 export const Assistant = () => {
   const runtime = useRemoteThreadListRuntime({
@@ -125,6 +131,7 @@ export const Assistant = () => {
       <LuopanEventsToolUI />
       <CollectorBatchesToolUI />
       <CollectorSearchToolUI />
+      <VideoEraseToolUI />
       <BackendModelContext />
       <Image2ModeSync />
       <ThreadTitleSync />

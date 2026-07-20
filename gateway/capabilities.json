@@ -1,0 +1,69 @@
+{
+  "_说明": "工具箱能力注册表。status: ready=可提交任务 / planned=留口子未上线。adapter.command 中的占位符见 adapters.py 顶部注释。改这个文件不用重启网关。",
+  "capabilities": [
+    {
+      "id": "smart_erase",
+      "name": "智能擦除",
+      "status": "ready",
+      "description": "去除视频中的字幕、水印、台标、贴纸等固定区域内容（ProPainter 视频补绘；运动目标点选追踪为 v2）",
+      "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }],
+      "params_hint": { "regions": "归一化框选区域列表 [{x,y,w,h}]，坐标相对视频画面 0-1" },
+      "adapter": {
+        "cwd": "D:/hyk_sort/workspace/video-toolbox/erase",
+        "command": [
+          "{cwd}/.venv/Scripts/python.exe",
+          "toolbox_run.py",
+          "--input",
+          "{input.video}",
+          "--output-dir",
+          "{output_dir}",
+          "--params",
+          "{params_json}"
+        ],
+        "env": {},
+        "timeout_sec": 7200
+      }
+    },
+    {
+      "id": "video_enhance",
+      "name": "视频修复增强",
+      "status": "planned",
+      "description": "分辨率放大、去噪、压缩伪影修复（Real-ESRGAN）",
+      "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }]
+    },
+    {
+      "id": "matting",
+      "name": "人物抠像换背景",
+      "status": "planned",
+      "description": "人物视频抠像、替换背景（RVM，后续升级 MatAnyone）",
+      "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }]
+    },
+    {
+      "id": "translate_dub",
+      "name": "视频翻译配音",
+      "status": "planned",
+      "description": "识别→翻译/改文案→配音→合成（faster-whisper + LLM + TTS）",
+      "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }]
+    },
+    {
+      "id": "lip_sync",
+      "name": "口型重新同步",
+      "status": "planned",
+      "description": "按新配音重新生成口型（MuseTalk）",
+      "inputs_spec": [
+        { "field": "video", "required": true, "kind": "video" },
+        { "field": "audio", "required": true, "kind": "audio" }
+      ]
+    },
+    {
+      "id": "motion_transfer",
+      "name": "人物动作迁移",
+      "status": "planned",
+      "description": "保留动作替换人物（Wan2.2 Animate，走远程 API/云 GPU）",
+      "inputs_spec": [
+        { "field": "video", "required": true, "kind": "video" },
+        { "field": "reference", "required": true, "kind": "image" }
+      ]
+    }
+  ]
+}
