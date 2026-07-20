@@ -147,6 +147,24 @@ function createMonoMcpServer() {
     body: JSON.stringify(input),
   })));
 
+  server.registerTool("mono_matting", {
+    title: "Create matting job",
+    description: "Submit a subject matting / background replacement job for an image or video asset.",
+    inputSchema: {
+      assetId: z.string().optional(),
+      mediaUrl: z.string().url().optional(),
+      mediaType: z.enum(["image", "video"]).optional(),
+      backgroundColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+      backgroundAssetId: z.string().optional(),
+      idempotencyKey: z.string().optional(),
+    },
+  }, async (input) => toolText(await callMono("/api/mono/matting", {
+    method: "POST",
+    body: JSON.stringify(input),
+  })));
+
+  registerLuopanTools(server);
+
   server.registerTool("mono_get_job", {
     title: "Get Mono job",
     description: "Read the state, result, or error for a Mono task.",
@@ -162,6 +180,80 @@ function createMonoMcpServer() {
   })));
 
   return server;
+}
+
+/**
+ * 罗盘数据只读工具：直接转发采集机上的 luopan sidecar API
+ * （services/luopan-api/server.py），未配置 LUOPAN_API_URL 时不注册。
+ */
+function registerLuopanTools(server) {
+  const luopanUrl = (process.env.LUOPAN_API_URL ?? "").replace(/\/$/, "");
+  if (!luopanUrl) return;
+  const luopanToken = process.env.LUOPAN_API_TOKEN ?? "";
+
+  async function callLuopan(path, params = {}) {
+    const url = new URL(`${luopanUrl}${path}`);
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
+    }
+    const response = await fetch(url, {
+      headers: luopanToken ? { authorization: `Bearer ${luopanToken}` } : {},
+    });
+    const body = await response.json().catch(() => ({ error: "罗盘数据服务返回了无效 JSON" }));
+    if (!response.ok) throw new Error(body.error ?? `罗盘数据服务返回 HTTP ${response.status}`);
+    return body;
+  }
+
+  const scopePrefix = z.enum(["video_order", "video_acc", "card_order"]).optional();
+
+  server.registerTool("luopan_query_rounds", {
+    title: "List Luopan capture rounds",
+    description: "List Douyin Compass monitoring capture rounds (run ids and counts).",
+    inputSchema: { scopePrefix, limit: z.number().int().min(1).max(50).optional() },
+  }, async (input) => toolText(await callLuopan("/api/rounds", { scope_prefix: input.scopePrefix, limit: input.limit })));
+
+  server.registerTool("luopan_query_snapshot", {
+    title: "Query Luopan ranking snapshot",
+    description: "Query the TOP200 ranking snapshot of one capture round.",
+    inputSchema: {
+      runId: z.string().optional(),
+      scopeKey: z.string().optional(),
+      scopePrefix,
+      limit: z.number().int().min(1).max(200).optional(),
+      offset: z.number().int().min(0).optional(),
+    },
+  }, async (input) => toolText(await callLuopan("/api/snapshot", {
+    run_id: input.runId,
+    scope_key: input.scopeKey,
+    scope_prefix: input.scopePrefix,
+    limit: input.limit,
+    offset: input.offset,
+  })));
+
+  server.registerTool("luopan_product_trend", {
+    title: "Query product rank trend",
+    description: "Query one product's rank trajectory across capture rounds.",
+    inputSchema: { productId: z.string().min(1), scopeKey: z.string().optional(), limit: z.number().int().min(1).max(100).optional() },
+  }, async (input) => toolText(await callLuopan(`/api/products/${encodeURIComponent(input.productId)}/trend`, {
+    scope_key: input.scopeKey,
+    limit: input.limit,
+  })));
+
+  server.registerTool("luopan_query_events", {
+    title: "Query Luopan ranking events",
+    description: "Query ranking diff events: NEW_ENTRY and RANK_UP_50/100/150.",
+    inputSchema: {
+      eventType: z.enum(["NEW_ENTRY", "RANK_UP_50", "RANK_UP_100", "RANK_UP_150"]).optional(),
+      scopePrefix,
+      runId: z.string().optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+    },
+  }, async (input) => toolText(await callLuopan("/api/events", {
+    event_type: input.eventType,
+    scope_prefix: input.scopePrefix,
+    run_id: input.runId,
+    limit: input.limit,
+  })));
 }
 
 function readBody(request) {

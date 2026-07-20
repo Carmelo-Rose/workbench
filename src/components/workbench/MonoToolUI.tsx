@@ -6,6 +6,7 @@ import {
   LoaderCircleIcon,
   PlaySquareIcon,
   RefreshCwIcon,
+  ScissorsIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -17,15 +18,22 @@ import type {
   MonoAssetInput,
   MonoImageGenerationInput,
   MonoJob,
+  MonoMattingInput,
   MonoVideoAnalysisInput,
 } from "@/lib/mono/contracts";
 
 type JobCardProps = {
   initialJob?: MonoJob;
-  kind: "image_generation" | "video_analysis";
+  kind: MonoJob["kind"];
   children: (job: MonoJob) => ReactNode;
   onRetry?: () => void;
   inline?: boolean;
+};
+
+const JOB_TITLES: Record<MonoJob["kind"], string> = {
+  image_generation: "图片生成",
+  video_analysis: "视频分析",
+  matting: "抠像换背景",
 };
 
 const terminalStatuses = new Set<MonoJob["status"]>([
@@ -108,7 +116,7 @@ function JobCard({ initialJob, kind, children, onRetry, inline = false }: JobCar
     }
   };
 
-  const title = kind === "image_generation" ? "图片生成" : "视频分析";
+  const title = JOB_TITLES[kind];
 
   if (!job) {
     if (inline) {
@@ -315,6 +323,54 @@ function VideoAnalysisCard({
   );
 }
 
+const MATTING_STAGES: Record<string, string> = {
+  uploading: "正在上传素材到处理后端…",
+  processing: "GPU 正在抠像处理…",
+  downloading: "正在取回处理结果…",
+};
+
+function MattingCard({ result }: { result?: MonoJob }) {
+  return (
+    <JobCard initialJob={isMonoJob(result) ? result : undefined} kind="matting">
+      {(job) => {
+        const url = stringValue(job.result?.url);
+        if (job.status === "succeeded" && url) {
+          const isVideo = job.result?.mediaType === "video";
+          return (
+            <div className="space-y-2">
+              {isVideo ? (
+                <video controls src={url} className="max-h-80 w-full rounded-xl bg-muted" />
+              ) : (
+                // 结果可能是透明背景 PNG，用棋盘格底衬出透明区域。
+                <img
+                  src={url}
+                  alt="抠像结果"
+                  className="max-h-80 rounded-xl [background:repeating-conic-gradient(#e5e5e5_0%_25%,#fafafa_0%_50%)_0_0/16px_16px]"
+                />
+              )}
+              <a
+                href={url}
+                download={stringValue(job.result?.filename) ?? "matting-result"}
+                className="text-muted-foreground text-xs underline underline-offset-4"
+              >
+                下载结果文件
+              </a>
+            </div>
+          );
+        }
+        if (job.status === "cancelled") return <p className="text-muted-foreground text-sm">抠像任务已停止。</p>;
+        const stage = stringValue(job.result?.stage);
+        return (
+          <p className="text-muted-foreground flex items-center gap-2 text-sm">
+            <ScissorsIcon className="size-4" />
+            {(stage && MATTING_STAGES[stage]) ?? "正在准备抠像任务…"}
+          </p>
+        );
+      }}
+    </JobCard>
+  );
+}
+
 function JobStatusCard({ result }: { result?: MonoJob }) {
   return (
     <JobCard initialJob={isMonoJob(result) ? result : undefined} kind={result?.kind ?? "image_generation"}>
@@ -359,6 +415,12 @@ export const MonoAnalyzeVideoToolUI = makeAssistantToolUI<
   toolName: "mono_analyze_video",
   display: "standalone",
   render: (props) => <VideoAnalysisCard args={props.args} result={props.result} />,
+});
+
+export const MonoMattingToolUI = makeAssistantToolUI<MonoMattingInput, MonoJob>({
+  toolName: "mono_matting",
+  display: "standalone",
+  render: (props) => <MattingCard result={props.result} />,
 });
 
 export const MonoCreateAssetToolUI = makeAssistantToolUI<MonoAssetInput, MonoAsset>({

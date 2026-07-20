@@ -20,6 +20,7 @@ type AssetRow = {
   source_url: string;
   mime_type: string | null;
   name: string | null;
+  storage_key: string | null;
   created_at: number;
 };
 
@@ -60,6 +61,7 @@ function toAsset(row: AssetRow): MonoAsset {
     sourceUrl: row.source_url,
     mimeType: row.mime_type ?? undefined,
     name: row.name ?? undefined,
+    storageKey: row.storage_key ?? undefined,
     createdAt: row.created_at,
   };
 }
@@ -97,7 +99,10 @@ function toSubject(row: SubjectRow): MonoSubject {
   };
 }
 
-export function createMonoAsset(actor: MonoActor, input: MonoAssetInput): MonoAsset {
+export function createMonoAsset(
+  actor: MonoActor,
+  input: MonoAssetInput & { storageKey?: string },
+): MonoAsset {
   const asset: MonoAsset = {
     id: `asset_${randomUUID()}`,
     workspaceId: actor.workspaceId,
@@ -106,8 +111,8 @@ export function createMonoAsset(actor: MonoActor, input: MonoAssetInput): MonoAs
     createdAt: Date.now(),
   };
   getDb().prepare(
-    `INSERT INTO mono_assets (id, workspace_id, user_id, source_url, mime_type, name, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO mono_assets (id, workspace_id, user_id, source_url, mime_type, name, storage_key, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     asset.id,
     asset.workspaceId,
@@ -115,6 +120,7 @@ export function createMonoAsset(actor: MonoActor, input: MonoAssetInput): MonoAs
     asset.sourceUrl,
     asset.mimeType ?? null,
     asset.name ?? null,
+    asset.storageKey ?? null,
     asset.createdAt,
   );
   return asset;
