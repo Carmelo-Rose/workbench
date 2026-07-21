@@ -19,6 +19,7 @@ import { getMonoImage2Template, monoImage2TemplateIds } from "@/lib/mono/image2-
 import { createAsset, createImageGenerationJob, getSubject, newMonoActor } from "@/lib/mono/service";
 import { subjectIdsFromPrompt } from "@/lib/mono/subject-compiler";
 import { videoEraseTool } from "@/lib/tools/video-erase";
+import { videoEnhanceTool } from "@/lib/tools/video-enhance";
 
 export const maxDuration = 60;
 
@@ -157,6 +158,7 @@ export async function POST(req: Request) {
       workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
     }),
     video_erase: videoEraseTool,
+    video_enhance: videoEnhanceTool,
   };
   const requiredTool = forcedToolName(latestUserText(messages), Boolean(attachmentUrl));
 

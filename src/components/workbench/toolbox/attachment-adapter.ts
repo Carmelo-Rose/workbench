@@ -52,6 +52,14 @@ export function videoAttachmentMarker(name: string, fileId: string, bytes: numbe
   return `[视频附件 ${name}｜fileId=${fileId}｜${mb}MB｜已上传至视频工具箱]`;
 }
 
+/**
+ * 上面那行标记的配套解析式（捕获组：文件名 / fileId / 大小），
+ * 用于把气泡里的原始标记渲染成 chip（见 video-marker-text.tsx）。
+ * 生成与解析放同一个文件，改格式时不会漏改一边。
+ */
+export const VIDEO_MARKER_RE =
+  /\[视频附件 (.+?)｜fileId=([a-f0-9]{12})｜([\d.]+MB)｜[^\]]*\]/g;
+
 export const workbenchAttachmentAdapter: AttachmentAdapter = {
   accept: "*",
 

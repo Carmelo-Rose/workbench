@@ -27,9 +27,25 @@
     {
       "id": "video_enhance",
       "name": "视频修复增强",
-      "status": "planned",
+      "status": "ready",
       "description": "分辨率放大、去噪、压缩伪影修复（Real-ESRGAN）",
-      "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }]
+      "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }],
+      "params_hint": { "outscale": "放大倍数，2 或 4，默认 4" },
+      "adapter": {
+        "cwd": "D:/hyk_sort/workspace/video-toolbox/enhance",
+        "command": [
+          "{cwd}/.venv/Scripts/python.exe",
+          "toolbox_run.py",
+          "--input",
+          "{input.video}",
+          "--output-dir",
+          "{output_dir}",
+          "--params",
+          "{params_json}"
+        ],
+        "env": {},
+        "timeout_sec": 7200
+      }
     },
     {
       "id": "matting",

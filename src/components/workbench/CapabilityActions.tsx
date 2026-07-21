@@ -57,6 +57,9 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
   const reverseImageInputRef = useRef<HTMLInputElement>(null);
   const mattingInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  // 擦除与增强共用一个 file input，靠这里暂存的提示词区分是哪一个。
+  const pendingVideoPromptRef = useRef<string>("");
 
   // 导入错误几秒后自动消失，避免残留遮挡。
   useEffect(() => {
@@ -84,6 +87,15 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
     const composer = aui.composer();
     await composer.addAttachment(file);
     composer.setText("把这张图片做主体抠像，输出透明背景。");
+  };
+
+  // 视频要真上传到工具箱网关（几秒到几十秒），所以先写指令再挂附件——
+  // 用户能立刻看到自己在等什么，附件 tile 自带上传中的转圈。
+  const toolboxVideo = async (file: File) => {
+    if (aui.thread().getState().isRunning) return;
+    const composer = aui.composer();
+    composer.setText(pendingVideoPromptRef.current);
+    await composer.addAttachment(file);
   };
 
   // 导入抓取结果（douyin_Playwright 的 XLSX/CSV），成功后把分析指令填进输入框。
@@ -131,6 +143,10 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
       case "import-picker":
         importInputRef.current?.click();
         return;
+      case "video-picker":
+        pendingVideoPromptRef.current = prompt;
+        videoInputRef.current?.click();
+        return;
       case "fill":
       default:
         fillPrompt(prompt);
@@ -161,6 +177,17 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
           const file = event.target.files?.[0];
           event.target.value = "";
           if (file) void mattingImage(file);
+        }}
+      />
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept="video/*"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) void toolboxVideo(file);
         }}
       />
       <input

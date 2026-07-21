@@ -73,3 +73,19 @@ export async function getJob(jobId: string): Promise<JobInfo | null> {
     throw error;
   }
 }
+
+/** 取消任务：queued 立即置 canceled，running 置 cancel_requested 交给 worker 处理。 */
+export async function cancelJob(jobId: string): Promise<JobInfo> {
+  const res = await gatewayFetch(`/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+  });
+  return (await res.json()) as JobInfo;
+}
+
+/** 任务日志尾部（失败时卡片里就地查看，省掉一趟 SSH 上服务机）。 */
+export async function getJobLog(jobId: string, tail = 8000): Promise<string> {
+  const res = await gatewayFetch(
+    `/jobs/${encodeURIComponent(jobId)}/log?tail=${tail}`,
+  );
+  return await res.text();
+}

@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { MonoImageBatchGallery } from "@/components/workbench/MonoImageBatch";
+import { MonoImageBatchGallery, type MonoGalleryImage } from "@/components/workbench/MonoImageBatch";
 import type {
   MonoAsset,
   MonoAssetInput,
@@ -26,7 +26,7 @@ type JobCardProps = {
   initialJob?: MonoJob;
   kind: MonoJob["kind"];
   children: (job: MonoJob) => ReactNode;
-  onRetry?: () => void;
+  onRetry?: (job: MonoJob) => void;
   inline?: boolean;
 };
 
@@ -137,14 +137,15 @@ function JobCard({ initialJob, kind, children, onRetry, inline = false }: JobCar
         <div className="text-muted-foreground mb-3 flex items-center justify-between gap-3 text-sm">
           <span className="flex items-center gap-2">
             {isActive ? <LoaderCircleIcon className="size-4 animate-spin" /> : job.status === "succeeded" ? <CheckIcon className="size-4" /> : <XIcon className="size-4" />}
-            <span>{isActive ? "正在创建图片" : job.status === "succeeded" ? "图片已生成" : meta.label}</span>
+            {/* 图片任务串行执行，排队和真正在跑要分开说，否则用户只看到一个转圈。 */}
+            <span>{job.status === "queued" ? "排队中，等前面的任务完成" : isActive ? "正在创建图片" : job.status === "succeeded" ? "图片已生成" : meta.label}</span>
           </span>
           {isActive ? <Button variant="ghost" size="xs" onClick={() => void cancel()} disabled={isCancelling}>{isCancelling ? "正在停止" : "停止"}</Button> : null}
         </div>
         {children(job)}
         {pollError && isActive ? <p className="text-muted-foreground mt-3 text-xs">任务仍在后台执行，正在重新连接…</p> : null}
         {job.status === "failed" && onRetry ? (
-          <Button variant="outline" size="sm" className="mt-3" onClick={onRetry}><RefreshCwIcon />重新生成</Button>
+          <Button variant="outline" size="sm" className="mt-3" onClick={() => onRetry(job)}><RefreshCwIcon />重新生成</Button>
         ) : null}
       </section>
     );
@@ -242,6 +243,18 @@ function ImageGenerationCard({
     });
   };
 
+  // 挂成输入框附件而不是直接发一条带 URL 的消息，用户可以先补充要改什么。
+  const attachAsReference = async (image: MonoGalleryImage) => {
+    try {
+      const blob = await (await fetch(image.fetchUrl)).blob();
+      await aui.composer().addAttachment(
+        new File([blob], `参考图-${image.index + 1}.png`, { type: blob.type || "image/png" }),
+      );
+    } catch {
+      aui.composer().setText(`以这张图片为参考继续创作：${image.displayUrl}`);
+    }
+  };
+
   return (
     <JobCard initialJob={isMonoJob(result) ? result : undefined} kind="image_generation" onRetry={retry} inline>
       {(job) => {
@@ -255,12 +268,7 @@ function ImageGenerationCard({
             <div>
               <MonoImageBatchGallery
                 job={job}
-                onUseAsReference={(imageUrl) =>
-                  aui.thread().append({
-                    content: [{ type: "text", text: `以这张图片为参考继续创作：${imageUrl}` }],
-                    runConfig: aui.composer().getState().runConfig,
-                  })
-                }
+                onUseAsReference={(image) => void attachAsReference(image)}
               />
               {job.status === "succeeded" ? <div className="mt-3 flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" onClick={retry}>

@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ComposerTriggerPopover } from "@/components/assistant-ui/composer-trigger-popover";
-import { DirectiveText } from "@/components/assistant-ui/directive-text";
+import { VideoMarkerText } from "@/components/workbench/toolbox/video-marker-text";
 import { DotMatrix } from "@/components/assistant-ui/dot-matrix";
 import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { MessageTiming } from "@/components/assistant-ui/message-timing";
@@ -88,6 +88,8 @@ import {
   ChevronRightIcon,
   CopyIcon,
   DownloadIcon,
+  EraserIcon,
+  FilmIcon,
   ImageIcon,
   ScissorsIcon,
   SearchIcon,
@@ -105,6 +107,7 @@ import {
   TrendingUpIcon,
   UploadIcon,
   VideoIcon,
+  Wand2Icon,
   WrenchIcon,
   UsersIcon,
 } from "lucide-react";
@@ -288,6 +291,9 @@ const capabilityIconMap: Record<string, FC<{ className?: string }>> = {
   lightbulb: LightbulbIcon,
   image: ImageIcon,
   video: VideoIcon,
+  film: FilmIcon,
+  eraser: EraserIcon,
+  wand: Wand2Icon,
   scissors: ScissorsIcon,
   activity: ActivityIcon,
   "trending-up": TrendingUpIcon,
@@ -346,17 +352,35 @@ const ThreadSuggestions: FC = () => {
           className="fade-in slide-in-from-top-1 animate-in w-full scrollbar-none overflow-x-auto duration-200"
         >
           <div className="mx-auto flex w-max items-center gap-2">
-            {expandedGroup.options.map((option) => (
-              <Button
-                key={option.id}
-                variant="ghost"
-                {...tilt}
-                className={suggestionChipClass}
-                onClick={() => run({ action: option.action, prompt: option.prompt })}
-              >
-                {option.label}
-              </Button>
-            ))}
+            {expandedGroup.options.map((option) =>
+              // 留口子的能力：可见（传达路线图）但不可点（别把做不了的活派给模型）。
+              option.disabled ? (
+                <span
+                  key={option.id}
+                  className={cn(
+                    suggestionChipClass,
+                    "text-muted-foreground pointer-events-none inline-flex cursor-default items-center opacity-50",
+                  )}
+                >
+                  {option.label}
+                  {option.badge ? (
+                    <span className="border-border/60 ms-1 rounded-full border px-1.5 py-px text-[10px] leading-none">
+                      {option.badge}
+                    </span>
+                  ) : null}
+                </span>
+              ) : (
+                <Button
+                  key={option.id}
+                  variant="ghost"
+                  {...tilt}
+                  className={suggestionChipClass}
+                  onClick={() => run({ action: option.action, prompt: option.prompt })}
+                >
+                  {option.label}
+                </Button>
+              ),
+            )}
           </div>
         </div>
       )}
@@ -852,7 +876,8 @@ const UserMessage: FC = () => {
           <MessagePrimitive.Quote>
             {(quote) => <QuoteBlock {...quote} />}
           </MessagePrimitive.Quote>
-          <MessagePrimitive.Parts components={{ Text: DirectiveText }} />
+          {/* VideoMarkerText 只多做一件事：把视频附件标记渲染成 chip，其余仍走 DirectiveText。 */}
+          <MessagePrimitive.Parts components={{ Text: VideoMarkerText }} />
         </div>
         <div className="aui-user-action-bar-wrapper absolute start-0 top-1/2 -translate-x-full -translate-y-1/2 pe-2 peer-empty:hidden rtl:translate-x-full">
           <UserActionBar />

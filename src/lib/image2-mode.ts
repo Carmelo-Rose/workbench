@@ -4,19 +4,27 @@ import { create } from "zustand";
 import type { MonoImageGenerationInput } from "@/lib/mono/contracts";
 import type { MonoImage2TemplateId } from "@/lib/mono/image2-templates";
 
+/** 消息树深处的卡片交给主 composer 的待写入内容，见 assistant.tsx 的 Image2ModeSync。 */
+export type PendingComposer = {
+  text?: string;
+  /** 有值时先清空现有附件再挂上，用于「再次生成」这类整体回填。 */
+  files?: File[];
+};
+
 type Image2ModeState = {
   active: boolean;
   selectedTemplateId?: MonoImage2TemplateId;
   aspectRatio: MonoImageGenerationInput["aspectRatio"];
   variants: MonoImageGenerationInput["variants"];
-  /** 从消息树（如反推结果卡）跨组件交给 composer 的待写入文本，见 Image2ModeSync。 */
-  pendingPrompt?: string;
+  pendingComposer?: PendingComposer;
   structuredSubjectIds: [string | undefined, string | undefined];
   subjectLibraryOpen: boolean;
   subjectLibrarySlot?: 0 | 1;
   activate: () => void;
   activateWithPrompt: (prompt: string) => void;
-  consumePendingPrompt: () => void;
+  /** 工具卡片拿不到主 composer 的 ambient scope，只能经这里转交。 */
+  handoffToComposer: (pending: PendingComposer) => void;
+  consumePendingComposer: () => void;
   deactivate: () => void;
   reset: () => void;
   selectTemplate: (templateId: MonoImage2TemplateId) => void;
@@ -32,7 +40,7 @@ const defaults = {
   selectedTemplateId: undefined,
   aspectRatio: "9:16" as const,
   variants: 1 as const,
-  pendingPrompt: undefined,
+  pendingComposer: undefined,
   structuredSubjectIds: [undefined, undefined] as [string | undefined, string | undefined],
   subjectLibraryOpen: false,
   subjectLibrarySlot: undefined,
@@ -41,8 +49,9 @@ const defaults = {
 export const useImage2Mode = create<Image2ModeState>((set) => ({
   ...defaults,
   activate: () => set({ active: true }),
-  activateWithPrompt: (pendingPrompt) => set({ active: true, pendingPrompt }),
-  consumePendingPrompt: () => set({ pendingPrompt: undefined }),
+  activateWithPrompt: (text) => set({ active: true, pendingComposer: { text } }),
+  handoffToComposer: (pendingComposer) => set({ pendingComposer }),
+  consumePendingComposer: () => set({ pendingComposer: undefined }),
   deactivate: () => set({ active: false }),
   reset: () => set(defaults),
   selectTemplate: (selectedTemplateId) => set({ active: true, selectedTemplateId }),

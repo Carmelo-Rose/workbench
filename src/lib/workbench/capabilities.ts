@@ -18,6 +18,7 @@ export type CapabilityAction =
   | "video-dialog"
   | "matting-picker"
   | "import-picker"
+  | "video-picker"
   | "image2-mode";
 
 export type CapabilityOption = {
@@ -32,6 +33,13 @@ export type CapabilityOption = {
   hint?: string;
   /** 是否作为 `/` 命令暴露（真能力入口）。 */
   slash?: boolean;
+  /**
+   * 留口子、还没上线的能力：chip 灰显不可点，也不会进 `/` 命令面板
+   * （`/` 里出现就意味着能执行，别把做不了的活派给模型）。
+   */
+  disabled?: boolean;
+  /** 灰显 chip 尾部的徽标文案，如「即将上线」。 */
+  badge?: string;
 };
 
 export type CapabilityGroup = {
@@ -84,6 +92,61 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "scissors",
         hint: "选一张图，抠出主体换背景",
         slash: true,
+      },
+    ],
+  },
+  {
+    id: "video-toolbox",
+    label: "视频工具箱",
+    iconKey: "film",
+    options: [
+      {
+        id: "video-erase",
+        label: "智能擦除",
+        prompt: "擦掉这个视频里的字幕。",
+        action: "video-picker",
+        iconKey: "eraser",
+        hint: "选视频，框选区域擦掉字幕/水印",
+        slash: true,
+      },
+      {
+        id: "video-enhance",
+        label: "修复增强",
+        prompt: "把这个视频做修复增强，放大 4 倍。",
+        action: "video-picker",
+        iconKey: "wand",
+        hint: "选视频，超分放大 + 去噪",
+        slash: true,
+      },
+      // 以下是路线图上留口子的能力：可见传达进度，不可点避免派出做不了的活。
+      // 上线时把 disabled/badge 去掉、补上 action 与 slash 即可。
+      {
+        id: "video-matting",
+        label: "抠像换背景",
+        prompt: "",
+        disabled: true,
+        badge: "即将上线",
+      },
+      {
+        id: "video-translate-dub",
+        label: "翻译配音",
+        prompt: "",
+        disabled: true,
+        badge: "即将上线",
+      },
+      {
+        id: "video-lip-sync",
+        label: "口型同步",
+        prompt: "",
+        disabled: true,
+        badge: "即将上线",
+      },
+      {
+        id: "video-motion-transfer",
+        label: "动作迁移",
+        prompt: "",
+        disabled: true,
+        badge: "即将上线",
       },
     ],
   },
@@ -212,7 +275,10 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
   },
 ];
 
-/** `/` 命令入口：本表中标记 slash 的真能力（反推/生成/分析视频/抠像/榜单/轨迹/检索/导入）。 */
+/**
+ * `/` 命令入口：本表中标记 slash 且已上线的真能力
+ * （反推/生成/分析视频/抠像/擦除/增强/榜单/轨迹/检索/导入）。
+ */
 export const SLASH_CAPABILITIES: CapabilityOption[] = CAPABILITY_GROUPS.flatMap(
-  (group) => group.options.filter((option) => option.slash),
+  (group) => group.options.filter((option) => option.slash && !option.disabled),
 );

@@ -21,7 +21,10 @@ import { useSearchParams } from "next/navigation";
 import { ThreadListSidebar } from "@/components/assistant-ui/threadlist-sidebar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI";
-import { VideoEraseToolUI } from "@/components/workbench/toolbox/JobToolUI";
+import {
+  VideoEnhanceToolUI,
+  VideoEraseToolUI,
+} from "@/components/workbench/toolbox/JobToolUI";
 import { workbenchAttachmentAdapter } from "@/components/workbench/toolbox/attachment-adapter";
 import {
   MonoAnalyzeVideoToolUI,
@@ -132,6 +135,7 @@ export const Assistant = () => {
       <CollectorBatchesToolUI />
       <CollectorSearchToolUI />
       <VideoEraseToolUI />
+      <VideoEnhanceToolUI />
       <BackendModelContext />
       <Image2ModeSync />
       <ThreadTitleSync />
@@ -146,8 +150,8 @@ const Image2ModeSync: FC = () => {
   const active = useImage2Mode((state) => state.active);
   const activate = useImage2Mode((state) => state.activate);
   const deactivate = useImage2Mode((state) => state.deactivate);
-  const pendingPrompt = useImage2Mode((state) => state.pendingPrompt);
-  const consumePendingPrompt = useImage2Mode((state) => state.consumePendingPrompt);
+  const pendingComposer = useImage2Mode((state) => state.pendingComposer);
+  const consumePendingComposer = useImage2Mode((state) => state.consumePendingComposer);
   const requested = searchParams.get("mode") === "image2";
 
   useEffect(() => {
@@ -155,13 +159,19 @@ const Image2ModeSync: FC = () => {
     if (!requested && active) deactivate();
   }, [active, activate, deactivate, requested]);
 
-  // 反推结果卡片（消息树深处）拿不到 composer 的 ambient scope，
-  // 所以只在这里落一个待写入的 pendingPrompt，由这个顶层组件代为写入。
+  // 消息树深处的卡片（反推结果、生图结果）拿不到 composer 的 ambient scope，
+  // 它们只往 store 里落一份待写入内容，由这个顶层组件代为写进真正的 composer。
   useEffect(() => {
-    if (!active || !pendingPrompt) return;
-    aui.composer().setText(pendingPrompt);
-    consumePendingPrompt();
-  }, [active, pendingPrompt, aui, consumePendingPrompt]);
+    if (!pendingComposer) return;
+    consumePendingComposer();
+    const { text, files } = pendingComposer;
+    if (text !== undefined) aui.composer().setText(text);
+    if (!files?.length) return;
+    void (async () => {
+      await aui.composer().clearAttachments();
+      for (const file of files) await aui.composer().addAttachment(file);
+    })();
+  }, [pendingComposer, aui, consumePendingComposer]);
 
   return null;
 };
