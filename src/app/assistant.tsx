@@ -24,6 +24,7 @@ import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI"
 import {
   VideoEnhanceToolUI,
   VideoEraseToolUI,
+  VideoMattingToolUI,
 } from "@/components/workbench/toolbox/JobToolUI";
 import { workbenchAttachmentAdapter } from "@/components/workbench/toolbox/attachment-adapter";
 import {
@@ -136,6 +137,7 @@ export const Assistant = () => {
       <CollectorSearchToolUI />
       <VideoEraseToolUI />
       <VideoEnhanceToolUI />
+      <VideoMattingToolUI />
       <BackendModelContext />
       <Image2ModeSync />
       <ThreadTitleSync />
@@ -164,13 +166,22 @@ const Image2ModeSync: FC = () => {
   useEffect(() => {
     if (!pendingComposer) return;
     consumePendingComposer();
-    const { text, files } = pendingComposer;
+    const { text, files, appendFiles } = pendingComposer;
     if (text !== undefined) aui.composer().setText(text);
-    if (!files?.length) return;
-    void (async () => {
-      await aui.composer().clearAttachments();
-      for (const file of files) await aui.composer().addAttachment(file);
-    })();
+    if (files?.length) {
+      void (async () => {
+        // 覆盖逻辑保留给「再次生成」：它需要用原任务的完整参考图重建输入。
+        await aui.composer().clearAttachments();
+        for (const file of files) await aui.composer().addAttachment(file);
+      })();
+    }
+    if (appendFiles?.length) {
+      void (async () => {
+        // 原来这里和 files 共用 clearAttachments，会把用户已选的参考图覆盖掉。
+        // await aui.composer().clearAttachments();
+        for (const file of appendFiles) await aui.composer().addAttachment(file);
+      })();
+    }
   }, [pendingComposer, aui, consumePendingComposer]);
 
   return null;

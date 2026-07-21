@@ -9,6 +9,8 @@ export type PendingComposer = {
   text?: string;
   /** 有值时先清空现有附件再挂上，用于「再次生成」这类整体回填。 */
   files?: File[];
+  /** 有值时保留现有附件，只把这些文件追加到 composer。 */
+  appendFiles?: File[];
 };
 
 type Image2ModeState = {
