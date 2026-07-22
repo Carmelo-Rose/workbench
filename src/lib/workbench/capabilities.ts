@@ -118,15 +118,17 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         hint: "选视频，超分放大 + 去噪",
         slash: true,
       },
-      // 以下是路线图上留口子的能力：可见传达进度，不可点避免派出做不了的活。
-      // 上线时把 disabled/badge 去掉、补上 action 与 slash 即可。
       {
         id: "video-matting",
         label: "抠像换背景",
-        prompt: "",
-        disabled: true,
-        badge: "即将上线",
+        prompt: "把这个视频里的人物抠出来，换成白色背景。",
+        action: "video-picker",
+        iconKey: "scissors",
+        hint: "选视频，抠出人物换纯色背景",
+        slash: true,
       },
+      // 以下是路线图上留口子的能力：可见传达进度，不可点避免派出做不了的活。
+      // 上线时把 disabled/badge 去掉、补上 action 与 slash 即可。
       {
         id: "video-translate-dub",
         label: "翻译配音",

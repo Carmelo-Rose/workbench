@@ -15,6 +15,7 @@ import {
   createSubject,
   createVideoAnalysisJob,
   getJob,
+  lightenMonoJob,
   listSubjects,
   newMonoActor,
   deleteSubject,
@@ -97,7 +98,11 @@ export function createMonoTools(context: MonoToolContext = {}) {
     mono_generate_image: tool({
       description: "直接创建 Image2 图片生成任务。支持模板、多参考图、结构化双参考图、画面比例，以及一次生成 1、2、4 或 6 张图片。",
       inputSchema: monoImageGenerationSchema,
-      execute: (input) => createImageGenerationJob(actor, input),
+      // 工具结果会整段落进消息历史，之后每一轮都原样回发给模型——参考图是
+      // base64 data URL，一张就有 2MB+，必须瘦身，否则几轮内就能把上下文塞爆。
+      // 前端卡片展示走的是 /api/workbench/mono/jobs/{id} 的独立轮询（未瘦身），
+      // 不受这里影响；「再次生成」需要完整参考图时会另外发起一次 GET 去补。
+      execute: (input) => lightenMonoJob(createImageGenerationJob(actor, input)),
     }),
     mono_get_job: tool({
       description: "查询 Mono 视频分析或图片生成任务的进度和结果。",
@@ -105,7 +110,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
       execute: ({ jobId }) => {
         const job = getJob(actor, jobId);
         if (!job) throw new Error("Mono 任务不存在，或不属于当前工作区");
-        return job;
+        return lightenMonoJob(job);
       },
     }),
     mono_cancel_job: tool({
@@ -114,7 +119,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
       execute: ({ jobId }) => {
         const job = cancelJob(actor, jobId);
         if (!job) throw new Error("Mono 任务不存在，或不属于当前工作区");
-        return job;
+        return lightenMonoJob(job);
       },
     }),
   };

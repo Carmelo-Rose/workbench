@@ -14,6 +14,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { MonoImageBatchGallery, type MonoGalleryImage } from "@/components/workbench/MonoImageBatch";
+import { imageReferenceToFile } from "@/lib/image-reference";
 import type {
   MonoAsset,
   MonoAssetInput,
@@ -57,17 +58,6 @@ function isMonoJob(value: unknown): value is MonoJob {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-/** 参考图可能是 data URL，也可能是图片服务上的地址（后者要走同源代理才绕得过 CORS）。 */
-async function toFile(url: string, name: string): Promise<File | null> {
-  try {
-    const blob = await (await fetch(url)).blob();
-    const extension = (blob.type.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "");
-    return new File([blob], `${name}.${extension}`, { type: blob.type || "image/png" });
-  } catch {
-    return null;
-  }
 }
 
 function JobCard({ initialJob, kind, children, onRetry, inline = false }: JobCardProps) {
@@ -288,7 +278,7 @@ function ImageGenerationCard({
       const references = Array.isArray(input.referenceImageUrls)
         ? input.referenceImageUrls.filter((url): url is string => typeof url === "string")
         : [];
-      const files = await Promise.all(references.map((url, index) => toFile(url, `原参考图-${index + 1}`)));
+      const files = await Promise.all(references.map((url, index) => imageReferenceToFile(url, `原参考图-${index + 1}`)));
       useImage2Mode.getState().handoffToComposer({
         text: input.prompt ?? prompt ?? "",
         files: files.filter((file): file is File => file !== null),
@@ -296,15 +286,12 @@ function ImageGenerationCard({
     })();
   };
 
-  // 挂成输入框附件而不是直接发一条带 URL 的消息，用户可以先补充要改什么。
+  // 只挂成输入框附件，不再把失败时的图片 URL写进输入框；失败交给卡片按钮提示并重试。
   const attachAsReference = (image: MonoGalleryImage) => {
-    void (async () => {
-      const file = await toFile(image.fetchUrl, `参考图-${image.index + 1}`);
-      useImage2Mode.getState().handoffToComposer(
-        file
-          ? { appendFiles: [file] }
-          : { text: `以这张图片为参考继续创作：${image.displayUrl}` },
-      );
+    return (async () => {
+      const file = await imageReferenceToFile(image.fetchUrl, `参考图-${image.index + 1}`);
+      if (!file) throw new Error("参考图下载失败");
+      useImage2Mode.getState().handoffToComposer({ appendFiles: [file] });
     })();
   };
 

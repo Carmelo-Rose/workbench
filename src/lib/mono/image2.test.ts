@@ -4,6 +4,7 @@ import path from "node:path";
 import { monoImageGenerationSchema, monoSubjectInputSchema } from "./contracts";
 import { assertMonoApiAccess } from "./http";
 import { MONO_IMAGE2_TEMPLATES, getMonoImage2Template } from "./image2-templates";
+import { getCurrentImage2ChatConfig, useImage2Mode } from "@/lib/image2-mode";
 
 beforeAll(() => {
   setEnv("WORKBENCH_DB_PATH", path.join(os.tmpdir(), `workbench-image2-suite-${crypto.randomUUID()}.db`));
@@ -50,6 +51,22 @@ describe("Image2 generation contract", () => {
     expect(monoSubjectInputSchema.safeParse({ name: "坏[名称]", assetId: "asset_1" }).success).toBe(false);
     expect(monoImageGenerationSchema.parse({ prompt: "test", subjectIds: ["subject_b", "subject_a"] }).subjectIds)
       .toEqual(["subject_b", "subject_a"]);
+  });
+
+  it("reads structured subject slots at submit time", () => {
+    const mode = useImage2Mode.getState();
+    mode.reset();
+    mode.selectTemplate("tpl-ref-gen");
+    mode.setStructuredSubject(0, "subject-product");
+    mode.setStructuredSubject(1, "subject-wearer");
+
+    expect(getCurrentImage2ChatConfig()).toMatchObject({
+      active: true,
+      templateId: "tpl-ref-gen",
+      structuredSubjectIds: ["subject-product", "subject-wearer"],
+    });
+
+    mode.reset();
   });
 });
 

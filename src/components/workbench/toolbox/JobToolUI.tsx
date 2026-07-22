@@ -21,6 +21,7 @@ import {
 } from "@/lib/toolbox/types";
 import type { VideoEraseArgs, VideoEraseResult } from "@/lib/tools/video-erase";
 import type { VideoEnhanceArgs, VideoEnhanceResult } from "@/lib/tools/video-enhance";
+import type { VideoMattingArgs, VideoMattingResult } from "@/lib/tools/video-matting";
 
 /**
  * 视频工具箱的通用任务卡片：所有异步视频能力（擦除/抠像/口型/增强…）共用。
@@ -499,10 +500,17 @@ const JobStep: FC<{
       </div>
     );
   } else {
-    const video = primaryVideoArtifact(job.artifacts);
-    const others = job.artifacts.filter((a) => a !== video);
+    // 4x enhancement returns a high-resolution master plus a browser-friendly rendition.
+    // The card plays the compatible file, while chaining continues to use the master.
+    const masterVideo = primaryVideoArtifact(job.artifacts);
+    const compatibleVideo =
+      job.capability === "video_enhance"
+        ? job.artifacts.find((a) => a.path === "enhanced_compatible.mp4")
+        : undefined;
+    const video = compatibleVideo ?? masterVideo;
+    const others = job.artifacts.filter((a) => a !== video && a !== masterVideo);
     const duration = finishedDuration(job);
-    const targets = video ? chainTargets(job.capability) : [];
+    const targets = masterVideo ? chainTargets(job.capability) : [];
     body = (
       <div className="space-y-3">
         {video ? (
@@ -517,7 +525,26 @@ const JobStep: FC<{
         )}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-black/50">
           {duration ? <span>耗时 {duration}</span> : null}
-          {video ? (
+          {compatibleVideo ? (
+            <>
+              <a
+                href={artifactUrl(job.id, compatibleVideo.path)}
+                download={compatibleVideo.name}
+                className="underline underline-offset-2 hover:text-black/80"
+              >
+                下载兼容版
+              </a>
+              {masterVideo ? (
+                <a
+                  href={artifactUrl(job.id, masterVideo.path)}
+                  download={masterVideo.name}
+                  className="underline underline-offset-2 hover:text-black/80"
+                >
+                  下载原始 4 倍版
+                </a>
+              ) : null}
+            </>
+          ) : video ? (
             <a
               href={artifactUrl(job.id, video.path)}
               download={video.name}
@@ -755,6 +782,24 @@ export const VideoEnhanceToolUI = makeAssistantToolUI<
       toolCallId={toolCallId}
       capability="video_enhance"
       argsSummary={args?.outscale ? `放大 ${args.outscale} 倍` : undefined}
+      result={result ?? undefined}
+    />
+  ),
+});
+
+/** 抠像换背景的对话卡片：无交互步骤，工具直接提交任务、卡片直接进入轮询。 */
+export const VideoMattingToolUI = makeAssistantToolUI<
+  VideoMattingArgs,
+  VideoMattingResult
+>({
+  toolName: "video_matting",
+  display: "standalone",
+  render: ({ args, result, toolCallId }) => (
+    <JobCard
+      title={capabilityName("matting")}
+      toolCallId={toolCallId}
+      capability="matting"
+      argsSummary={args?.background ? `背景：${args.background}` : undefined}
       result={result ?? undefined}
     />
   ),

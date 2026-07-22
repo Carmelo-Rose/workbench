@@ -19,6 +19,7 @@ import type {
   MonoSubjectSnapshot,
   MonoVideoAnalysisInput,
 } from "./contracts";
+import { monoJobKinds } from "./contracts";
 import { getMonoImage2Template } from "./image2-templates";
 import { MonoHttpError } from "./http";
 import {
@@ -54,10 +55,36 @@ import {
 
 const MAX_IMAGE_ATTEMPTS = 3;
 const controllers = new Map<string, AbortController>();
+/**
+ * 图片生成任务的软停止标记：只挡「还没发出的下一次尝试/重试」，不打断已经
+ * 提交给远端服务的那一次请求——那次调用大概率已经在计费/生成了，硬中断只是
+ * 让我们自己看不到结果，图片服务那边并不会因此停下来。见 cancelJob 的说明。
+ */
+const stopRequested = new Set<string>();
 
-type WorkerState = { started: boolean; draining: boolean; scheduled: boolean };
-const globalForWorker = globalThis as typeof globalThis & { __monoWorker?: WorkerState };
-const worker = globalForWorker.__monoWorker ??= { started: false, draining: false, scheduled: false };
+/**
+ * 每类任务的并发上限。图片生成打的是远端 HTTP 接口，串行排队没有意义
+ * （同一个 job 内部的 variants 本来就是并发的）；抠像和视频分析吃 AILAB 那台
+ * GPU，多开会互相抢显存，保持单条。
+ */
+const JOB_CONCURRENCY: Record<MonoJobKind, number> = {
+  image_generation: Math.max(1, Number(process.env.MONO_IMAGE_JOB_CONCURRENCY) || 3),
+  video_analysis: 1,
+  matting: 1,
+};
+
+type WorkerState = { started: boolean; scheduled: boolean; inFlight: Record<MonoJobKind, number> };
+const emptyInFlight = (): Record<MonoJobKind, number> =>
+  ({ image_generation: 0, video_analysis: 0, matting: 0 });
+
+// worker 状态挂在 globalThis 上跨模块实例复用，开发态热更会留下上一版形状的对象。
+// 缺字段必须补齐：drain 在 setImmediate 里跑，抛出去没人接，整个队列会静默卡死。
+const globalForWorker = globalThis as typeof globalThis & { __monoWorker?: Partial<WorkerState> };
+const cachedWorker = (globalForWorker.__monoWorker ??= {});
+cachedWorker.started ??= false;
+cachedWorker.scheduled ??= false;
+cachedWorker.inFlight ??= emptyInFlight();
+const worker = cachedWorker as WorkerState;
 
 function imageSource(sourceUrl: string): URL | string {
   return sourceUrl.startsWith("data:") ? sourceUrl : new URL(sourceUrl);
@@ -284,10 +311,21 @@ export function lightenMonoJob(job: MonoJob): MonoJob & { input: { referenceImag
 export function cancelJob(actor: MonoActor, jobId: string): MonoJob | null {
   const ownedJob = getMonoJob(actor, jobId);
   if (!ownedJob) return null;
+
+  // 图片生成任务一旦进入 running，当前这次尝试大概率已经把请求发给远端服务、
+  // 甚至已经开始计费/生成。硬中断只会让我们自己等不到结果，图片服务那边并不
+  // 会因此停下——等于真金白银换了个寂寞。这里改成软停止：只挡住还没发出的
+  // 下一次重试/下一个 slot，已经在飞的这一次放它跑完，成了就地留证。
+  if (ownedJob.kind === "image_generation" && ownedJob.status === "running") {
+    stopRequested.add(jobId);
+    return ownedJob;
+  }
+
   const cancelled = cancelMonoJob(actor, jobId);
   if (cancelled?.status === "cancelled") {
     controllers.get(jobId)?.abort();
     controllers.delete(jobId);
+    stopRequested.delete(jobId);
   }
   return cancelled;
 }
@@ -297,25 +335,34 @@ export function scheduleMonoWorker(): void {
     requeueInterruptedMonoJobs();
     worker.started = true;
   }
-  if (worker.scheduled || worker.draining) return;
+  if (worker.scheduled) return;
   worker.scheduled = true;
   setImmediate(() => {
     worker.scheduled = false;
-    void drainMonoJobs();
+    drainMonoJobs();
   });
 }
 
-async function drainMonoJobs(): Promise<void> {
-  if (worker.draining) return;
-  worker.draining = true;
+/**
+ * 认领到没有空位为止。这里不 await 任务本身——整个函数是同步的，
+ * 所以不会有回调插进来改 inFlight；每个任务结束后自己再叫一次 worker 补位。
+ */
+function drainMonoJobs(): void {
   try {
     for (;;) {
-      const job = claimNextMonoJob();
-      if (!job) break;
-      await dispatchClaimedJob(job);
+      const kinds = monoJobKinds.filter((kind) => worker.inFlight[kind] < JOB_CONCURRENCY[kind]);
+      if (!kinds.length) return;
+      const job = claimNextMonoJob(kinds);
+      if (!job) return;
+      worker.inFlight[job.kind] += 1;
+      void dispatchClaimedJob(job).finally(() => {
+        worker.inFlight[job.kind] -= 1;
+        scheduleMonoWorker();
+      });
     }
-  } finally {
-    worker.draining = false;
+  } catch (error) {
+    // 这里是 setImmediate 的栈顶，漏出去就是队列静默卡死，必须留下痕迹。
+    console.error("[mono] 任务调度失败，队列可能停摆", error);
   }
 }
 
@@ -334,10 +381,13 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
       completeMonoJob(job.id, await runMatting(job, controller.signal));
     } else {
       const result = await runImageGenerationBatch(job.id, job.input, controller.signal);
+      const stopped = stopRequested.has(job.id);
       completeMonoJob(
         job.id,
         result as unknown as Record<string, unknown>,
-        result.succeeded === 0 ? "全部图片均生成失败" : undefined,
+        result.succeeded === 0 ? (stopped ? "已停止，未生成任何图片" : "全部图片均生成失败") : undefined,
+        // 一张都没落地时用 cancelled 而不是 failed：这是用户主动叫停，不是服务出错。
+        result.succeeded === 0 && stopped ? "cancelled" : undefined,
       );
     }
   } catch (error) {
@@ -346,6 +396,7 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
     }
   } finally {
     controllers.delete(job.id);
+    stopRequested.delete(job.id);
   }
 }
 
@@ -549,6 +600,13 @@ async function runImageGenerationBatch(
     let lastError = "图片生成失败";
     for (let attempt = 1; attempt <= MAX_IMAGE_ATTEMPTS; attempt += 1) {
       if (signal.aborted) return;
+      // 只在「即将发起下一次尝试」这个时间点检查软停止——已经在飞的那次调用
+      // 不会被这里打断，它会自然跑到 try/catch 里 await 完，结果照样落地。
+      if (stopRequested.has(jobId)) {
+        Object.assign(slot, { status: "failed", error: "已停止，未再重试" });
+        updateMonoJobResult(jobId, snapshot());
+        return;
+      }
       Object.assign(slot, { status: attempt === 1 ? "generating" : "retrying", attempt, error: undefined });
       updateMonoJobResult(jobId, snapshot());
       try {

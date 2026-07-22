@@ -325,10 +325,12 @@ export function claimMonoJob(jobId: string): MonoJob | null {
   return toJob(row);
 }
 
-export function claimNextMonoJob(): MonoJob | null {
+/** 只认领还有并发空位的那几类任务，避免被一类占满时饿死其他类。 */
+export function claimNextMonoJob(kinds: readonly MonoJobKind[]): MonoJob | null {
+  if (!kinds.length) return null;
   const row = getDb().prepare(
-    "SELECT id FROM mono_jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1",
-  ).get() as { id: string } | undefined;
+    `SELECT id FROM mono_jobs WHERE status = 'queued' AND kind IN (${kinds.map(() => "?").join(",")}) ORDER BY created_at ASC LIMIT 1`,
+  ).get(...kinds) as { id: string } | undefined;
   return row ? claimMonoJob(row.id) : null;
 }
 
@@ -357,14 +359,17 @@ export function completeMonoJob(
   jobId: string,
   result: Record<string, unknown>,
   failure?: string,
+  /** 停止导致一张都没生成时用 "cancelled" 覆盖默认的 failed/succeeded 判断。 */
+  statusOverride?: Extract<MonoJobStatus, "succeeded" | "failed" | "cancelled">,
 ): void {
   const now = Date.now();
+  const status = statusOverride ?? (failure ? "failed" : "succeeded");
   getDb().prepare(
     `UPDATE mono_jobs
      SET status = ?, result_json = ?, error = ?, updated_at = ?, completed_at = ?
      WHERE id = ? AND status = 'running'`,
-  ).run(failure ? "failed" : "succeeded", JSON.stringify(result), failure ?? null, now, now, jobId);
-  appendMonoJobEvent(jobId, failure ? "failed" : "succeeded", failure ? { ...result, error: failure } : result);
+  ).run(status, JSON.stringify(result), failure ?? null, now, now, jobId);
+  appendMonoJobEvent(jobId, status, failure ? { ...result, error: failure } : result);
 }
 
 export function failMonoJob(jobId: string, error: string): void {

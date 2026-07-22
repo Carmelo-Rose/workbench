@@ -16,8 +16,7 @@ import {
 } from "@/lib/agent-status";
 import { BACKENDS, isBackendId, type BackendId } from "@/lib/backends";
 import { cn } from "@/lib/utils";
-import { useImage2Mode } from "@/lib/image2-mode";
-import { useShallow } from "zustand/shallow";
+import { getCurrentImage2ChatConfig } from "@/lib/image2-mode";
 
 const DOT_CLASS: Record<ConnState, string> = {
   ok: "bg-emerald-500",
@@ -68,22 +67,21 @@ const BackendIcon: FC<{ backend: BackendId; state: ConnState }> = ({
  * 保证所有会话样式（含装饰性选择器的变体）都遵循同一模式选择。
  */
 export const BackendModelContext: FC = () => {
-  const backend = useBackendChoice((s) => s.backend);
-  const image2 = useImage2Mode(useShallow((state) => ({
-    active: state.active,
-    templateId: state.selectedTemplateId,
-    aspectRatio: state.aspectRatio,
-    variants: state.variants,
-    structuredSubjectIds: state.structuredSubjectIds,
-  })));
   const api = useAui();
 
   useEffect(() => {
-    const config = { config: { modelName: backend, ...(image2.active ? { image2 } : {}) } };
     return api.modelContext().register({
-      getModelContext: () => config,
+      // AssistantChatTransport reads this immediately before submitting the
+      // message. Pull the Zustand stores here so a subject just selected for a
+      // structured product/reference slot cannot be omitted while a React
+      // effect is still updating the previously registered context.
+      getModelContext: () => {
+        const backend = useBackendChoice.getState().backend;
+        const image2 = getCurrentImage2ChatConfig();
+        return { config: { modelName: backend, ...(image2 ? { image2 } : {}) } };
+      },
     });
-  }, [api, backend, image2]);
+  }, [api]);
 
   return null;
 };

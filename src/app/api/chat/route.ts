@@ -20,6 +20,7 @@ import { createAsset, createImageGenerationJob, getSubject, newMonoActor } from 
 import { subjectIdsFromPrompt } from "@/lib/mono/subject-compiler";
 import { videoEraseTool } from "@/lib/tools/video-erase";
 import { videoEnhanceTool } from "@/lib/tools/video-enhance";
+import { videoMattingTool } from "@/lib/tools/video-matting";
 
 export const maxDuration = 60;
 
@@ -159,6 +160,7 @@ export async function POST(req: Request) {
     }),
     video_erase: videoEraseTool,
     video_enhance: videoEnhanceTool,
+    video_matting: videoMattingTool,
   };
   const requiredTool = forcedToolName(latestUserText(messages), Boolean(attachmentUrl));
 

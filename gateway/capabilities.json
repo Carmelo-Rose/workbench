@@ -50,9 +50,25 @@
     {
       "id": "matting",
       "name": "人物抠像换背景",
-      "status": "planned",
+      "status": "ready",
       "description": "人物视频抠像、替换背景（RVM，后续升级 MatAnyone）",
-      "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }]
+      "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }],
+      "params_hint": { "background": "背景颜色，white/black/green/blue/gray/red 或 #rrggbb 十六进制，默认 white" },
+      "adapter": {
+        "cwd": "D:/hyk_sort/workspace/video-toolbox/matting",
+        "command": [
+          "{cwd}/.venv/Scripts/python.exe",
+          "toolbox_run.py",
+          "--input",
+          "{input.video}",
+          "--output-dir",
+          "{output_dir}",
+          "--params",
+          "{params_json}"
+        ],
+        "env": {},
+        "timeout_sec": 7200
+      }
     },
     {
       "id": "translate_dub",

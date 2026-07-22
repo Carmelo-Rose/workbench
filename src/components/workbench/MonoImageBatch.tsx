@@ -11,59 +11,8 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { preloadImageReference } from "@/lib/image-reference";
 import { monoImageGenerationResultSchema, type MonoImageGenerationResult, type MonoJob } from "@/lib/mono/contracts";
-
-const terminalStatuses = new Set<MonoJob["status"]>(["succeeded", "failed", "cancelled"]);
-
-export function useMonoJobPolling(initialJob?: MonoJob) {
-  const [polledJob, setPolledJob] = useState(initialJob);
-  const [connectionError, setConnectionError] = useState(false);
-  const [isCancelling, setIsCancelling] = useState(false);
-
-  const job = initialJob && initialJob.id !== polledJob?.id ? initialJob : polledJob ?? initialJob;
-  const jobId = job?.id;
-  const jobStatus = job?.status;
-  useEffect(() => {
-    if (!jobId || !jobStatus || terminalStatuses.has(jobStatus)) return;
-    let disposed = false;
-    const refresh = async () => {
-      try {
-        const response = await fetch(`/api/workbench/mono/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
-        const payload = await response.json() as { job?: MonoJob };
-        if (!response.ok || !payload.job) throw new Error("任务状态暂不可用");
-        if (!disposed) {
-          setConnectionError(false);
-          setPolledJob(payload.job);
-        }
-      } catch {
-        if (!disposed) setConnectionError(true);
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), 2_000);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [jobId, jobStatus]);
-
-  const cancel = async () => {
-    if (!job || terminalStatuses.has(job.status)) return;
-    setIsCancelling(true);
-    try {
-      const response = await fetch(`/api/workbench/mono/jobs/${encodeURIComponent(job.id)}`, { method: "DELETE" });
-      const payload = await response.json() as { job?: MonoJob };
-      if (!response.ok || !payload.job) throw new Error("取消失败");
-      setPolledJob(payload.job);
-    } catch {
-      setConnectionError(true);
-    } finally {
-      setIsCancelling(false);
-    }
-  };
-
-  return { job, setJob: setPolledJob, connectionError, isCancelling, cancel };
-}
 
 export function imageBatchResult(job?: MonoJob): MonoImageGenerationResult | null {
   const parsed = monoImageGenerationResultSchema.safeParse(job?.result);
@@ -94,12 +43,14 @@ export type MonoGalleryImage = {
   index: number;
 };
 
+type UseAsReferenceHandler = (image: MonoGalleryImage) => Promise<void> | void;
+
 export function MonoImageBatchGallery({
   job,
   onUseAsReference,
-}: {
+  }: {
   job: MonoJob;
-  onUseAsReference?: (image: MonoGalleryImage) => void;
+  onUseAsReference?: UseAsReferenceHandler;
 }) {
   const result = imageBatchResult(job);
   const slots = useMemo(() => result?.slots ?? [], [result]);
@@ -108,6 +59,29 @@ export function MonoImageBatchGallery({
     [slots],
   );
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [referencePendingIndex, setReferencePendingIndex] = useState<number | null>(null);
+  const [referenceErrorIndex, setReferenceErrorIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    successful.forEach((slot) => {
+      preloadImageReference(downloadUrl(job.id, slot.index));
+    });
+  }, [job.id, successful]);
+
+  const handleUseAsReference = async (image: MonoGalleryImage): Promise<boolean> => {
+    if (!onUseAsReference || referencePendingIndex !== null) return false;
+    setReferencePendingIndex(image.index);
+    setReferenceErrorIndex(null);
+    try {
+      await onUseAsReference(image);
+      return true;
+    } catch {
+      setReferenceErrorIndex(image.index);
+      return false;
+    } finally {
+      setReferencePendingIndex(null);
+    }
+  };
 
   const { ratio, css } = tileRatio(job);
   const columns = slots.length === 1 ? 1 : 2;
@@ -153,17 +127,24 @@ export function MonoImageBatchGallery({
                     <DownloadIcon />下载
                   </Button>
                   {onUseAsReference ? (
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => onUseAsReference({
-                        displayUrl: slot.imageUrl!,
-                        fetchUrl: downloadUrl(job.id, slot.index),
-                        index: slot.index,
-                      })}
-                    >
-                      <ImageIcon />作为参考图
-                    </Button>
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        disabled={referencePendingIndex !== null}
+                        onClick={() => void handleUseAsReference({
+                          displayUrl: slot.imageUrl!,
+                          fetchUrl: downloadUrl(job.id, slot.index),
+                          index: slot.index,
+                        })}
+                      >
+                        {referencePendingIndex === slot.index ? <LoaderCircleIcon className="animate-spin" /> : <ImageIcon />}
+                        {referencePendingIndex === slot.index ? "添加中…" : referenceErrorIndex === slot.index ? "重试" : "作为参考图"}
+                      </Button>
+                      {referenceErrorIndex === slot.index ? (
+                        <span className="text-destructive basis-full text-xs">添加失败，请重试</span>
+                      ) : null}
+                    </>
                   ) : null}
                 </div>
               </>
@@ -202,7 +183,8 @@ export function MonoImageBatchGallery({
         openIndex={viewerIndex}
         onOpenChange={(index) => setViewerIndex(index)}
         onDownload={(image) => triggerDownload(image.fetchUrl)}
-        onUseAsReference={onUseAsReference}
+        onUseAsReference={handleUseAsReference}
+        useAsReferenceBusy={referencePendingIndex !== null}
       />
     </div>
   );
@@ -214,12 +196,14 @@ function ImageLightbox({
   onOpenChange,
   onDownload,
   onUseAsReference,
+  useAsReferenceBusy,
 }: {
   images: MonoGalleryImage[];
   openIndex: number | null;
   onOpenChange: (index: number | null) => void;
   onDownload: (image: MonoGalleryImage) => void;
-  onUseAsReference?: (image: MonoGalleryImage) => void;
+  onUseAsReference?: (image: MonoGalleryImage) => Promise<boolean>;
+  useAsReferenceBusy?: boolean;
 }) {
   const current = openIndex !== null ? images[openIndex] : undefined;
   const step = useCallback(
@@ -293,12 +277,13 @@ function ImageLightbox({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
-                onUseAsReference(current);
-                onOpenChange(null);
-              }}
+              disabled={useAsReferenceBusy}
+              onClick={() => void (async () => {
+                if (await onUseAsReference(current)) onOpenChange(null);
+              })()}
             >
-              <ImageIcon />作为参考图
+              {useAsReferenceBusy ? <LoaderCircleIcon className="animate-spin" /> : <ImageIcon />}
+              {useAsReferenceBusy ? "添加中…" : "作为参考图"}
             </Button>
           ) : null}
           <Button variant="ghost" size="sm" onClick={() => onOpenChange(null)}>

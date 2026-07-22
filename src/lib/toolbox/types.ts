@@ -61,8 +61,9 @@ export const TOOLBOX_CAPABILITIES: ToolboxCapability[] = [
   {
     id: "matting",
     name: "人物抠像换背景",
-    status: "planned",
+    status: "ready",
     interactive: false,
+    defaultParams: { background: "white" },
     description: "人物视频抠像、替换背景",
   },
   {

@@ -68,7 +68,28 @@ export const useImage2Mode = create<Image2ModeState>((set) => ({
   }),
 }));
 
-export type Image2ChatModeConfig = Pick<
-  Image2ModeState,
-  "active" | "selectedTemplateId" | "aspectRatio" | "variants" | "structuredSubjectIds"
->;
+/** Shape sent as `config.image2` to the chat route. */
+export type Image2ChatModeConfig = {
+  active: true;
+  templateId?: MonoImage2TemplateId;
+  aspectRatio: MonoImageGenerationInput["aspectRatio"];
+  variants: MonoImageGenerationInput["variants"];
+  structuredSubjectIds: [string | undefined, string | undefined];
+};
+
+/**
+ * Read the mode at send time instead of relying on React effects to have
+ * re-registered a model context. This matters for a subject picked from the
+ * structured slot immediately before the user submits the composer.
+ */
+export function getCurrentImage2ChatConfig(): Image2ChatModeConfig | undefined {
+  const state = useImage2Mode.getState();
+  if (!state.active) return undefined;
+  return {
+    active: true,
+    templateId: state.selectedTemplateId,
+    aspectRatio: state.aspectRatio,
+    variants: state.variants,
+    structuredSubjectIds: state.structuredSubjectIds,
+  };
+}
