@@ -9,7 +9,7 @@
       "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }],
       "params_hint": { "regions": "归一化框选区域列表 [{x,y,w,h}]，坐标相对视频画面 0-1" },
       "adapter": {
-        "cwd": "D:/hyk_sort/workspace/video-toolbox/erase",
+        "cwd": "D:/hyk_sort/apps/video-toolbox/erase",
         "command": [
           "{cwd}/.venv/Scripts/python.exe",
           "toolbox_run.py",
@@ -32,7 +32,7 @@
       "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }],
       "params_hint": { "outscale": "放大倍数，2 或 4，默认 4" },
       "adapter": {
-        "cwd": "D:/hyk_sort/workspace/video-toolbox/enhance",
+        "cwd": "D:/hyk_sort/apps/video-toolbox/enhance",
         "command": [
           "{cwd}/.venv/Scripts/python.exe",
           "toolbox_run.py",
@@ -55,7 +55,7 @@
       "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }],
       "params_hint": { "background": "背景颜色，white/black/green/blue/gray/red 或 #rrggbb 十六进制，默认 white" },
       "adapter": {
-        "cwd": "D:/hyk_sort/workspace/video-toolbox/matting",
+        "cwd": "D:/hyk_sort/apps/video-toolbox/matting",
         "command": [
           "{cwd}/.venv/Scripts/python.exe",
           "toolbox_run.py",
