@@ -39,6 +39,7 @@ import {
   CollectorBatchesToolUI,
   CollectorSearchToolUI,
   LuopanEventsToolUI,
+  LuopanRankInsightsToolUI,
   LuopanRoundsToolUI,
   LuopanSnapshotToolUI,
   LuopanTrendToolUI,
@@ -133,6 +134,7 @@ export const Assistant = () => {
       <LuopanSnapshotToolUI />
       <LuopanTrendToolUI />
       <LuopanEventsToolUI />
+      <LuopanRankInsightsToolUI />
       <CollectorBatchesToolUI />
       <CollectorSearchToolUI />
       <VideoEraseToolUI />

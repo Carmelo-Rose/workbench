@@ -127,21 +127,28 @@ def query_trend(product_id: str, params) -> dict:
 
 
 def query_events(params) -> dict:
-    condition, args = scope_condition(params)
+    condition, scope_args = scope_condition(params)
     limit = clamp((params.get("limit") or [None])[0], 50, 1, 200)
     event_type = (params.get("event_type") or [""])[0]
     extra = ""
+    event_args = []
     if event_type:
         if event_type not in {"NEW_ENTRY", "RANK_UP_50", "RANK_UP_100", "RANK_UP_150"}:
             raise ValueError("event_type 无效")
         extra = " AND event_type = ?"
-        args = [*args, event_type]
+        event_args = [event_type]
     with open_db() as db:
         run_id = (params.get("run_id") or [""])[0] or latest_run_id(
-            db, "ranking_event", "1=1", []
+            db, "ranking_event", condition, scope_args
         )
         if not run_id:
-            return {"run_id": None, "events": []}
+            return {"run_id": None, "total": 0, "events": []}
+        total = db.execute(
+            f"""SELECT COUNT(*) AS total
+                FROM ranking_event
+                WHERE run_id = ? AND {condition}{extra}""",
+            [run_id, *scope_args, *event_args],
+        ).fetchone()["total"]
         rows = db.execute(
             f"""SELECT run_id, scope_key, event_type, product_id, product_title, shop_info,
                        rank_current, rank_previous, rank_delta, price, pay_amount,
@@ -149,9 +156,9 @@ def query_events(params) -> dict:
                 FROM ranking_event
                 WHERE run_id = ? AND {condition}{extra}
                 ORDER BY rank_delta DESC, rank_current LIMIT ?""",
-            [run_id, *args, limit],
+            [run_id, *scope_args, *event_args, limit],
         ).fetchall()
-    return {"run_id": run_id, "events": rows_to_dicts(rows)}
+    return {"run_id": run_id, "total": int(total), "events": rows_to_dicts(rows)}
 
 
 TREND_ROUTE = re.compile(r"^/api/products/([^/]+)/trend$")

@@ -2,6 +2,7 @@
 
 import { makeAssistantToolUI } from "@assistant-ui/react";
 import { ChartColumnIcon, CheckIcon, LoaderCircleIcon } from "lucide-react";
+import type { LuopanRankInsights, LuopanRankingEvent } from "@/lib/luopan/insights";
 
 /**
  * 采集数据工具卡：luopan sidecar / collector_items 的查询结果
@@ -126,6 +127,113 @@ function CollectorCard({ title, result }: { title: string; result?: unknown }) {
   );
 }
 
+const INSIGHT_STATUS_LABELS: Record<LuopanRankInsights["status"], string> = {
+  ready: "数据已同步",
+  stale: "数据已过期",
+  no_snapshot: "等待采集数据",
+  no_event: "本轮无异动",
+  unavailable: "服务不可用",
+  not_configured: "服务未配置",
+};
+
+const EVENT_LABELS: Record<string, string> = {
+  NEW_ENTRY: "新进榜",
+  RANK_UP_50: "排名上升 50+",
+  RANK_UP_100: "排名上升 100+",
+  RANK_UP_150: "排名上升 150+",
+};
+
+function isRankInsights(value: unknown): value is LuopanRankInsights {
+  if (typeof value !== "object" || value === null) return false;
+  const status = (value as Record<string, unknown>).status;
+  return typeof status === "string" && status in INSIGHT_STATUS_LABELS;
+}
+
+function scopeLabel(scopePrefix: string) {
+  if (scopePrefix === "video_acc") return "服配短视频榜";
+  if (scopePrefix === "card_order") return "商品卡榜";
+  return "大盘短视频榜";
+}
+
+function formatTime(value: string | undefined) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function eventReason(event: LuopanRankingEvent) {
+  const parts: string[] = [];
+  if (event.eventType === "NEW_ENTRY") parts.push("新进榜");
+  else if (event.rankDelta !== undefined) parts.push(`排名上升 ${event.rankDelta} 位`);
+  if (event.rankCurrent !== undefined) parts.push(`当前第 ${event.rankCurrent} 名`);
+  const category = event.leafCategoryName ?? event.categoryName ?? event.industryName;
+  if (category) parts.push(category);
+  return parts.join(" · ") || "榜单异动";
+}
+
+function RankInsightsCard({ result }: { result?: unknown }) {
+  const insights = isRankInsights(result) ? result : undefined;
+  const done = result !== undefined;
+  const showEvents = insights && insights.events.length > 0;
+
+  return (
+    <section className="my-3 w-full overflow-hidden rounded-2xl border border-border/70 bg-card/80 shadow-sm backdrop-blur" aria-live="polite">
+      <header className="flex items-center gap-2.5 border-b border-border/60 px-4 py-3">
+        <span className="bg-muted flex size-7 items-center justify-center rounded-lg">
+          <ChartColumnIcon className="size-3.5" />
+        </span>
+        <span className="font-medium">榜单异动</span>
+        <span className="text-muted-foreground flex items-center gap-1 text-xs">
+          {done ? <CheckIcon className="size-4" /> : <LoaderCircleIcon className="size-4 animate-spin" />}
+          {insights ? INSIGHT_STATUS_LABELS[insights.status] : "正在检查数据状态"}
+        </span>
+      </header>
+      <div className="space-y-3 p-4">
+        {insights ? (
+          <>
+            <p className="text-sm leading-6">{insights.message}</p>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl bg-muted/45 p-3 text-xs">
+              <div>
+                <dt className="text-muted-foreground">榜单范围</dt>
+                <dd className="mt-0.5 font-medium">{scopeLabel(insights.scopePrefix)}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">数据截至</dt>
+                <dd className="mt-0.5 font-medium">{formatTime(insights.dataAsOf)}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">本轮商品</dt>
+                <dd className="mt-0.5 font-medium">{insights.latestRound?.itemCount?.toLocaleString("zh-CN") ?? "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">检测到异动</dt>
+                <dd className="mt-0.5 font-medium">{insights.totalEvents.toLocaleString("zh-CN")} 条</dd>
+              </div>
+            </dl>
+            {showEvents ? (
+              <ol className="space-y-2">
+                {insights.events.slice(0, 8).map((event, index) => (
+                  <li key={`${event.productId ?? "event"}-${index}`} className="rounded-xl border border-border/55 px-3 py-2.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium">{event.productTitle ?? "未命名商品"}</p>
+                        <p className="text-muted-foreground mt-1 text-xs">{eventReason(event)}</p>
+                      </div>
+                      <span className="bg-muted shrink-0 rounded-md px-2 py-1 text-xs">{EVENT_LABELS[event.eventType ?? ""] ?? "异动"}</span>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+          </>
+        ) : (
+          <p className="text-muted-foreground text-sm">正在确认服务连接、最新采集轮次和异动数据。</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function collectorToolUI(toolName: string, title: string) {
   return makeAssistantToolUI<Record<string, unknown>, unknown>({
     toolName,
@@ -138,5 +246,10 @@ export const LuopanRoundsToolUI = collectorToolUI("luopan_query_rounds", "罗盘
 export const LuopanSnapshotToolUI = collectorToolUI("luopan_query_snapshot", "罗盘榜单快照");
 export const LuopanTrendToolUI = collectorToolUI("luopan_product_trend", "商品排名轨迹");
 export const LuopanEventsToolUI = collectorToolUI("luopan_query_events", "榜单异动事件");
+export const LuopanRankInsightsToolUI = makeAssistantToolUI<Record<string, unknown>, unknown>({
+  toolName: "luopan_rank_insights",
+  display: "standalone",
+  render: (props) => <RankInsightsCard result={props.result} />,
+});
 export const CollectorBatchesToolUI = collectorToolUI("collector_list_batches", "采集导入批次");
 export const CollectorSearchToolUI = collectorToolUI("collector_search_items", "采集内容检索");
