@@ -13,6 +13,7 @@ import { defaultBackend, isBackendId, type BackendId } from "@/lib/backends";
 import { WORKBENCH_SYSTEM } from "@/lib/prompts";
 import { createImageToPromptTool } from "@/lib/tools/image-to-prompt";
 import { createCollectorTools } from "@/lib/tools/collector";
+import { getLuopanRankInsights } from "@/lib/luopan/insights";
 import { createMonoTools } from "@/lib/tools/mono";
 import { monoAspectRatios, type MonoImageGenerationInput, type MonoJob } from "@/lib/mono/contracts";
 import { getMonoImage2Template, monoImage2TemplateIds } from "@/lib/mono/image2-templates";
@@ -115,9 +116,9 @@ function forcedToolName(userText: string, hasImageAttachment: boolean) {
   if (/(生图|生成.*图|画.*图|绘制.*图|generate.*image|create.*image)/i.test(text)) {
     return "mono_generate_image" as const;
   }
-  // 罗盘榜单问数：明确提到罗盘/榜单异动时直接查差分事件。
+  // 榜单异动有明确的数据可用性语义，不能交给模型自行编排多次工具调用。
   if (/(罗盘|短视频榜|商品卡榜|新进榜|急升|榜单.{0,6}(异动|变化|事件))/i.test(text)) {
-    return "luopan_query_events" as const;
+    return "luopan_rank_insights" as const;
   }
   return undefined;
 }
@@ -144,6 +145,11 @@ export async function POST(req: Request) {
     });
   }
 
+  const requiredTool = forcedToolName(latestUserText(messages), Boolean(imageAttachments[0]));
+  if (requiredTool === "luopan_rank_insights") {
+    return rankInsightsResponse({ messages, backend });
+  }
+
   const attachmentUrl = imageAttachments[0];
   const directTools = {
     image_to_prompt: createImageToPromptTool(attachmentUrl),
@@ -162,8 +168,6 @@ export async function POST(req: Request) {
     video_enhance: videoEnhanceTool,
     video_matting: videoMattingTool,
   };
-  const requiredTool = forcedToolName(latestUserText(messages), Boolean(attachmentUrl));
-
   const result =
     backend === "hermes"
       ? streamText({
@@ -201,6 +205,32 @@ export async function POST(req: Request) {
     onError: (error) =>
       error instanceof Error ? error.message : "对话后端暂时不可用，请稍后重试",
   });
+}
+
+async function rankInsightsResponse({
+  messages,
+  backend,
+}: {
+  messages: UIMessage[];
+  backend: BackendId;
+}) {
+  const input = { scopePrefix: "video_order" as const };
+  const result = await getLuopanRankInsights(input);
+  const toolCallId = `tool_${randomUUID()}`;
+  const metadata = { custom: { backend, mode: "rank-insights" } };
+  const stream = createUIMessageStream({
+    originalMessages: messages,
+    execute: ({ writer }) => {
+      writer.write({ type: "start", messageMetadata: metadata });
+      writer.write({ type: "start-step" });
+      writer.write({ type: "tool-input-available", toolCallId, toolName: "luopan_rank_insights", input });
+      writer.write({ type: "tool-output-available", toolCallId, output: result });
+      writer.write({ type: "finish-step" });
+      writer.write({ type: "finish", finishReason: "tool-calls", messageMetadata: metadata });
+    },
+    onError: () => "榜单异动查询失败，请稍后重试",
+  });
+  return createUIMessageStreamResponse({ stream });
 }
 
 function image2Response({
