@@ -1,4 +1,5 @@
 import type { JobInfo } from "@/lib/toolbox/types";
+import { tenantContext } from "@/lib/server/tenant-context";
 
 /**
  * 视频工具箱网关（跑在 AILAB 服务机上的 FastAPI Job 服务）的服务端客户端。
@@ -12,9 +13,20 @@ export function gatewayBase(): string {
   );
 }
 
-export function gatewayHeaders(): Record<string, string> {
+type GatewayActor = { userId: string; workspaceId: string };
+
+export function gatewayHeaders(actor?: GatewayActor): Record<string, string> {
   const token = process.env.TOOLBOX_TOKEN;
-  return token ? { "x-toolbox-token": token } : {};
+  const resolvedActor = actor ?? tenantContext()?.actor;
+  return {
+    ...(token ? { "x-toolbox-token": token } : {}),
+    ...(resolvedActor
+      ? {
+          "x-workbench-user-id": resolvedActor.userId,
+          "x-workbench-workspace-id": resolvedActor.workspaceId,
+        }
+      : {}),
+  };
 }
 
 export class GatewayError extends Error {
@@ -27,12 +39,20 @@ export class GatewayError extends Error {
   }
 }
 
-async function gatewayFetch(path: string, init?: RequestInit): Promise<Response> {
+async function gatewayFetch(
+  path: string,
+  init?: RequestInit,
+  actor?: GatewayActor,
+): Promise<Response> {
+  const resolvedActor = actor ?? tenantContext()?.actor;
+  if (!resolvedActor) {
+    throw new GatewayError("视频工具箱请求缺少工作区上下文", 500);
+  }
   let res: Response;
   try {
     res = await fetch(`${gatewayBase()}${path}`, {
       ...init,
-      headers: { ...gatewayHeaders(), ...init?.headers },
+      headers: { ...gatewayHeaders(resolvedActor), ...init?.headers },
       cache: "no-store",
     });
   } catch {
@@ -55,18 +75,28 @@ export type SubmitJobRequest = {
   inputs?: Record<string, string>;
 };
 
-export async function submitJob(req: SubmitJobRequest): Promise<JobInfo> {
+export async function submitJob(
+  req: SubmitJobRequest,
+  actor?: GatewayActor,
+): Promise<JobInfo> {
   const res = await gatewayFetch("/jobs", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(req),
-  });
+  }, actor);
   return (await res.json()) as JobInfo;
 }
 
-export async function getJob(jobId: string): Promise<JobInfo | null> {
+export async function getJob(
+  jobId: string,
+  actor?: GatewayActor,
+): Promise<JobInfo | null> {
   try {
-    const res = await gatewayFetch(`/jobs/${encodeURIComponent(jobId)}`);
+    const res = await gatewayFetch(
+      `/jobs/${encodeURIComponent(jobId)}`,
+      undefined,
+      actor,
+    );
     return (await res.json()) as JobInfo;
   } catch (error) {
     if (error instanceof GatewayError && error.status === 404) return null;
@@ -75,17 +105,26 @@ export async function getJob(jobId: string): Promise<JobInfo | null> {
 }
 
 /** 取消任务：queued 立即置 canceled，running 置 cancel_requested 交给 worker 处理。 */
-export async function cancelJob(jobId: string): Promise<JobInfo> {
+export async function cancelJob(
+  jobId: string,
+  actor?: GatewayActor,
+): Promise<JobInfo> {
   const res = await gatewayFetch(`/jobs/${encodeURIComponent(jobId)}/cancel`, {
     method: "POST",
-  });
+  }, actor);
   return (await res.json()) as JobInfo;
 }
 
 /** 任务日志尾部（失败时卡片里就地查看，省掉一趟 SSH 上服务机）。 */
-export async function getJobLog(jobId: string, tail = 8000): Promise<string> {
+export async function getJobLog(
+  jobId: string,
+  tail = 8000,
+  actor?: GatewayActor,
+): Promise<string> {
   const res = await gatewayFetch(
     `/jobs/${encodeURIComponent(jobId)}/log?tail=${tail}`,
+    undefined,
+    actor,
   );
   return await res.text();
 }

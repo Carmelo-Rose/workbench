@@ -67,9 +67,13 @@ Image2 作为聊天 composer 模式运行，支持插件迁移来的 6 个模板
 内联 `@主体` 和结构化模板槽位选择；主体引用由服务端编译并在任务提交时冻结快照。
 聊天、direct Agent 工具和 MCP adapter 共用同一批次任务契约。
 
-外部平台 API 默认拒绝访问，必须设置 `MONO_PLATFORM_API_KEY`。本地开发时由
-`MONO_LOCAL_DEVELOPMENT=true` 显式启用 Workbench 单用户身份桥；生产环境不会
-接受该开关。供应商凭据仅保存在服务端环境变量中。运行独立 Streamable HTTP MCP adapter：
+外部平台 API 默认拒绝访问，必须设置 `MONO_PLATFORM_API_KEY`。Workbench 现在按
+“组织 → 工作区 → 员工”隔离会话、素材与运行时配置：管理员可在“设置 → 员工与工作区”
+创建员工、分配角色和创建工作区。生产首次启动请配置
+`WORKBENCH_BOOTSTRAP_EMAIL` 与至少 12 位的 `WORKBENCH_BOOTSTRAP_PASSWORD`，它会
+幂等创建第一个所有者；本地开发仍可用 `MONO_LOCAL_DEVELOPMENT=true` 自动进入默认
+本地工作区，生产环境不会接受该开关。供应商凭据仅保存在服务端环境变量或当前工作区的
+受权限保护配置中。运行独立 Streamable HTTP MCP adapter：
 
 ```bash
 MONO_MCP_API_KEY=client-token \

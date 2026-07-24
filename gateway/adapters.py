@@ -31,7 +31,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from store import BASE_DIR, FILES_DIR, job_dir, output_dir
+from store import BASE_DIR, FILES_DIR, get_file, get_job, job_dir, output_dir
 
 CAPABILITIES_PATH = BASE_DIR / "capabilities.json"
 
@@ -68,7 +68,7 @@ def public_capability(cap: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def resolve_input_ref(ref: str) -> Path:
+def resolve_input_ref(ref: str, workspace_id: str) -> Path:
     """输入引用 → 绝对路径。
 
     支持两种形式：
@@ -80,6 +80,8 @@ def resolve_input_ref(ref: str) -> Path:
         if "/" not in rest:
             raise AdapterError(f"非法的任务产物引用：{ref}")
         src_job, rel = rest.split("/", 1)
+        if get_job(src_job, workspace_id) is None:
+            raise AdapterError(f"引用的任务产物不存在：{ref}")
         path = (output_dir(src_job) / rel).resolve()
         if not str(path).startswith(str(output_dir(src_job).resolve())):
             raise AdapterError(f"产物引用越界：{ref}")
@@ -90,6 +92,8 @@ def resolve_input_ref(ref: str) -> Path:
     file_id = ref[len("file:"):] if ref.startswith("file:") else ref
     if not re.fullmatch(r"[a-f0-9]{12}", file_id):
         raise AdapterError(f"非法的文件引用：{ref}")
+    if get_file(file_id, workspace_id) is None:
+        raise AdapterError(f"输入文件不存在或已清理：{ref}")
     folder = FILES_DIR / file_id
     # 下划线开头是派生文件（如 _poster.jpg），不算原始输入
     files = (
@@ -102,8 +106,11 @@ def resolve_input_ref(ref: str) -> Path:
     return files[0]
 
 
-def resolve_inputs(inputs: dict[str, str]) -> dict[str, Path]:
-    return {field: resolve_input_ref(ref) for field, ref in inputs.items()}
+def resolve_inputs(inputs: dict[str, str], workspace_id: str) -> dict[str, Path]:
+    return {
+        field: resolve_input_ref(ref, workspace_id)
+        for field, ref in inputs.items()
+    }
 
 
 _PLACEHOLDER = re.compile(r"\{([a-zA-Z0-9_.]+)\}")
@@ -118,7 +125,7 @@ def build_command(
         raise AdapterError(f"能力 {cap['id']} 未配置 adapter，无法执行")
 
     cwd = adapter.get("cwd", str(BASE_DIR))
-    resolved = resolve_inputs(job["inputs"])
+    resolved = resolve_inputs(job["inputs"], job["workspace_id"])
     params = job["params"]
 
     def expand(match: re.Match[str]) -> str:

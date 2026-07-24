@@ -1,5 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
+import {
+  monoErrorResponse,
+  workspaceActorFromWorkbenchRequest,
+} from "@/lib/mono/http";
 
 export const dynamic = "force-dynamic";
 
@@ -16,10 +20,16 @@ const PASSTHROUGH_HEADERS = [
 
 /** 任务产物代理：流式转发网关文件（视频预览 + 下载共用）。 */
 export async function GET(req: NextRequest, { params }: Params) {
+  let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
+  try {
+    actor = workspaceActorFromWorkbenchRequest(req);
+  } catch (error) {
+    return monoErrorResponse(error);
+  }
   const { jobId, path } = await params;
   const artifactPath = path.map(encodeURIComponent).join("/");
 
-  const headers: Record<string, string> = { ...gatewayHeaders() };
+  const headers: Record<string, string> = { ...gatewayHeaders(actor) };
   const range = req.headers.get("range");
   if (range) headers["range"] = range;
 

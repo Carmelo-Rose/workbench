@@ -1,5 +1,17 @@
 import { getDb } from "./db";
 
+/** A chat history is private to one employee inside one workspace. */
+export type ThreadScope = {
+  workspaceId: string;
+  userId: string;
+};
+
+export class ThreadScopeError extends Error {
+  constructor(message = "Thread not found") {
+    super(message);
+  }
+}
+
 export type ThreadRecord = {
   remoteId: string;
   externalId: string | null;
@@ -11,7 +23,7 @@ export type ThreadRecord = {
   lastMessageAt: number | null;
 };
 
-/** 与客户端 MessageStorageEntry 对齐的行格式（content 为解码后的 JSON）。 */
+/** Persisted row aligned to assistant-ui MessageStorageEntry. */
 export type StoredEntry = {
   id: string;
   parent_id: string | null;
@@ -44,7 +56,6 @@ type MessageRow = {
   content_json: string;
 };
 
-// node:sqlite 没有 .transaction() 助手，手写 BEGIN/COMMIT/ROLLBACK。
 function tx<T>(fn: () => T): T {
   const db = getDb();
   db.exec("BEGIN");
@@ -52,9 +63,9 @@ function tx<T>(fn: () => T): T {
     const result = fn();
     db.exec("COMMIT");
     return result;
-  } catch (err) {
+  } catch (error) {
     db.exec("ROLLBACK");
-    throw err;
+    throw error;
   }
 }
 
@@ -64,48 +75,56 @@ function toRecord(row: ThreadRow): ThreadRecord {
     externalId: row.external_id,
     status: row.status === "archived" ? "archived" : "regular",
     title: row.title,
-    custom: row.custom_json
-      ? (JSON.parse(row.custom_json) as Record<string, unknown>)
-      : null,
+    custom: row.custom_json ? (JSON.parse(row.custom_json) as Record<string, unknown>) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastMessageAt: row.last_message_at,
   };
 }
 
-export function listThreads(): ThreadRecord[] {
-  const rows = getDb()
-    .prepare("SELECT * FROM threads ORDER BY created_at DESC")
-    .all() as ThreadRow[];
+function threadRow(scope: ThreadScope, remoteId: string): ThreadRow | undefined {
+  return getDb().prepare(
+    `SELECT * FROM threads
+     WHERE remote_id = ? AND workspace_id = ? AND owner_user_id = ?`,
+  ).get(remoteId, scope.workspaceId, scope.userId) as ThreadRow | undefined;
+}
+
+function requireThread(scope: ThreadScope, remoteId: string): ThreadRow {
+  const row = threadRow(scope, remoteId);
+  if (!row) throw new ThreadScopeError();
+  return row;
+}
+
+export function listThreads(scope: ThreadScope): ThreadRecord[] {
+  const rows = getDb().prepare(
+    `SELECT * FROM threads
+     WHERE workspace_id = ? AND owner_user_id = ?
+     ORDER BY created_at DESC`,
+  ).all(scope.workspaceId, scope.userId) as ThreadRow[];
   return rows.map(toRecord);
 }
 
-export function getThread(remoteId: string): ThreadRecord | null {
-  const row = getDb()
-    .prepare("SELECT * FROM threads WHERE remote_id = ?")
-    .get(remoteId) as ThreadRow | undefined;
+export function getThread(scope: ThreadScope, remoteId: string): ThreadRecord | null {
+  const row = threadRow(scope, remoteId);
   return row ? toRecord(row) : null;
 }
 
-/** initialize 语义：幂等，已存在时不改动任何字段。 */
-export function ensureThread(remoteId: string): {
+/** Initialize is idempotent, but never adopts a thread owned by another employee. */
+export function ensureThread(scope: ThreadScope, remoteId: string): {
   remoteId: string;
   externalId: string | null;
 } {
   const now = Date.now();
-  getDb()
-    .prepare(
-      `INSERT OR IGNORE INTO threads (remote_id, created_at, updated_at)
-       VALUES (?, ?, ?)`,
-    )
-    .run(remoteId, now, now);
-  const row = getDb()
-    .prepare("SELECT external_id FROM threads WHERE remote_id = ?")
-    .get(remoteId) as { external_id: string | null };
+  getDb().prepare(
+    `INSERT OR IGNORE INTO threads (remote_id, workspace_id, owner_user_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(remoteId, scope.workspaceId, scope.userId, now, now);
+  const row = requireThread(scope, remoteId);
   return { remoteId, externalId: row.external_id };
 }
 
 export function updateThread(
+  scope: ThreadScope,
   remoteId: string,
   patch: {
     title?: string;
@@ -127,90 +146,81 @@ export function updateThread(
     sets.push("custom_json = ?");
     values.push(patch.custom === null ? null : JSON.stringify(patch.custom));
   }
-  values.push(remoteId);
-  const result = getDb()
-    .prepare(`UPDATE threads SET ${sets.join(", ")} WHERE remote_id = ?`)
-    .run(...values);
+  values.push(remoteId, scope.workspaceId, scope.userId);
+  const result = getDb().prepare(
+    `UPDATE threads SET ${sets.join(", ")}
+     WHERE remote_id = ? AND workspace_id = ? AND owner_user_id = ?`,
+  ).run(...values);
   return result.changes > 0;
 }
 
-export function deleteThread(remoteId: string): boolean {
-  // ON DELETE CASCADE 依赖连接级 foreign_keys=ON（db.ts 已设）。
-  const result = getDb()
-    .prepare("DELETE FROM threads WHERE remote_id = ?")
-    .run(remoteId);
+export function deleteThread(scope: ThreadScope, remoteId: string): boolean {
+  const result = getDb().prepare(
+    `DELETE FROM threads
+     WHERE remote_id = ? AND workspace_id = ? AND owner_user_id = ?`,
+  ).run(remoteId, scope.workspaceId, scope.userId);
   return result.changes > 0;
 }
 
-export function deleteAllThreads(): void {
-  tx(() => {
-    getDb().exec("DELETE FROM messages");
-    getDb().exec("DELETE FROM threads");
-  });
+export function deleteAllThreads(scope: ThreadScope): void {
+  getDb().prepare(
+    "DELETE FROM threads WHERE workspace_id = ? AND owner_user_id = ?",
+  ).run(scope.workspaceId, scope.userId);
 }
 
 export function loadRepo(
+  scope: ThreadScope,
   threadId: string,
   format: string,
 ): { headId: string | null; entries: StoredEntry[] } {
-  const thread = getDb()
-    .prepare("SELECT head_id FROM threads WHERE remote_id = ?")
-    .get(threadId) as { head_id: string | null } | undefined;
-  const rows = getDb()
-    .prepare(
-      `SELECT id, parent_id, format, content_json FROM messages
-       WHERE thread_id = ? AND format = ? ORDER BY rowid`,
-    )
-    .all(threadId, format) as MessageRow[];
+  const thread = requireThread(scope, threadId);
+  const rows = getDb().prepare(
+    `SELECT id, parent_id, format, content_json FROM messages
+     WHERE workspace_id = ? AND thread_id = ? AND format = ? ORDER BY rowid`,
+  ).all(scope.workspaceId, threadId, format) as MessageRow[];
   return {
-    headId: thread?.head_id ?? null,
-    entries: rows.map((r) => ({
-      id: r.id,
-      parent_id: r.parent_id,
-      format: r.format,
-      content: JSON.parse(r.content_json),
+    headId: thread.head_id,
+    entries: rows.map((row) => ({
+      id: row.id,
+      parent_id: row.parent_id,
+      format: row.format,
+      content: JSON.parse(row.content_json),
     })),
   };
 }
 
-export function appendEntry(threadId: string, entry: StoredEntry): void {
+export function appendEntry(scope: ThreadScope, threadId: string, entry: StoredEntry): void {
   const now = Date.now();
   tx(() => {
-    ensureThread(threadId);
-    // ON CONFLICT 原位更新保留 rowid（插入序），镜像 localStorage upsert。
-    getDb()
-      .prepare(
-        `INSERT INTO messages (thread_id, id, parent_id, format, content_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(thread_id, id) DO UPDATE SET
-           parent_id = excluded.parent_id,
-           format = excluded.format,
-           content_json = excluded.content_json,
-           updated_at = excluded.updated_at`,
-      )
-      .run(
-        threadId,
-        entry.id,
-        entry.parent_id,
-        entry.format,
-        JSON.stringify(entry.content),
-        now,
-        now,
-      );
-    getDb()
-      .prepare(
-        "UPDATE threads SET head_id = ?, last_message_at = ?, updated_at = ? WHERE remote_id = ?",
-      )
-      .run(entry.id, now, now, threadId);
+    ensureThread(scope, threadId);
+    getDb().prepare(
+      `INSERT INTO messages
+         (workspace_id, thread_id, id, parent_id, format, content_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(workspace_id, thread_id, id) DO UPDATE SET
+         parent_id = excluded.parent_id,
+         format = excluded.format,
+         content_json = excluded.content_json,
+         updated_at = excluded.updated_at`,
+    ).run(
+      scope.workspaceId,
+      threadId,
+      entry.id,
+      entry.parent_id,
+      entry.format,
+      JSON.stringify(entry.content),
+      now,
+      now,
+    );
+    getDb().prepare(
+      `UPDATE threads SET head_id = ?, last_message_at = ?, updated_at = ?
+       WHERE remote_id = ? AND workspace_id = ? AND owner_user_id = ?`,
+    ).run(entry.id, now, now, threadId, scope.workspaceId, scope.userId);
   });
 }
 
-/**
- * update 语义（最大正确性风险）：runtime 重新生成消息时按旧 localMessageId
- * 匹配、存到新 id 下。按 entry.id 或 matchId 找到既有行后原位改写
- * （保留 rowid），head 指向 matchId 时挪到新 id。
- */
 export function updateEntry(
+  scope: ThreadScope,
   threadId: string,
   entry: StoredEntry,
   matchId: string | undefined,
@@ -218,25 +228,24 @@ export function updateEntry(
   const now = Date.now();
   const db = getDb();
   tx(() => {
+    requireThread(scope, threadId);
     const contentJson = JSON.stringify(entry.content);
-    const exact = db
-      .prepare("SELECT rowid FROM messages WHERE thread_id = ? AND id = ?")
-      .get(threadId, entry.id) as { rowid: number } | undefined;
-    const matched =
-      matchId !== undefined && matchId !== entry.id
-        ? (db
-            .prepare(
-              "SELECT rowid FROM messages WHERE thread_id = ? AND id = ?",
-            )
-            .get(threadId, matchId) as { rowid: number } | undefined)
-        : undefined;
+    const exact = db.prepare(
+      `SELECT rowid FROM messages
+       WHERE workspace_id = ? AND thread_id = ? AND id = ?`,
+    ).get(scope.workspaceId, threadId, entry.id) as { rowid: number } | undefined;
+    const matched = matchId !== undefined && matchId !== entry.id
+      ? (db.prepare(
+          `SELECT rowid FROM messages
+           WHERE workspace_id = ? AND thread_id = ? AND id = ?`,
+        ).get(scope.workspaceId, threadId, matchId) as { rowid: number } | undefined)
+      : undefined;
 
     if (exact) {
       db.prepare(
         `UPDATE messages SET parent_id = ?, format = ?, content_json = ?, updated_at = ?
          WHERE rowid = ?`,
       ).run(entry.parent_id, entry.format, contentJson, now, exact.rowid);
-      // 同一逻辑消息不能同时以新旧两个 id 存在，清掉旧行防重复。
       if (matched) db.prepare("DELETE FROM messages WHERE rowid = ?").run(matched.rowid);
     } else if (matched) {
       db.prepare(
@@ -245,93 +254,105 @@ export function updateEntry(
       ).run(entry.id, entry.parent_id, entry.format, contentJson, now, matched.rowid);
     } else {
       db.prepare(
-        `INSERT INTO messages (thread_id, id, parent_id, format, content_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).run(threadId, entry.id, entry.parent_id, entry.format, contentJson, now, now);
+        `INSERT INTO messages
+           (workspace_id, thread_id, id, parent_id, format, content_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        scope.workspaceId,
+        threadId,
+        entry.id,
+        entry.parent_id,
+        entry.format,
+        contentJson,
+        now,
+        now,
+      );
     }
 
     if (matchId !== undefined) {
-      const thread = db
-        .prepare("SELECT head_id FROM threads WHERE remote_id = ?")
-        .get(threadId) as { head_id: string | null } | undefined;
-      if (thread?.head_id === matchId) {
+      const thread = requireThread(scope, threadId);
+      if (thread.head_id === matchId) {
         db.prepare(
-          "UPDATE threads SET head_id = ?, updated_at = ? WHERE remote_id = ?",
-        ).run(entry.id, now, threadId);
+          `UPDATE threads SET head_id = ?, updated_at = ?
+           WHERE remote_id = ? AND workspace_id = ? AND owner_user_id = ?`,
+        ).run(entry.id, now, threadId, scope.workspaceId, scope.userId);
       }
     }
   });
 }
 
-export function deleteEntries(threadId: string, ids: string[]): void {
+export function deleteEntries(scope: ThreadScope, threadId: string, ids: string[]): void {
   if (ids.length === 0) return;
   const db = getDb();
   tx(() => {
+    const thread = requireThread(scope, threadId);
     const placeholders = ids.map(() => "?").join(", ");
     db.prepare(
-      `DELETE FROM messages WHERE thread_id = ? AND id IN (${placeholders})`,
-    ).run(threadId, ...ids);
-    const thread = db
-      .prepare("SELECT head_id FROM threads WHERE remote_id = ?")
-      .get(threadId) as { head_id: string | null } | undefined;
-    if (thread?.head_id && ids.includes(thread.head_id)) {
-      const last = db
-        .prepare(
-          "SELECT id FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT 1",
-        )
-        .get(threadId) as { id: string } | undefined;
+      `DELETE FROM messages
+       WHERE workspace_id = ? AND thread_id = ? AND id IN (${placeholders})`,
+    ).run(scope.workspaceId, threadId, ...ids);
+    if (thread.head_id && ids.includes(thread.head_id)) {
+      const last = db.prepare(
+        `SELECT id FROM messages
+         WHERE workspace_id = ? AND thread_id = ?
+         ORDER BY rowid DESC LIMIT 1`,
+      ).get(scope.workspaceId, threadId) as { id: string } | undefined;
       db.prepare(
-        "UPDATE threads SET head_id = ?, updated_at = ? WHERE remote_id = ?",
-      ).run(last?.id ?? null, Date.now(), threadId);
+        `UPDATE threads SET head_id = ?, updated_at = ?
+         WHERE remote_id = ? AND workspace_id = ? AND owner_user_id = ?`,
+      ).run(last?.id ?? null, Date.now(), threadId, scope.workspaceId, scope.userId);
     }
   });
 }
 
-/** 一次性迁移导入：已存在的线程/消息跳过，不覆盖。 */
-export function importSnapshot(snapshots: ThreadSnapshot[]): {
-  importedThreads: number;
-  importedMessages: number;
-} {
+/** One-time browser backup import. Existing private threads and messages are retained. */
+export function importSnapshot(
+  scope: ThreadScope,
+  snapshots: ThreadSnapshot[],
+): { importedThreads: number; importedMessages: number } {
   const db = getDb();
   let importedThreads = 0;
   let importedMessages = 0;
   tx(() => {
-    for (const snap of snapshots) {
+    for (const snapshot of snapshots) {
       const now = Date.now();
-      const result = db
-        .prepare(
-          `INSERT OR IGNORE INTO threads
-           (remote_id, external_id, status, title, custom_json, head_id, created_at, updated_at, last_message_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          snap.thread.remoteId,
-          snap.thread.externalId,
-          snap.thread.status,
-          snap.thread.title,
-          snap.thread.custom ? JSON.stringify(snap.thread.custom) : null,
-          snap.headId,
-          now,
-          now,
-          snap.thread.lastMessageAt,
-        );
+      const result = db.prepare(
+        `INSERT OR IGNORE INTO threads
+         (remote_id, workspace_id, owner_user_id, external_id, status, title, custom_json, head_id, created_at, updated_at, last_message_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        snapshot.thread.remoteId,
+        scope.workspaceId,
+        scope.userId,
+        snapshot.thread.externalId,
+        snapshot.thread.status,
+        snapshot.thread.title,
+        snapshot.thread.custom ? JSON.stringify(snapshot.thread.custom) : null,
+        snapshot.headId,
+        now,
+        now,
+        snapshot.thread.lastMessageAt,
+      );
+      const ownedThread = threadRow(scope, snapshot.thread.remoteId);
+      // A same-workspace id collision belongs to someone else; never insert
+      // messages into it or expose that it exists.
+      if (!ownedThread) continue;
       if (result.changes > 0) importedThreads += 1;
-      for (const entry of snap.entries) {
-        const inserted = db
-          .prepare(
-            `INSERT OR IGNORE INTO messages
-             (thread_id, id, parent_id, format, content_json, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            snap.thread.remoteId,
-            entry.id,
-            entry.parent_id,
-            entry.format,
-            JSON.stringify(entry.content),
-            now,
-            now,
-          );
+      for (const entry of snapshot.entries) {
+        const inserted = db.prepare(
+          `INSERT OR IGNORE INTO messages
+           (workspace_id, thread_id, id, parent_id, format, content_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          scope.workspaceId,
+          snapshot.thread.remoteId,
+          entry.id,
+          entry.parent_id,
+          entry.format,
+          JSON.stringify(entry.content),
+          now,
+          now,
+        );
         if (inserted.changes > 0) importedMessages += 1;
       }
     }
@@ -339,19 +360,14 @@ export function importSnapshot(snapshots: ThreadSnapshot[]): {
   return { importedThreads, importedMessages };
 }
 
-export function exportSnapshot(): ThreadSnapshot[] {
-  const threads = listThreads();
+export function exportSnapshot(scope: ThreadScope): ThreadSnapshot[] {
   const db = getDb();
-  return threads.map((thread) => {
-    const rows = db
-      .prepare(
-        `SELECT id, parent_id, format, content_json FROM messages
-         WHERE thread_id = ? ORDER BY rowid`,
-      )
-      .all(thread.remoteId) as MessageRow[];
-    const head = db
-      .prepare("SELECT head_id FROM threads WHERE remote_id = ?")
-      .get(thread.remoteId) as { head_id: string | null };
+  return listThreads(scope).map((thread) => {
+    const rows = db.prepare(
+      `SELECT id, parent_id, format, content_json FROM messages
+       WHERE workspace_id = ? AND thread_id = ? ORDER BY rowid`,
+    ).all(scope.workspaceId, thread.remoteId) as MessageRow[];
+    const head = requireThread(scope, thread.remoteId);
     return {
       thread: {
         remoteId: thread.remoteId,
@@ -362,11 +378,11 @@ export function exportSnapshot(): ThreadSnapshot[] {
         lastMessageAt: thread.lastMessageAt,
       },
       headId: head.head_id,
-      entries: rows.map((r) => ({
-        id: r.id,
-        parent_id: r.parent_id,
-        format: r.format,
-        content: JSON.parse(r.content_json),
+      entries: rows.map((row) => ({
+        id: row.id,
+        parent_id: row.parent_id,
+        format: row.format,
+        content: JSON.parse(row.content_json),
       })),
     };
   });

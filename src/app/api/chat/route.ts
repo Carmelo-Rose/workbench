@@ -6,7 +6,7 @@ import {
   streamText,
   type UIMessage,
 } from "ai";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { chatModel, hermesModel } from "@/lib/models";
 import { defaultBackend, isBackendId, type BackendId } from "@/lib/backends";
@@ -15,10 +15,21 @@ import { createImageToPromptTool } from "@/lib/tools/image-to-prompt";
 import { createCollectorTools } from "@/lib/tools/collector";
 import { getLuopanRankInsights } from "@/lib/luopan/insights";
 import { createMonoTools } from "@/lib/tools/mono";
-import { monoAspectRatios, type MonoImageGenerationInput, type MonoJob } from "@/lib/mono/contracts";
+import {
+  monoAspectRatios,
+  type MonoActor,
+  type MonoImageGenerationInput,
+  type MonoJob,
+} from "@/lib/mono/contracts";
 import { getMonoImage2Template, monoImage2TemplateIds } from "@/lib/mono/image2-templates";
 import { createAsset, createImageGenerationJob, getSubject, newMonoActor } from "@/lib/mono/service";
 import { subjectIdsFromPrompt } from "@/lib/mono/subject-compiler";
+import {
+  monoActorFromWorkspaceActor,
+  monoErrorResponse,
+  workspaceActorFromWorkbenchRequest,
+} from "@/lib/mono/http";
+import { runWithTenantContext } from "@/lib/server/tenant-context";
 import { videoEraseTool } from "@/lib/tools/video-erase";
 import { videoEnhanceTool } from "@/lib/tools/video-enhance";
 import { videoMattingTool } from "@/lib/tools/video-matting";
@@ -75,6 +86,19 @@ function latestImageAttachments(messages: UIMessage[]): string[] {
 }
 
 /**
+ * 图片反推由 VISION_MODEL 执行。虽然聊天模型只负责按既定意图调用该工具，
+ * 它仍会收到 messages；部分纯文本聊天模型会因此拒绝 image_url 内容块。
+ */
+function withoutImageAttachments(messages: UIMessage[]): UIMessage[] {
+  return messages.map((message) => ({
+    ...message,
+    parts: message.parts.filter(
+      (part) => part.type !== "file" || !part.mediaType.startsWith("image/"),
+    ),
+  }));
+}
+
+/**
  * 从最近一条用户消息文本里确定性提取 asset_<uuid> 引用（如"分析视频素材 asset_xxx"）。
  * 让模型自己在工具参数里手抄这个 36 位 UUID 容易转录出错，这里直接用正则从原文取，
  * 比模型复述更可靠。
@@ -90,6 +114,14 @@ function latestUserMessageId(messages: UIMessage[]): string | undefined {
     if (messages[index].role === "user") return messages[index].id;
   }
   return undefined;
+}
+
+function hermesTenantSessionId(actor: MonoActor, threadId: string): string {
+  const digest = createHash("sha256")
+    .update(`${actor.workspaceId}\0${actor.userId}\0${threadId}`)
+    .digest("base64url")
+    .slice(0, 40);
+  return `wb-${digest}`;
 }
 
 function forcedToolName(userText: string, hasImageAttachment: boolean) {
@@ -124,7 +156,16 @@ function forcedToolName(userText: string, hasImageAttachment: boolean) {
 }
 
 export async function POST(req: Request) {
-  const { messages, id, config }: ChatRequestBody = await req.json();
+  let actor: MonoActor;
+  let workspaceActor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
+  try {
+    workspaceActor = workspaceActorFromWorkbenchRequest(req);
+    actor = monoActorFromWorkspaceActor(workspaceActor);
+  } catch (error) {
+    return monoErrorResponse(error);
+  }
+  return runWithTenantContext(workspaceActor, async () => {
+    const { messages, id, config }: ChatRequestBody = await req.json();
 
   const backend: BackendId = isBackendId(config?.modelName)
     ? config.modelName
@@ -142,6 +183,7 @@ export async function POST(req: Request) {
       attachments: imageAttachments,
       attachmentParts: latestImageAttachmentParts(messages),
       config: image2Config.data,
+      actor,
     });
   }
 
@@ -155,31 +197,44 @@ export async function POST(req: Request) {
     image_to_prompt: createImageToPromptTool(attachmentUrl),
     ...createMonoTools({
       sessionId: id,
-      userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",
-      workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
+      userId: actor.userId,
+      workspaceId: actor.workspaceId,
       attachmentUrl,
       videoAssetId: latestVideoAssetId(messages),
     }),
     ...createCollectorTools({
-      userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",
-      workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
+      userId: actor.userId,
+      workspaceId: actor.workspaceId,
     }),
     video_erase: videoEraseTool,
     video_enhance: videoEnhanceTool,
     video_matting: videoMattingTool,
   };
+  // 已知图片反推意图时，图片已通过 attachmentUrl 交给视觉工具；不要让
+  // 纯文本 CHAT_MODEL 再解析 image_url，否则工具调用前就会返回 400。
+  const modelMessages = await convertToModelMessages(
+    backend === "direct" && requiredTool === "image_to_prompt"
+      ? withoutImageAttachments(messages)
+      : messages,
+  );
   const result =
     backend === "hermes"
       ? streamText({
           model: hermesModel(),
-          messages: await convertToModelMessages(messages),
+          messages: modelMessages,
           // X-Hermes-Session-Id 让同一线程获得会话连续性。
-          ...(id ? { headers: { "X-Hermes-Session-Id": `wb-${id}` } } : {}),
+          ...(id
+            ? {
+                headers: {
+                  "X-Hermes-Session-Id": hermesTenantSessionId(actor, id),
+                },
+              }
+            : {}),
         })
       : streamText({
           model: chatModel(),
           system: WORKBENCH_SYSTEM,
-          messages: await convertToModelMessages(messages),
+          messages: modelMessages,
           tools: directTools,
           // Force an obvious user intent only on the first step. Keeping a
           // toolChoice for later steps makes the SDK submit the same costly
@@ -195,7 +250,7 @@ export async function POST(req: Request) {
           stopWhen: stepCountIs(5),
         });
 
-  return result.toUIMessageStreamResponse({
+    return result.toUIMessageStreamResponse({
     // 消息落库时带上来源后端，前端据此渲染模式徽标。
     // assistant-ui 只透传 metadata.custom，自定义键必须放在 custom 下。
     messageMetadata: () => ({ custom: { backend } }),
@@ -204,6 +259,7 @@ export async function POST(req: Request) {
     sendReasoning: false,
     onError: (error) =>
       error instanceof Error ? error.message : "对话后端暂时不可用，请稍后重试",
+    });
   });
 }
 
@@ -240,6 +296,7 @@ function image2Response({
   attachments,
   attachmentParts,
   config,
+  actor: requestActor,
 }: {
   messages: UIMessage[];
   threadId?: string;
@@ -247,11 +304,13 @@ function image2Response({
   attachments: string[];
   attachmentParts: ImageAttachmentPart[];
   config: z.infer<typeof image2ChatConfigSchema>;
+  actor: MonoActor;
 }) {
   const actor = newMonoActor({
     sessionId: threadId,
-    userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",
-    workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
+    userId: requestActor.userId,
+    workspaceId: requestActor.workspaceId,
+    traceId: requestActor.traceId,
   });
   const template = getMonoImage2Template(config.templateId);
   let structuredReferences: MonoImageGenerationInput["structuredReferences"];

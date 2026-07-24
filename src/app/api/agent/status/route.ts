@@ -1,4 +1,9 @@
 import { defaultBackend, type AgentStatus } from "@/lib/backends";
+import {
+  monoErrorResponse,
+  workspaceActorFromWorkbenchRequest,
+} from "@/lib/mono/http";
+import { getConfigValue } from "@/lib/server/api-config";
 
 export const dynamic = "force-dynamic";
 
@@ -16,8 +21,16 @@ function hostOf(url: string | undefined): string | null {
   }
 }
 
-export async function GET() {
-  const chatBase = process.env.CHAT_BASE_URL ?? "https://api.deepseek.com/v1";
+export async function GET(req: Request) {
+  let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
+  try {
+    actor = workspaceActorFromWorkbenchRequest(req);
+  } catch (error) {
+    return monoErrorResponse(error);
+  }
+  const chatBase =
+    getConfigValue("CHAT_BASE_URL", actor.workspaceId) ??
+    "https://api.deepseek.com/v1";
   const hermesBase = process.env.HERMES_BASE_URL ?? "http://127.0.0.1:8642/v1";
 
   const hermes: AgentStatus["hermes"] = {
@@ -51,8 +64,9 @@ export async function GET() {
   const status: AgentStatus = {
     defaultBackend: defaultBackend(),
     direct: {
-      configured: Boolean(process.env.CHAT_API_KEY),
-      model: process.env.CHAT_MODEL ?? "deepseek-chat",
+      configured: Boolean(getConfigValue("CHAT_API_KEY", actor.workspaceId)),
+      model:
+        getConfigValue("CHAT_MODEL", actor.workspaceId) ?? "deepseek-chat",
       host: hostOf(chatBase),
     },
     hermes,

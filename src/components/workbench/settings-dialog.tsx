@@ -18,6 +18,7 @@ import {
   SparklesIcon,
   SunIcon,
   Trash2Icon,
+  UsersIcon,
   WrenchIcon,
   ZapIcon,
 } from "lucide-react";
@@ -52,11 +53,13 @@ import {
 import { BACKENDS, type BackendId } from "@/lib/backends";
 import { type ThemePref } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import { WorkspaceSettings } from "@/components/workbench/workspace-settings";
 
 export type SettingsSection =
   | "connections"
   | "capabilities"
   | "apiConfig"
+  | "workspace"
   | "appearance"
   | "data";
 
@@ -64,6 +67,7 @@ const SECTIONS: { id: SettingsSection; name: string; icon: ReactNode }[] = [
   { id: "connections", name: "连接与模式", icon: <CableIcon /> },
   { id: "capabilities", name: "Agent 能力", icon: <SparklesIcon /> },
   { id: "apiConfig", name: "API 配置", icon: <KeyRoundIcon /> },
+  { id: "workspace", name: "员工与工作区", icon: <UsersIcon /> },
   { id: "appearance", name: "外观", icon: <PaletteIcon /> },
   { id: "data", name: "数据", icon: <DatabaseIcon /> },
 ];
@@ -127,6 +131,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
             {section === "connections" && <ConnectionsSection />}
             {section === "capabilities" && <CapabilitiesSection />}
             {section === "apiConfig" && <ApiConfigSection />}
+            {section === "workspace" && <WorkspaceSettings />}
             {section === "appearance" && <AppearanceSection {...rest} />}
             {section === "data" && <DataSection />}
           </div>
@@ -360,6 +365,10 @@ const GROUP_META: Record<string, { label: string; sub: string }> = {
     sub: "第三方视频理解服务地址，与上面的视觉模型是两套独立通道。",
   },
   monoImage: { label: "生图服务（Mono）", sub: "AI 生图服务地址。" },
+  videoStorage: {
+    label: "大视频云存储（TOS）",
+    sub: "本机上传的视频超过约 7.3MB 直传阈值时，先传到这里再把可访问链接交给视频分析模型。",
+  },
 };
 
 const FIELD_LABEL: Record<string, string> = {
@@ -376,6 +385,10 @@ const FIELD_LABEL: Record<string, string> = {
   MONO_IMAGE_BASE_URL: "Base URL",
   MONO_IMAGE_API_KEY: "API Key",
   MONO_IMAGE_MODEL: "模型",
+  TOS_AK: "AccessKeyId",
+  TOS_SK: "SecretAccessKey",
+  TOS_REGION: "Region",
+  TOS_BUCKET: "Bucket",
 };
 
 const SOURCE_LABEL: Record<ConfigFieldView["source"], string> = {
@@ -618,7 +631,7 @@ const DataSection: FC = () => {
 
   return (
     <div>
-      <SectionTitle sub="会话历史保存在服务端 SQLite（data/workbench.db），重启不丢、跨浏览器可见。">
+      <SectionTitle sub="会话历史保存在服务端 SQLite（data/workbench.db），重启不丢，同一员工跨浏览器可见。">
         会话数据
       </SectionTitle>
       <div className="rounded-xl border p-4">

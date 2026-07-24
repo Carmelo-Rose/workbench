@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { chainTargets } from "@/lib/toolbox/types";
 
 export type VideoEraseArgs = {
   videoFileId: string;
@@ -9,6 +10,8 @@ export type VideoEraseArgs = {
 export type VideoEraseResult = {
   videoFileId?: string;
   note?: string;
+  /** 用户框选并提交后卡片真的能续接到的能力名单，来自 chainTargets("smart_erase")；模型只能对这个列表里的能力承诺续接按钮。 */
+  continueTargets?: string[];
   error?: string;
 };
 
@@ -34,6 +37,10 @@ export const videoEraseTool = tool({
       .describe("可选，用户想擦除的内容的一句话描述，仅作为卡片上的提示文案"),
   }),
   execute: async ({ videoFileId, note }): Promise<VideoEraseResult> => {
-    return { videoFileId, ...(note ? { note } : {}) };
+    return {
+      videoFileId,
+      ...(note ? { note } : {}),
+      continueTargets: chainTargets("smart_erase").map((c) => c.name),
+    };
   },
 });

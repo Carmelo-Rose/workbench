@@ -1,4 +1,6 @@
 import { getDb } from "@/lib/server/db";
+import { activeWorkspaceId } from "@/lib/server/tenant-context";
+import { legacyWorkspaceId } from "@/lib/server/tenant-ids";
 
 /**
  * 运行时可覆盖的 API 配置项。存在 sqlite api_config 表里的值优先于
@@ -27,6 +29,10 @@ export const API_CONFIG_GROUPS = {
     label: "生图服务（Mono）",
     keys: ["MONO_IMAGE_BASE_URL", "MONO_IMAGE_API_KEY", "MONO_IMAGE_MODEL"] as const,
   },
+  videoStorage: {
+    label: "大视频云存储（TOS）",
+    keys: ["TOS_AK", "TOS_SK", "TOS_REGION", "TOS_BUCKET"] as const,
+  },
 } as const;
 
 export type ApiConfigGroupId = keyof typeof API_CONFIG_GROUPS;
@@ -37,31 +43,55 @@ const SECRET_KEYS = new Set<string>([
   "VISION_API_KEY",
   "MONO_VIDEO_API_KEY",
   "MONO_IMAGE_API_KEY",
+  "TOS_AK",
+  "TOS_SK",
 ]);
 
 /** 读取单个 key 的当前生效值：db 覆盖优先，否则回落到环境变量。 */
-export function getConfigValue(key: ApiConfigKey): string | undefined {
+function configWorkspaceId(workspaceId?: string): string {
+  const resolved = workspaceId ?? activeWorkspaceId();
+  if (resolved) return resolved;
+  const legacyDevelopment =
+    process.env.NODE_ENV === "test" ||
+    (process.env.NODE_ENV !== "production" &&
+      process.env.MONO_LOCAL_DEVELOPMENT === "true");
+  if (legacyDevelopment) return legacyWorkspaceId;
+  throw new Error("Workspace context is required for runtime API configuration");
+}
+
+export function getConfigValue(
+  key: ApiConfigKey,
+  workspaceId?: string,
+): string | undefined {
   const row = getDb()
-    .prepare("SELECT value FROM api_config WHERE key = ?")
-    .get(key) as { value: string } | undefined;
+    .prepare("SELECT value FROM api_config WHERE workspace_id = ? AND key = ?")
+    .get(configWorkspaceId(workspaceId), key) as { value: string } | undefined;
   if (row?.value) return row.value;
   return process.env[key] || undefined;
 }
 
-export function setConfigValues(values: Partial<Record<ApiConfigKey, string>>): void {
+export function setConfigValues(
+  values: Partial<Record<ApiConfigKey, string>>,
+  workspaceId?: string,
+): void {
   const db = getDb();
+  const resolvedWorkspaceId = configWorkspaceId(workspaceId);
   const upsert = db.prepare(
-    "INSERT INTO api_config (key, value, updated_at) VALUES (?, ?, ?) " +
-      "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+    `INSERT INTO api_config (workspace_id, key, value, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(workspace_id, key)
+     DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
   );
-  const del = db.prepare("DELETE FROM api_config WHERE key = ?");
+  const del = db.prepare(
+    "DELETE FROM api_config WHERE workspace_id = ? AND key = ?",
+  );
   const now = Date.now();
   for (const [key, value] of Object.entries(values)) {
     if (value === undefined) continue;
     if (value.trim() === "") {
-      del.run(key);
+      del.run(resolvedWorkspaceId, key);
     } else {
-      upsert.run(key, value, now);
+      upsert.run(resolvedWorkspaceId, key, value, now);
     }
   }
 }
@@ -79,9 +109,13 @@ export type ConfigFieldView = {
 };
 
 /** 供设置页展示：非密钥字段给明文，密钥字段只给脱敏后的尾 4 位。 */
-export function getAllConfigForDisplay(): Record<ApiConfigGroupId, ConfigFieldView[]> {
+export function getAllConfigForDisplay(
+  workspaceId?: string,
+): Record<ApiConfigGroupId, ConfigFieldView[]> {
   const db = getDb();
-  const overrideRows = db.prepare("SELECT key, value FROM api_config").all() as {
+  const overrideRows = db.prepare(
+    "SELECT key, value FROM api_config WHERE workspace_id = ?",
+  ).all(configWorkspaceId(workspaceId)) as {
     key: string;
     value: string;
   }[];

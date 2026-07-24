@@ -1,6 +1,13 @@
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { ZodError, type z } from "zod";
 import { monoActorSchema, type MonoActor } from "./contracts";
+import {
+  currentWorkspaceActor,
+  ensureServiceWorkspaceActor,
+  requirePermission,
+  TenantAccessError,
+  type WorkspaceActor,
+} from "@/lib/server/tenant";
 
 function bearerToken(request: Request): string | null {
   const authorization = request.headers.get("authorization");
@@ -29,32 +36,62 @@ export function assertMonoApiAccess(request: Request): void {
   }
 }
 
-/** Workbench has no account system yet. This trusted local actor is only enabled explicitly outside production. */
-export function actorFromWorkbenchRequest(request: Request): MonoActor {
-  if (process.env.NODE_ENV === "production" || process.env.MONO_LOCAL_DEVELOPMENT !== "true") {
-    throw new MonoHttpError(503, "Workbench 身份接入尚未配置");
+/**
+ * Resolve the signed-in employee and active workspace for Workbench requests.
+ * Explicit local development keeps the existing zero-setup experience, but all
+ * other deployments must present a server-side session.
+ */
+export function workspaceActorFromWorkbenchRequest(
+  request: Request,
+): WorkspaceActor {
+  try {
+    const actor = currentWorkspaceActor(request);
+    requirePermission(
+      actor,
+      request.method === "GET" || request.method === "HEAD"
+        ? "workspace:read"
+        : "workspace:write",
+    );
+    return actor;
+  } catch (error) {
+    if (error instanceof TenantAccessError) {
+      throw new MonoHttpError(error.status, error.message);
+    }
+    throw error;
   }
-  const origin = request.headers.get("origin");
-  const requestHost = request.headers.get("host") ?? new URL(request.url).host;
-  if (origin && new URL(origin).host !== requestHost) {
-    throw new MonoHttpError(403, "Workbench 请求来源无效");
-  }
+}
+
+export function monoActorFromWorkspaceActor(actor: WorkspaceActor): MonoActor {
   return monoActorSchema.parse({
-    userId: process.env.WORKBENCH_LOCAL_USER_ID ?? "local-user",
-    workspaceId: process.env.WORKBENCH_LOCAL_WORKSPACE_ID ?? "default",
+    userId: actor.userId,
+    workspaceId: actor.workspaceId,
     traceId: `trace_${randomUUID()}`,
   });
 }
 
+export function actorFromWorkbenchRequest(request: Request): MonoActor {
+  return monoActorFromWorkspaceActor(workspaceActorFromWorkbenchRequest(request));
+}
+
 export function actorFromRequest(request: Request): MonoActor {
-  return monoActorSchema.parse({
-    // The shared platform credential represents one configured service actor.
-    // Caller-provided identity headers are intentionally not trusted.
-    userId: process.env.MONO_PLATFORM_USER_ID ?? "mono-platform",
-    workspaceId: process.env.MONO_PLATFORM_WORKSPACE_ID ?? "default",
-    sessionId: request.headers.get("x-mono-session-id") ?? undefined,
-    traceId: request.headers.get("x-mono-trace-id") ?? `trace_${randomUUID()}`,
-  });
+  try {
+    const actor = ensureServiceWorkspaceActor({
+      userId: process.env.MONO_PLATFORM_USER_ID ?? "mono-platform",
+      workspaceId: process.env.MONO_PLATFORM_WORKSPACE_ID ?? "default",
+      displayName: "Mono 平台服务",
+    });
+    return monoActorSchema.parse({
+      userId: actor.userId,
+      workspaceId: actor.workspaceId,
+      sessionId: request.headers.get("x-mono-session-id") ?? undefined,
+      traceId: request.headers.get("x-mono-trace-id") ?? `trace_${randomUUID()}`,
+    });
+  } catch (error) {
+    if (error instanceof TenantAccessError) {
+      throw new MonoHttpError(error.status, error.message);
+    }
+    throw error;
+  }
 }
 
 export async function parseMonoJson<T extends z.ZodType>(

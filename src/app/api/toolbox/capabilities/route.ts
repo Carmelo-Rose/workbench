@@ -1,14 +1,24 @@
 import { NextResponse } from "next/server";
 import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
+import {
+  monoErrorResponse,
+  workspaceActorFromWorkbenchRequest,
+} from "@/lib/mono/http";
 
 export const dynamic = "force-dynamic";
 
 /** 能力清单代理：哪些能力已就绪、哪些是留口子的 planned 状态，由网关端 capabilities.json 决定。 */
-export async function GET() {
+export async function GET(req: Request) {
+  let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
+  try {
+    actor = workspaceActorFromWorkbenchRequest(req);
+  } catch (error) {
+    return monoErrorResponse(error);
+  }
   let upstream: Response;
   try {
     upstream = await fetch(`${gatewayBase()}/capabilities`, {
-      headers: gatewayHeaders(),
+      headers: gatewayHeaders(actor),
       cache: "no-store",
     });
   } catch {

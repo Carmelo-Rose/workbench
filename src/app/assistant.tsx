@@ -11,6 +11,7 @@ import { useChatRuntime } from "@assistant-ui/react-ai-sdk";
 import {
   CheckIcon,
   ChevronDownIcon,
+  LogOutIcon,
   MonitorIcon,
   MoonIcon,
   ShareIcon,
@@ -98,6 +99,7 @@ import {
 import { serverThreadListAdapter } from "@/lib/server-threads";
 import { createHistoryProvider } from "@/lib/thread-history";
 import { useImage2Mode } from "@/lib/image2-mode";
+import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 
 /** 会话历史落在服务端 SQLite（/api/threads），首次加载自动迁移旧 localStorage。 */
 const threadListAdapter = {
@@ -296,6 +298,54 @@ const ThemeToggle: FC<{
   );
 };
 
+const WorkspaceMenu: FC<{ onOpenSettings: () => void }> = ({ onOpenSettings }) => {
+  const { session, signOut, switchWorkspace } = useWorkbenchSession();
+
+  const selectWorkspace = async (workspaceId: string) => {
+    if (workspaceId === session.workspace.id) return;
+    await switchWorkspace(workspaceId);
+    window.location.reload();
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-foreground hidden h-8 max-w-40 gap-1.5 rounded-full px-2.5 font-normal sm:flex"
+          title={session.workspace.name}
+        >
+          <span className="truncate">{session.workspace.name}</span>
+          <ChevronDownIcon className="text-muted-foreground size-3.5 shrink-0" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-52 rounded-xl">
+        <p className="text-muted-foreground px-2 py-1.5 text-xs">
+          {session.actor.displayName}
+        </p>
+        {session.workspaces.map((workspace) => (
+          <DropdownMenuItem
+            key={workspace.id}
+            onSelect={() => void selectWorkspace(workspace.id)}
+            className="justify-between rounded-lg"
+          >
+            <span className="truncate">{workspace.name}</span>
+            {workspace.id === session.workspace.id && <CheckIcon className="size-4" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuItem onSelect={onOpenSettings} className="rounded-lg">
+          员工与工作区
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void signOut()} className="rounded-lg">
+          <LogOutIcon className="size-4" />
+          退出登录
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+};
+
 const AssistantShell: FC = () => {
   const [styleId, setStyleId] = useState<ThreadStyleId>(loadThreadStyle);
   const [companion, setCompanion] = useState<CompanionId>(loadCompanion);
@@ -369,6 +419,7 @@ const AssistantShell: FC = () => {
           <span className="text-border mx-1 hidden select-none md:block">·</span>
           <ThreadTitle />
           <div className="ml-auto flex items-center gap-1.5">
+            <WorkspaceMenu onOpenSettings={() => openSettings("workspace")} />
             <HeaderBackendStatus onClick={() => openSettings("connections")} />
             <ThemeToggle value={themePref} onChange={handleThemeChange} />
             <CompanionPicker

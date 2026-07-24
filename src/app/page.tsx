@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { AuthGate } from "@/components/workbench/auth-gate";
 
 const Assistant = dynamic(
   () => import("./assistant").then((mod) => mod.Assistant),
@@ -8,5 +9,9 @@ const Assistant = dynamic(
 );
 
 export default function Home() {
-  return <Assistant />;
+  return (
+    <AuthGate>
+      <Assistant />
+    </AuthGate>
+  );
 }

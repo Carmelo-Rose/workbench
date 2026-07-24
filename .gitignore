@@ -40,7 +40,7 @@ yarn-error.log*
 # video-toolbox gateway 运行时产物（部署在服务机，本地仅维护源码）
 /gateway/data/
 /gateway/.venv/
-/gateway/__pycache__/
+**/__pycache__/
 
 # vercel
 .vercel

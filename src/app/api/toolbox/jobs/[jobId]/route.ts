@@ -1,15 +1,25 @@
 import { NextResponse } from "next/server";
 import { GatewayError, getJob } from "@/lib/toolbox/gateway";
+import {
+  monoErrorResponse,
+  workspaceActorFromWorkbenchRequest,
+} from "@/lib/mono/http";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ jobId: string }> };
 
 /** 任务状态查询代理：JobToolUI 卡片轮询用。 */
-export async function GET(_req: Request, { params }: Params) {
+export async function GET(req: Request, { params }: Params) {
+  let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
+  try {
+    actor = workspaceActorFromWorkbenchRequest(req);
+  } catch (error) {
+    return monoErrorResponse(error);
+  }
   const { jobId } = await params;
   try {
-    const job = await getJob(jobId);
+    const job = await getJob(jobId, actor);
     if (!job) {
       return NextResponse.json({ error: "job not found" }, { status: 404 });
     }

@@ -1,8 +1,8 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { getConfigValue, type ApiConfigKey } from "@/lib/server/api-config";
 
-function requireConfig(name: ApiConfigKey): string {
-  const value = getConfigValue(name);
+function requireConfig(name: ApiConfigKey, workspaceId?: string): string {
+  const value = getConfigValue(name, workspaceId);
   if (!value) {
     throw new Error(`缺少配置 ${name}，请在设置页的「API 配置」里填写，或在 .env.local 中配置`);
   }
@@ -128,13 +128,15 @@ export function hermesModel() {
  * 需要能看图/看视频，默认走 DashScope 的 OpenAI 兼容端点（Qwen-VL）。
  * 与对话大脑解耦——两者各走各的 baseURL / key / model。
  */
-export function visionModel() {
+export function visionModel(workspaceId?: string) {
   const provider = createOpenAICompatible({
     name: "workbench-vision",
     baseURL:
-      getConfigValue("VISION_BASE_URL") ??
+      getConfigValue("VISION_BASE_URL", workspaceId) ??
       "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    apiKey: requireConfig("VISION_API_KEY"),
+    apiKey: requireConfig("VISION_API_KEY", workspaceId),
   });
-  return provider(getConfigValue("VISION_MODEL") ?? "qwen-vl-max");
+  return provider(
+    getConfigValue("VISION_MODEL", workspaceId) ?? "qwen-vl-max",
+  );
 }

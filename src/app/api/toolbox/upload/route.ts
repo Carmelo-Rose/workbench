@@ -1,5 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
+import {
+  monoErrorResponse,
+  workspaceActorFromWorkbenchRequest,
+} from "@/lib/mono/http";
 
 export const dynamic = "force-dynamic";
 /** 大视频上传直通网关，禁止任何缓冲层介入。 */
@@ -11,6 +15,12 @@ export const maxDuration = 300;
  * 全程不落内存不落盘。
  */
 export async function POST(req: NextRequest) {
+  let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
+  try {
+    actor = workspaceActorFromWorkbenchRequest(req);
+  } catch (error) {
+    return monoErrorResponse(error);
+  }
   if (!req.body) {
     return NextResponse.json({ error: "empty body" }, { status: 400 });
   }
@@ -29,7 +39,7 @@ export async function POST(req: NextRequest) {
   const init: RequestInit & { duplex: "half" } = {
     method: "POST",
     headers: {
-      ...gatewayHeaders(),
+      ...gatewayHeaders(actor),
       "content-type":
         req.headers.get("content-type") ?? "application/octet-stream",
     },

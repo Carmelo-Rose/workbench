@@ -28,6 +28,8 @@ DB_PATH = DATA_DIR / "gateway.db"
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
   capability TEXT NOT NULL,
   params TEXT NOT NULL DEFAULT '{}',
   inputs TEXT NOT NULL DEFAULT '{}',
@@ -41,9 +43,21 @@ CREATE TABLE IF NOT EXISTS jobs (
   started_at TEXT,
   finished_at TEXT
 );
+CREATE TABLE IF NOT EXISTS files (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS files_workspace_created
+  ON files(workspace_id, created_at DESC);
 """
 
 _JSON_FIELDS = ("params", "inputs", "artifacts")
+LEGACY_WORKSPACE_ID = os.environ.get("TOOLBOX_LEGACY_WORKSPACE_ID", "default")
+LEGACY_USER_ID = os.environ.get("TOOLBOX_LEGACY_USER_ID", "local-user")
 
 
 def now_iso() -> str:
@@ -73,6 +87,50 @@ def init_db() -> None:
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
     with _conn() as conn:
         conn.executescript(_SCHEMA)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+        if "workspace_id" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN workspace_id TEXT")
+        if "user_id" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN user_id TEXT")
+        conn.execute(
+            "UPDATE jobs SET workspace_id=? "
+            "WHERE workspace_id IS NULL OR workspace_id=''",
+            (LEGACY_WORKSPACE_ID,),
+        )
+        conn.execute(
+            "UPDATE jobs SET user_id=? WHERE user_id IS NULL OR user_id=''",
+            (LEGACY_USER_ID,),
+        )
+        conn.execute(
+            """CREATE INDEX IF NOT EXISTS jobs_workspace_created
+               ON jobs(workspace_id, created_at DESC)"""
+        )
+        # Existing uploads predate the files table. Preserve them inside the
+        # stable legacy workspace instead of making them globally readable.
+        for folder in FILES_DIR.iterdir():
+            if not folder.is_dir():
+                continue
+            originals = [
+                path
+                for path in folder.iterdir()
+                if path.is_file() and not path.name.startswith("_")
+            ]
+            if not originals:
+                continue
+            source = originals[0]
+            conn.execute(
+                """INSERT OR IGNORE INTO files
+                   (id, workspace_id, user_id, name, size, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    folder.name,
+                    LEGACY_WORKSPACE_ID,
+                    LEGACY_USER_ID,
+                    source.name,
+                    source.stat().st_size,
+                    now_iso(),
+                ),
+            )
 
 
 def job_dir(job_id: str) -> Path:
@@ -95,13 +153,54 @@ def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
     return job
 
 
-def create_job(capability: str, params: dict, inputs: dict) -> dict[str, Any]:
+def register_file(
+    file_id: str,
+    workspace_id: str,
+    user_id: str,
+    name: str,
+    size: int,
+) -> dict[str, Any]:
+    with _conn() as conn:
+        conn.execute(
+            """INSERT INTO files
+               (id, workspace_id, user_id, name, size, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (file_id, workspace_id, user_id, name, size, now_iso()),
+        )
+    return get_file(file_id, workspace_id)  # type: ignore[return-value]
+
+
+def get_file(file_id: str, workspace_id: str | None = None) -> dict[str, Any] | None:
+    with _conn() as conn:
+        if workspace_id is None:
+            row = conn.execute(
+                "SELECT * FROM files WHERE id=?", (file_id,)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM files WHERE id=? AND workspace_id=?",
+                (file_id, workspace_id),
+            ).fetchone()
+    return dict(row) if row else None
+
+
+def create_job(
+    workspace_id: str,
+    user_id: str,
+    capability: str,
+    params: dict,
+    inputs: dict,
+) -> dict[str, Any]:
     job_id = new_id()
     with _conn() as conn:
         conn.execute(
-            "INSERT INTO jobs (id, capability, params, inputs, created_at) VALUES (?,?,?,?,?)",
+            """INSERT INTO jobs
+               (id, workspace_id, user_id, capability, params, inputs, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 job_id,
+                workspace_id,
+                user_id,
                 capability,
                 json.dumps(params, ensure_ascii=False),
                 json.dumps(inputs, ensure_ascii=False),
@@ -109,20 +208,39 @@ def create_job(capability: str, params: dict, inputs: dict) -> dict[str, Any]:
             ),
         )
     output_dir(job_id).mkdir(parents=True, exist_ok=True)
-    return get_job(job_id)  # type: ignore[return-value]
+    return get_job(job_id, workspace_id)  # type: ignore[return-value]
 
 
-def get_job(job_id: str) -> dict[str, Any] | None:
+def get_job(
+    job_id: str, workspace_id: str | None = None
+) -> dict[str, Any] | None:
     with _conn() as conn:
-        row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if workspace_id is None:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE id=? AND workspace_id=?",
+                (job_id, workspace_id),
+            ).fetchone()
     return _row_to_job(row) if row else None
 
 
-def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
+def list_jobs(
+    workspace_id: str | None = None, limit: int = 50
+) -> list[dict[str, Any]]:
     with _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        if workspace_id is None:
+            rows = conn.execute(
+                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT * FROM jobs WHERE workspace_id=?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (workspace_id, limit),
+            ).fetchall()
     return [_row_to_job(r) for r in rows]
 
 

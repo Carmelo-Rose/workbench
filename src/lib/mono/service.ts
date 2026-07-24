@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { generateText } from "ai";
 import { visionModel } from "@/lib/models";
 import { getConfigValue } from "@/lib/server/api-config";
+import {
+  runWithTenantContext,
+  tenantContext,
+} from "@/lib/server/tenant-context";
 import { buildImagePromptInstruction } from "@/lib/prompts";
 import type {
   MonoActor,
@@ -30,6 +34,7 @@ import {
 } from "./comfyui";
 import { readObjectBuffer, saveObjectBuffer } from "@/lib/storage";
 import { compileSubjectPrompt, subjectIdsFromPrompt } from "./subject-compiler";
+import { uploadVideoToTosAndGetUrl } from "./tos";
 import {
   cancelMonoJob,
   claimMonoJob,
@@ -150,7 +155,7 @@ export async function analyzeImage(
     ? `仅输出一个有效 JSON 对象，不要 Markdown 或额外说明。字段必须包含 subject、style、lighting、composition、color_palette、mood、details、prompt_en、prompt_cn，除 prompt_en 外使用中文。${input.focus ? `特别侧重：${input.focus}` : ""}`
     : buildImagePromptInstruction(input.focus);
   const { text } = await generateText({
-    model: visionModel(),
+    model: visionModel(actor.workspaceId),
     messages: [{
       role: "user",
       content: [
@@ -163,11 +168,19 @@ export async function analyzeImage(
 }
 
 export function createVideoAnalysisJob(actor: MonoActor, input: MonoVideoAnalysisInput): MonoJob {
-  const videoUrl = input.assetId ? getAssetSource(actor, input.assetId) : input.videoUrl!;
+  // 素材引用只存 assetId，不在这里提前解析成 URL——本机上传的视频这时候还没有
+  // 公网可达的地址（见 resolveVideoContent），解析工作留到真正执行时按体积分流。
+  if (input.assetId && !getMonoAsset(actor, input.assetId)) {
+    throw new MonoHttpError(400, "素材不存在，或不属于当前工作区");
+  }
   const job = createMonoJob(actor, "video_analysis", {
-    videoUrl,
+    assetId: input.assetId ?? null,
+    videoUrl: input.assetId ? null : input.videoUrl!,
     focus: input.focus ?? "请总结视频内容、镜头语言、节奏、音频和可复用的创作提示词。",
-    model: input.model ?? getConfigValue("MONO_VIDEO_MODEL") ?? "mono-video-analysis",
+    model:
+      input.model ??
+      getConfigValue("MONO_VIDEO_MODEL", actor.workspaceId) ??
+      "mono-video-analysis",
   }, input.idempotencyKey);
   scheduleMonoWorker();
   return job;
@@ -251,7 +264,11 @@ export function createImageGenerationJob(actor: MonoActor, input: MonoImageGener
     referenceImageUrls,
     aspectRatio: input.aspectRatio,
     variants: input.variants,
-    model: template?.model ?? input.model ?? getConfigValue("MONO_IMAGE_MODEL") ?? "gpt-image-2",
+    model:
+      template?.model ??
+      input.model ??
+      getConfigValue("MONO_IMAGE_MODEL", actor.workspaceId) ??
+      "gpt-image-2",
   }, input.idempotencyKey);
   scheduleMonoWorker();
   return job;
@@ -372,32 +389,45 @@ export async function dispatchJob(jobId: string): Promise<void> {
 }
 
 async function dispatchClaimedJob(job: MonoJob): Promise<void> {
-  const controller = new AbortController();
-  controllers.set(job.id, controller);
-  try {
-    if (job.kind === "video_analysis") {
-      completeMonoJob(job.id, await runVideoAnalysis(job.input, controller.signal));
-    } else if (job.kind === "matting") {
-      completeMonoJob(job.id, await runMatting(job, controller.signal));
-    } else {
-      const result = await runImageGenerationBatch(job.id, job.input, controller.signal);
-      const stopped = stopRequested.has(job.id);
-      completeMonoJob(
-        job.id,
-        result as unknown as Record<string, unknown>,
-        result.succeeded === 0 ? (stopped ? "已停止，未生成任何图片" : "全部图片均生成失败") : undefined,
-        // 一张都没落地时用 cancelled 而不是 failed：这是用户主动叫停，不是服务出错。
-        result.succeeded === 0 && stopped ? "cancelled" : undefined,
-      );
+  // The request path already verified membership before persisting the job.
+  // Keep that immutable tenant snapshot for asynchronous execution so a
+  // membership change does not accidentally move the job to another tenant.
+  const tenantActor = {
+    userId: job.userId,
+    organizationId: "",
+    workspaceId: job.workspaceId,
+    role: "member" as const,
+    email: "",
+    displayName: "Mono 异步任务",
+  };
+  return runWithTenantContext(tenantActor, async () => {
+    const controller = new AbortController();
+    controllers.set(job.id, controller);
+    try {
+      if (job.kind === "video_analysis") {
+        completeMonoJob(job.id, await runVideoAnalysis(job, controller.signal));
+      } else if (job.kind === "matting") {
+        completeMonoJob(job.id, await runMatting(job, controller.signal));
+      } else {
+        const result = await runImageGenerationBatch(job.id, job.input, controller.signal);
+        const stopped = stopRequested.has(job.id);
+        completeMonoJob(
+          job.id,
+          result as unknown as Record<string, unknown>,
+          result.succeeded === 0 ? (stopped ? "已停止，未生成任何图片" : "全部图片均生成失败") : undefined,
+          // 一张都没落地时用 cancelled 而不是 failed：这是用户主动叫停，不是服务出错。
+          result.succeeded === 0 && stopped ? "cancelled" : undefined,
+        );
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        failMonoJob(job.id, error instanceof Error ? error.message : "Mono 任务执行失败");
+      }
+    } finally {
+      controllers.delete(job.id);
+      stopRequested.delete(job.id);
     }
-  } catch (error) {
-    if (!controller.signal.aborted) {
-      failMonoJob(job.id, error instanceof Error ? error.message : "Mono 任务执行失败");
-    }
-  } finally {
-    controllers.delete(job.id);
-    stopRequested.delete(job.id);
-  }
+  });
 }
 
 const DOUYIN_SHARE_RE = /^https?:\/\/(?:v\.douyin\.com\/[A-Za-z0-9_-]+\/?|www\.douyin\.com\/video\/\d+)/i;
@@ -429,6 +459,40 @@ async function resolveShareVideoUrl(sourceUrl: string, apiKey: string, signal: A
   return videoUrl;
 }
 
+const MAX_VIDEO_DATA_URL_BYTES = 10 * 1024 * 1024;
+const VIDEO_BASE64_OVERHEAD_RATIO = 1.37;
+
+/**
+ * 本机上传的视频没有公网可达地址，不能像分享链接那样直接把 URL 丢给远端模型
+ * 去拉取（对方服务器连不到 127.0.0.1）。这里对齐 Mono 插件的策略：体积在阈值
+ * 内的视频直接把字节内嵌成 data: URI 塞进请求体，完全不需要网络可达；超过阈值
+ * 就先传到 TOS，换一个模型能直接拉取的签名下载链接。分享链接解析出来的视频
+ * 本身就是公网 CDN 直链，直接把 URL 交给模型自己去拉取即可，不需要内嵌。
+ */
+async function resolveVideoContent(
+  actor: MonoActor,
+  input: Record<string, unknown>,
+  apiKey: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const assetId = typeof input.assetId === "string" ? input.assetId : null;
+  if (assetId) {
+    const asset = getMonoAsset(actor, assetId);
+    if (!asset) throw new Error("素材不存在，或不属于当前工作区");
+    if (asset.storageKey) {
+      const buffer = await readObjectBuffer(asset.storageKey);
+      const mimeType = asset.mimeType || "video/mp4";
+      const estimatedBase64Bytes = buffer.length * VIDEO_BASE64_OVERHEAD_RATIO;
+      if (estimatedBase64Bytes <= MAX_VIDEO_DATA_URL_BYTES) {
+        return `data:${mimeType};base64,${buffer.toString("base64")}`;
+      }
+      return uploadVideoToTosAndGetUrl(buffer, mimeType);
+    }
+    return resolveShareVideoUrl(asset.sourceUrl, apiKey, signal);
+  }
+  return resolveShareVideoUrl(String(input.videoUrl ?? ""), apiKey, signal);
+}
+
 /**
  * 视频分析复用图片反推的视觉模型配置（VISION_*），不再要求单独的
  * MONO_VIDEO_ANALYZE_URL/MONO_VIDEO_API_KEY——那是留给外部 Mono 视频服务的可选覆盖。
@@ -436,7 +500,8 @@ async function resolveShareVideoUrl(sourceUrl: string, apiKey: string, signal: A
  * 目前只把 file part 的 image 媒体类型映射成 image_url，视频没有对应支持；
  * 而火山方舟（doubao 视觉模型）的 chat/completions 协议原生支持 video_url 内容块。
  */
-async function runVideoAnalysis(input: Record<string, unknown>, signal: AbortSignal): Promise<Record<string, unknown>> {
+async function runVideoAnalysis(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
+  const input = job.input;
   const baseUrl = getConfigValue("MONO_VIDEO_ANALYZE_URL")
     ?? getConfigValue("VISION_BASE_URL")
     ?? "https://dashscope.aliyuncs.com/compatible-mode/v1";
@@ -446,7 +511,8 @@ async function runVideoAnalysis(input: Record<string, unknown>, signal: AbortSig
     || getConfigValue("MONO_VIDEO_MODEL")
     || getConfigValue("VISION_MODEL")
     || "qwen-vl-max";
-  const videoUrl = await resolveShareVideoUrl(String(input.videoUrl ?? ""), apiKey, signal);
+  const actor = newMonoActor({ userId: job.userId, workspaceId: job.workspaceId, traceId: job.traceId });
+  const videoUrl = await resolveVideoContent(actor, input, apiKey, signal);
   const endpoint = new URL("chat/completions", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
   const response = await fetch(endpoint, {
     method: "POST",
@@ -698,9 +764,18 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export function newMonoActor(overrides: Partial<MonoActor> = {}): MonoActor {
+  const activeActor = tenantContext()?.actor;
+  if (
+    process.env.NODE_ENV === "production" &&
+    !activeActor &&
+    (!overrides.userId || !overrides.workspaceId)
+  ) {
+    throw new Error("Mono actor requires an authenticated workspace context");
+  }
   return {
-    userId: overrides.userId ?? "local-user",
-    workspaceId: overrides.workspaceId ?? "default",
+    userId: overrides.userId ?? activeActor?.userId ?? "local-user",
+    workspaceId:
+      overrides.workspaceId ?? activeActor?.workspaceId ?? "default",
     sessionId: overrides.sessionId,
     traceId: overrides.traceId ?? `trace_${randomUUID()}`,
   };

@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { GatewayError, submitJob } from "@/lib/toolbox/gateway";
+import { chainTargets } from "@/lib/toolbox/types";
 
 export type VideoMattingArgs = {
   videoFileId: string;
@@ -12,6 +13,8 @@ export type VideoMattingResult = {
   jobId?: string;
   videoFileId?: string;
   note?: string;
+  /** 任务完成后卡片真的能续接到的能力名单，来自 chainTargets("matting")；模型只能对这个列表里的能力承诺续接按钮。 */
+  continueTargets?: string[];
   error?: string;
 };
 
@@ -52,7 +55,12 @@ export const videoMattingTool = tool({
         params: { background: background?.trim() || "white" },
         inputs: { video: videoFileId },
       });
-      return { jobId: job.id, videoFileId, ...(note ? { note } : {}) };
+      return {
+        jobId: job.id,
+        videoFileId,
+        ...(note ? { note } : {}),
+        continueTargets: chainTargets("matting").map((c) => c.name),
+      };
     } catch (error) {
       return {
         error:

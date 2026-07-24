@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { searchCollectorItems, listCollectorBatches } from "@/lib/collector/store";
+import { tenantContext } from "@/lib/server/tenant-context";
 
 /**
  * 采集数据分析层工具。原则：不动 luopan / douyin_Playwright 的采集管线
@@ -44,7 +45,12 @@ async function luopanFetch(pathname: string, params: Record<string, string | num
 }
 
 export function createCollectorTools(context: CollectorToolContext = {}) {
-  const workspaceId = context.workspaceId ?? "default";
+  const workspaceId =
+    context.workspaceId ?? tenantContext()?.actor.workspaceId;
+  if (!workspaceId && process.env.NODE_ENV === "production") {
+    throw new Error("Collector tools require an authenticated workspace");
+  }
+  const resolvedWorkspaceId = workspaceId ?? "default";
 
   return {
     luopan_query_rounds: tool({
@@ -102,7 +108,7 @@ export function createCollectorTools(context: CollectorToolContext = {}) {
     collector_list_batches: tool({
       description: "列出已导入 Workbench 的抓取结果批次（抖音/小红书搜索采集，来自 XLSX 导入）。",
       inputSchema: z.object({}),
-      execute: () => ({ batches: listCollectorBatches(workspaceId) }),
+      execute: () => ({ batches: listCollectorBatches(resolvedWorkspaceId) }),
     }),
     collector_search_items: tool({
       description: "检索已导入的抖音/小红书抓取内容（标题、作者、互动数据），用于素材调研和竞品图文对比。",
@@ -113,7 +119,7 @@ export function createCollectorTools(context: CollectorToolContext = {}) {
         limit: z.number().int().min(1).max(100).default(30),
       }),
       execute: (input) => ({
-        items: searchCollectorItems(workspaceId, {
+        items: searchCollectorItems(resolvedWorkspaceId, {
           keyword: input.keyword,
           platform: input.platform,
           batchId: input.batchId,

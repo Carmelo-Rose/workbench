@@ -20,7 +20,15 @@
 
 `inputs` 的值支持 `<file_id>` 或 `job:<job_id>/<产物路径>`（把上一个任务的产物接给下一个能力）。
 
-鉴权可选：设置环境变量 `TOOLBOX_TOKEN` 后，除 `/health` 外都要求 `x-toolbox-token` 头（workbench 侧配同名环境变量即可）。
+除 `/health` 外，网关要求 `TOOLBOX_TOKEN`，Workbench 代理会同时注入服务
+token、`x-workbench-workspace-id` 和 `x-workbench-user-id`。上传文件、任务、
+日志、产物和 `job:` 串联引用都会在网关端按 workspace 再校验一次；浏览器不应
+直连网关，也不能自行提供这些身份头。
+
+升级旧网关数据时可临时设置 `TOOLBOX_ALLOW_LEGACY_TENANT=true`，既有文件和
+任务会归入 `default` / `local-user`。迁移完成后应关闭。只有完全隔离的本机开发
+环境才能用 `TOOLBOX_ALLOW_INSECURE_LOCAL=true` 跳过 token，生产或局域网部署
+禁止开启。
 
 ## 部署（服务机）
 
