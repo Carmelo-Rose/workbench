@@ -132,7 +132,9 @@
 
 ## Phase 2-5 路线图（摘要，供下次会话接续）
 
-1. **应用层与素材层**：能力命令总线 + 注册表；统一 `assetId`，新增素材位置字段
+> Phase 2 已完成，详见 [phase2-application-layer.md](phase2-application-layer.md)。
+
+1. **应用层与素材层**（✅ 已完成）：能力命令总线 + 注册表；统一 `assetId`，新增素材位置字段
    （local-storage/toolbox/tos/remote-url），回填现有 `storage_key`/URL/Toolbox 引用；旧表旧字段先留着。
 2. **入口迁移**：工具入口直接提交命令；聊天入口按「显式命令 > 高置信规则（即本轮锁定的
    `forcedToolName`）> 模型工具选择」的顺序统一生成同一种命令；按能力逐项切换，保留回滚开关。

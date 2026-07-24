@@ -73,7 +73,45 @@ describe("default workspace migration", () => {
       "SELECT organization_id FROM workspaces WHERE id = 'default'",
     ).get()).toEqual({ organization_id: "org_default" });
     expect(migrated.prepare("PRAGMA user_version").get())
-      .toEqual({ user_version: 8 });
+      .toEqual({ user_version: 9 });
+    migrated.close();
+  });
+
+  it("backfills mono_assets.location from storage_key on a pre-v9 database", () => {
+    const dbPath = path.join(
+      os.tmpdir(),
+      `workbench-asset-location-${crypto.randomUUID()}.db`,
+    );
+    const legacy = new DatabaseSync(dbPath);
+    // Pre-v9 shape: no `location` column yet, matching what production DBs
+    // created before this migration actually look like on disk.
+    legacy.exec(`
+      CREATE TABLE mono_assets (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        mime_type TEXT,
+        name TEXT,
+        storage_key TEXT,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    legacy.prepare(
+      `INSERT INTO mono_assets (id, workspace_id, user_id, source_url, storage_key, created_at)
+       VALUES (?, 'ws-1', 'user-1', ?, ?, 1)`,
+    ).run("asset_local", "storage:some-key", "some-key");
+    legacy.prepare(
+      `INSERT INTO mono_assets (id, workspace_id, user_id, source_url, storage_key, created_at)
+       VALUES (?, 'ws-1', 'user-1', ?, NULL, 1)`,
+    ).run("asset_remote", "https://cdn.example.test/a.png");
+    legacy.close();
+
+    const migrated = openWorkbenchDatabase(dbPath);
+    expect(migrated.prepare("SELECT location FROM mono_assets WHERE id = ?").get("asset_local"))
+      .toEqual({ location: "local-storage" });
+    expect(migrated.prepare("SELECT location FROM mono_assets WHERE id = ?").get("asset_remote"))
+      .toEqual({ location: "remote-url" });
     migrated.close();
   });
 });

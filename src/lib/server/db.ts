@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS mono_assets (
   mime_type TEXT,
   name TEXT,
   storage_key TEXT,
+  location TEXT NOT NULL DEFAULT 'remote-url'
+    CHECK (location IN ('local-storage', 'toolbox', 'tos', 'remote-url')),
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS mono_assets_workspace_created
@@ -406,6 +408,21 @@ function ensureSchema(db: DatabaseSync): void {
   if (!assetColumns.some((column) => column.name === "storage_key")) {
     db.exec("ALTER TABLE mono_assets ADD COLUMN storage_key TEXT");
   }
+  // v9：素材位置统一记录（架构治理 Phase 2）——之前只能从 storage_key 是否
+  // 非空隐式推断"本地存储 vs 外部 URL"，这里把它落成显式字段，为后续
+  // toolbox/tos 定位器铺路。老库这一列不带 CHECK 约束（枚举值由应用层
+  // TS 类型约束，同 v5 的 kind 处理思路），只回填一次；storage_key/source_url
+  // 不删不改，可回滚。
+  if (!assetColumns.some((column) => column.name === "location")) {
+    db.exec(`
+      BEGIN;
+      ALTER TABLE mono_assets ADD COLUMN location TEXT;
+      UPDATE mono_assets SET location =
+        CASE WHEN storage_key IS NOT NULL THEN 'local-storage' ELSE 'remote-url' END
+        WHERE location IS NULL;
+      COMMIT;
+    `);
+  }
   // v5：kind 枚举改由应用层（zod/TS）约束。SQLite 无法修改 CHECK，
   // 带旧 kind CHECK 的表重建一次，之后新增任务类型不再需要迁移。
   const jobsTable = db.prepare(
@@ -448,7 +465,7 @@ function ensureSchema(db: DatabaseSync): void {
     db.exec("PRAGMA foreign_keys = ON");
   }
   db.exec(INDEX_DDL);
-  db.exec("PRAGMA user_version = 8");
+  db.exec("PRAGMA user_version = 9");
 }
 
 export function openWorkbenchDatabase(dbPath: string): DatabaseSync {

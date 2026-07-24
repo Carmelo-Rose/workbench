@@ -23,6 +23,14 @@ export const monoAssetInputSchema = z.object({
   name: z.string().max(255).optional(),
 });
 
+/**
+ * 素材实际内容存在哪：本地对象存储、Toolbox 网关、火山 TOS，或纯外部直链。
+ * `storageKey`/Toolbox `fileId`/TOS key 仍是各自的内部定位器，`location` 只是
+ * 标注去哪找——调用方统一认 `assetId`，不需要关心这些差异（架构治理 Phase 2）。
+ */
+export const monoAssetLocations = ["local-storage", "toolbox", "tos", "remote-url"] as const;
+export type MonoAssetLocation = (typeof monoAssetLocations)[number];
+
 export const monoImageAnalysisSchema = z.object({
   assetId: z.string().min(1).optional(),
   imageUrl: z.string().min(1).max(10_000_000).optional(),
@@ -141,6 +149,7 @@ export type MonoAsset = MonoAssetInput & {
   userId: string;
   /** 落在本地对象存储时的 key；此时 sourceUrl 为 storage:<key> 哨兵。 */
   storageKey?: string;
+  location: MonoAssetLocation;
   createdAt: number;
 };
 

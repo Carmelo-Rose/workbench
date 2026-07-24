@@ -10,6 +10,8 @@ import { buildImagePromptInstruction } from "@/lib/prompts";
 import type {
   MonoActor,
   MonoAsset,
+  MonoAssetInput,
+  MonoAssetLocation,
   MonoImageAnalysisInput,
   MonoImageGenerationInput,
   MonoImageGenerationResult,
@@ -107,7 +109,10 @@ function getAssetSource(actor: MonoActor, assetId: string): string {
   return asset.storageKey ? publicAssetUrl(asset.id) : asset.sourceUrl;
 }
 
-export function createAsset(actor: MonoActor, input: Omit<MonoAsset, "id" | "workspaceId" | "userId" | "createdAt">): MonoAsset {
+export function createAsset(
+  actor: MonoActor,
+  input: MonoAssetInput & { storageKey?: string; location?: MonoAssetLocation },
+): MonoAsset {
   return createMonoAsset(actor, input);
 }
 

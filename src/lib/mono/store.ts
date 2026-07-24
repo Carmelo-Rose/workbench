@@ -4,6 +4,7 @@ import type {
   MonoActor,
   MonoAsset,
   MonoAssetInput,
+  MonoAssetLocation,
   MonoJob,
   MonoJobKind,
   MonoJobStatus,
@@ -21,6 +22,7 @@ type AssetRow = {
   mime_type: string | null;
   name: string | null;
   storage_key: string | null;
+  location: string;
   created_at: number;
 };
 
@@ -62,6 +64,7 @@ function toAsset(row: AssetRow): MonoAsset {
     mimeType: row.mime_type ?? undefined,
     name: row.name ?? undefined,
     storageKey: row.storage_key ?? undefined,
+    location: row.location as MonoAssetLocation,
     createdAt: row.created_at,
   };
 }
@@ -101,18 +104,21 @@ function toSubject(row: SubjectRow): MonoSubject {
 
 export function createMonoAsset(
   actor: MonoActor,
-  input: MonoAssetInput & { storageKey?: string },
+  input: MonoAssetInput & { storageKey?: string; location?: MonoAssetLocation },
 ): MonoAsset {
   const asset: MonoAsset = {
     id: `asset_${randomUUID()}`,
     workspaceId: actor.workspaceId,
     userId: actor.userId,
     ...input,
+    // Same inference the v9 backfill migration uses: a storage key means the
+    // bytes live in our own object storage, otherwise treat it as an external URL.
+    location: input.location ?? (input.storageKey ? "local-storage" : "remote-url"),
     createdAt: Date.now(),
   };
   getDb().prepare(
-    `INSERT INTO mono_assets (id, workspace_id, user_id, source_url, mime_type, name, storage_key, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO mono_assets (id, workspace_id, user_id, source_url, mime_type, name, storage_key, location, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     asset.id,
     asset.workspaceId,
@@ -121,6 +127,7 @@ export function createMonoAsset(
     asset.mimeType ?? null,
     asset.name ?? null,
     asset.storageKey ?? null,
+    asset.location,
     asset.createdAt,
   );
   return asset;
