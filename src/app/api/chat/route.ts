@@ -103,7 +103,7 @@ function withoutImageAttachments(messages: UIMessage[]): UIMessage[] {
  * 让模型自己在工具参数里手抄这个 36 位 UUID 容易转录出错，这里直接用正则从原文取，
  * 比模型复述更可靠。
  */
-function latestVideoAssetId(messages: UIMessage[]): string | undefined {
+export function latestVideoAssetId(messages: UIMessage[]): string | undefined {
   return latestUserText(messages).match(
     /asset_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
   )?.[0];
@@ -124,7 +124,7 @@ function hermesTenantSessionId(actor: MonoActor, threadId: string): string {
   return `wb-${digest}`;
 }
 
-function forcedToolName(userText: string, hasImageAttachment: boolean) {
+export function forcedToolName(userText: string, hasImageAttachment: boolean) {
   const text = userText.toLowerCase();
   if (
     hasImageAttachment &&
