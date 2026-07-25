@@ -36,6 +36,7 @@ const JOB_TITLES: Record<MonoJob["kind"], string> = {
   image_generation: "图片生成",
   video_analysis: "视频分析",
   matting: "抠像换背景",
+  product_pipeline: "商品套图",
 };
 
 const terminalStatuses = new Set<MonoJob["status"]>([

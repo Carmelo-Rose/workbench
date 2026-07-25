@@ -12,7 +12,8 @@
     "test": "vitest run",
     "start": "next start",
     "lint": "eslint",
-    "mono:mcp": "node services/mono-mcp/server.mjs"
+    "mono:mcp": "node services/mono-mcp/server.mjs",
+    "mono:worker": "tsx scripts/mono-worker.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",
@@ -33,6 +34,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "remark-gfm": "^4.0.1",
+    "sharp": "^0.34.5",
     "tailwind-merge": "^3.6.0",
     "tw-animate-css": "^1.4.0",
     "tw-shimmer": "^0.4.11",
@@ -47,6 +49,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "tailwindcss": "^4",
+    "tsx": "^4.23.1",
     "typescript": "^5",
     "vitest": "^3.2.7"
   }

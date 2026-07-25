@@ -14,6 +14,7 @@ import { useAui } from "@assistant-ui/react";
 import { useImage2Mode } from "@/lib/image2-mode";
 import { useExitImage2Mode } from "@/components/workbench/Image2ChatMode";
 import { VideoAnalysisLauncher } from "@/components/workbench/VideoAnalysisLauncher";
+import { ProductPipelineLauncher } from "@/components/workbench/ProductPipelineLauncher";
 import type { CapabilityAction } from "@/lib/workbench/capabilities";
 
 /**
@@ -53,6 +54,7 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
   const image2Active = useImage2Mode((state) => state.active);
   const exitImage2Mode = useExitImage2Mode();
   const [videoDialogOpen, setVideoDialogOpen] = useState(false);
+  const [productPipelineOpen, setProductPipelineOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const reverseImageInputRef = useRef<HTMLInputElement>(null);
   const mattingInputRef = useRef<HTMLInputElement>(null);
@@ -140,6 +142,9 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
       case "matting-picker":
         mattingInputRef.current?.click();
         return;
+      case "product-pipeline":
+        setProductPipelineOpen(true);
+        return;
       case "import-picker":
         importInputRef.current?.click();
         return;
@@ -206,6 +211,7 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
         onOpenChange={setVideoDialogOpen}
         onSubmit={fillPrompt}
       />
+      <ProductPipelineLauncher open={productPipelineOpen} onOpenChange={setProductPipelineOpen} />
       {importError ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-28 z-50 flex justify-center px-4">
           <p className="bg-destructive/10 text-destructive rounded-full border border-destructive/30 px-3 py-1.5 text-xs shadow-sm backdrop-blur-sm">

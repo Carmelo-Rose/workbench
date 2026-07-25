@@ -73,7 +73,7 @@ describe("default workspace migration", () => {
       "SELECT organization_id FROM workspaces WHERE id = 'default'",
     ).get()).toEqual({ organization_id: "org_default" });
     expect(migrated.prepare("PRAGMA user_version").get())
-      .toEqual({ user_version: 9 });
+      .toEqual({ user_version: 10 });
     migrated.close();
   });
 
@@ -112,6 +112,60 @@ describe("default workspace migration", () => {
       .toEqual({ location: "local-storage" });
     expect(migrated.prepare("SELECT location FROM mono_assets WHERE id = ?").get("asset_remote"))
       .toEqual({ location: "remote-url" });
+    migrated.close();
+  });
+
+  it("adds mono_jobs lease/retry columns and the mono_workers table on a pre-v10 database", () => {
+    const dbPath = path.join(
+      os.tmpdir(),
+      `workbench-worker-queue-${crypto.randomUUID()}.db`,
+    );
+    // Pre-v10 shape: no lease/attempt/next-run/worker-version columns yet,
+    // matching a database created by the Phase 3 code (user_version 9).
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE mono_jobs (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+        input_json TEXT NOT NULL,
+        result_json TEXT,
+        error TEXT,
+        idempotency_key TEXT,
+        trace_id TEXT NOT NULL,
+        favorite INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER,
+        UNIQUE(workspace_id, idempotency_key)
+      );
+    `);
+    legacy.prepare(
+      `INSERT INTO mono_jobs
+         (id, workspace_id, user_id, kind, status, input_json, trace_id, created_at, updated_at)
+       VALUES ('job_legacy', 'ws-1', 'user-1', 'video_analysis', 'queued', '{}', 'trace_1', 1, 1)`,
+    ).run();
+    legacy.close();
+
+    const migrated = openWorkbenchDatabase(dbPath);
+    const row = migrated.prepare(
+      "SELECT lease_owner, lease_expires_at, attempt_count, next_run_at, worker_version FROM mono_jobs WHERE id = 'job_legacy'",
+    ).get();
+    expect(row).toEqual({
+      lease_owner: null,
+      lease_expires_at: null,
+      attempt_count: 0,
+      next_run_at: null,
+      worker_version: null,
+    });
+    expect(migrated.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mono_workers'",
+    ).get()).toEqual({ name: "mono_workers" });
+    expect(migrated.prepare("PRAGMA user_version").get())
+      .toEqual({ user_version: 10 });
     migrated.close();
   });
 });

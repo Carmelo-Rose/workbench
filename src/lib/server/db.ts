@@ -130,10 +130,24 @@ CREATE TABLE IF NOT EXISTS mono_jobs (
   updated_at INTEGER NOT NULL,
   started_at INTEGER,
   completed_at INTEGER,
+  lease_owner TEXT,
+  lease_expires_at INTEGER,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  next_run_at INTEGER,
+  worker_version TEXT,
   UNIQUE(workspace_id, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS mono_jobs_workspace_updated
   ON mono_jobs(workspace_id, updated_at DESC);
+CREATE TABLE IF NOT EXISTS mono_workers (
+  id TEXT PRIMARY KEY,
+  mode TEXT NOT NULL CHECK (mode IN ('inline', 'standalone')),
+  hostname TEXT,
+  pid INTEGER,
+  started_at INTEGER NOT NULL,
+  last_heartbeat_at INTEGER NOT NULL,
+  in_flight_json TEXT
+);
 CREATE TABLE IF NOT EXISTS collector_items (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
@@ -464,8 +478,25 @@ function ensureSchema(db: DatabaseSync): void {
     `);
     db.exec("PRAGMA foreign_keys = ON");
   }
+  // v10：独立 Worker 队列原语（架构治理 Phase 4）——mono_jobs 加 lease/重试/
+  // worker 版本字段，claim 从"谁先 UPDATE 到就是谁的"升级成带过期时间的租约，
+  // 让不共享同一个 globalThis 的独立进程也能安全地竞争同一批任务；
+  // attempt_count/next_run_at 给失败重试退避用。默认值不改变现有行为
+  // （MONO_JOB_MAX_ATTEMPTS 默认 1，等价于之前的"失败就 fail，不重试"）。
+  // 必须用重新读一次的列表，不能用上面 v5 重建块之前缓存的 jobColumns——
+  // 那个块可能已经整表重建过一次。
+  const jobColumnsV10 = db.prepare("PRAGMA table_info(mono_jobs)").all() as { name: string }[];
+  if (!jobColumnsV10.some((column) => column.name === "lease_owner")) {
+    db.exec(`
+      ALTER TABLE mono_jobs ADD COLUMN lease_owner TEXT;
+      ALTER TABLE mono_jobs ADD COLUMN lease_expires_at INTEGER;
+      ALTER TABLE mono_jobs ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE mono_jobs ADD COLUMN next_run_at INTEGER;
+      ALTER TABLE mono_jobs ADD COLUMN worker_version TEXT;
+    `);
+  }
   db.exec(INDEX_DDL);
-  db.exec("PRAGMA user_version = 9");
+  db.exec("PRAGMA user_version = 10");
 }
 
 export function openWorkbenchDatabase(dbPath: string): DatabaseSync {

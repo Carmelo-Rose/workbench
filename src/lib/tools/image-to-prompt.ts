@@ -1,6 +1,8 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { analyzeImage, newMonoActor } from "@/lib/mono/service";
+import { runCapabilityCommand } from "@/lib/workbench/capability-bus";
+import { getCapability, isCapabilityBusEnabled } from "@/lib/workbench/capability-registry";
 
 export type ImageToPromptArgs = {
   imageUrl?: string;
@@ -11,6 +13,8 @@ export type ImageToPromptResult = {
   imageUrl: string;
   prompt: string;
 };
+
+const CAPABILITY_ID = "image_to_prompt";
 
 /**
  * 第一根竖切的工具：图 → 提示词。
@@ -24,8 +28,7 @@ export type ImageToPromptResult = {
  */
 export function createImageToPromptTool(attachedImageUrl?: string) {
   return tool({
-    description:
-      "把当前对话附件或指定图片反推成可用于 AI 文生图的中文提示词。有当前图片附件时直接调用，不要向用户索取 URL。",
+    description: getCapability(CAPABILITY_ID)!.chatToolDescription,
     inputSchema: z.object({
       imageUrl: z
         .string()
@@ -36,16 +39,22 @@ export function createImageToPromptTool(attachedImageUrl?: string) {
         .optional()
         .describe("可选，用户希望侧重的方向，例如画风、镜头、配色"),
     }),
+    // 架构治理 Phase 3：走 runCapabilityCommand 分发，但同步能力的结果形状
+    // （{assetId, prompt, traceId}）跟这个工具历史上返回的 {imageUrl, prompt}
+    // 不同——这里手动摘取 prompt 字段拼回原有形状，不直接透传 run.result。
     execute: async ({ imageUrl, focus }): Promise<ImageToPromptResult> => {
       const resolvedImageUrl = imageUrl ?? attachedImageUrl;
       if (!resolvedImageUrl) {
         throw new Error("请先上传图片，或提供可访问的图片 URL");
       }
-      const result = await analyzeImage(newMonoActor(), {
-        imageUrl: resolvedImageUrl,
-        focus,
-        outputFormat: "prompt",
-      });
+      const actor = newMonoActor();
+      const input = { imageUrl: resolvedImageUrl, focus, outputFormat: "prompt" as const };
+      if (!isCapabilityBusEnabled(CAPABILITY_ID)) {
+        const result = await analyzeImage(actor, input);
+        return { imageUrl: resolvedImageUrl, prompt: result.prompt };
+      }
+      const run = await runCapabilityCommand({ capabilityId: CAPABILITY_ID, input, assetIds: [], actor });
+      const result = run.result as { prompt: string };
       return { imageUrl: resolvedImageUrl, prompt: result.prompt };
     },
   });

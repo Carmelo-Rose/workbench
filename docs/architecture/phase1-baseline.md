@@ -133,12 +133,22 @@
 ## Phase 2-5 路线图（摘要，供下次会话接续）
 
 > Phase 2 已完成，详见 [phase2-application-layer.md](phase2-application-layer.md)。
+> Phase 3 已完成，详见 [phase3-entry-migration.md](phase3-entry-migration.md)。
+> Phase 4 已完成，详见 [phase4-worker.md](phase4-worker.md)。
+> Phase 5（ADR + 接入模板部分）已完成，详见 [phase5-closeout.md](phase5-closeout.md)；
+> "删旧代码/移除回滚开关"两项有意推迟，理由见该文档。
 
 1. **应用层与素材层**（✅ 已完成）：能力命令总线 + 注册表；统一 `assetId`，新增素材位置字段
    （local-storage/toolbox/tos/remote-url），回填现有 `storage_key`/URL/Toolbox 引用；旧表旧字段先留着。
-2. **入口迁移**：工具入口直接提交命令；聊天入口按「显式命令 > 高置信规则（即本轮锁定的
-   `forcedToolName`）> 模型工具选择」的顺序统一生成同一种命令；按能力逐项切换，保留回滚开关。
-3. **独立 Worker**：新建 Worker 进程和启动脚本；`mono_jobs` 加 lease/心跳/重试/`next_run_at`/
-   `worker_id`；先用 SQLite Queue Adapter，接口留给未来换 Temporal/Redis。
-4. **收口**：稳定后删旧正则分支、文本标记、Mono Service 里被替代的逻辑；移除临时回滚开关；
-   写 ADR 和"新增能力/供应商/素材后端"标准接入模板。
+2. **入口迁移**（✅ 已完成）：`/api/mono/*` 外部 API（含间接受益的 MCP 转发）和聊天工具
+   （`tools/mono.ts`、`tools/image-to-prompt.ts`）都改为经命令总线分发，响应/返回形状保持
+   逐字节兼容；按能力逐项加了 `WORKBENCH_CAPABILITY_BUS_DISABLED` 回滚开关。
+3. **独立 Worker**（✅ 已完成）：`mono_jobs` 加 lease/attempt_count/next_run_at/worker_version，
+   新增 `mono_workers` 心跳表；`scripts/mono-worker.ts`（`npm run mono:worker`）是可独立启停的
+   进程，靠 SQLite 原子 UPDATE 跟 web 进程协调，`MONO_WORKER_MODE=standalone` 时 web 进程只入队；
+   `MONO_JOB_MAX_ATTEMPTS` 默认 1（行为不变），可调大启用队列级退避重试；
+   `GET /api/mono/worker/status` 展示心跳/队列深度/最老排队年龄/失败率。
+4. **收口**（🟡 部分完成）：ADR（[docs/architecture/adr/](adr/)）和标准接入模板
+   （[phase5-closeout.md](phase5-closeout.md)）已完成；"稳定后删旧正则分支/文本标记/被替代
+   逻辑、移除临时回滚开关"两项有意推迟到有真实运行数据之后，理由和范围界定见
+   [phase5-closeout.md](phase5-closeout.md)。

@@ -80,4 +80,7 @@
   `mono_jobs` 记录（会涉及给 `kind` CHECK 加新枚举值，参考 v5 的重建表迁移）。
 - 聊天路由（`forcedToolName`/`createMonoTools`）、工具面板、MCP 都还没有切到这个新接口，
   依旧走各自原来的路径——按计划这是 Phase 3「入口迁移」要做的事，本轮特意不碰，
-  保持每条链路可独立回滚。
+  保持每条链路可独立回滚。**（Phase 3 已完成，详见
+  [phase3-entry-migration.md](phase3-entry-migration.md)——外部 API 和聊天工具都改成
+  经这里的命令总线分发了，只是各自回查一次完整对象把返回形状转回去，不是直接透传
+  `CapabilityRun`。）**

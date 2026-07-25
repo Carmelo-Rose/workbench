@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getDb } from "@/lib/server/db";
+import { monoJobKinds } from "./contracts";
 import type {
   MonoActor,
   MonoAsset,
@@ -42,6 +43,11 @@ type JobRow = {
   updated_at: number;
   started_at: number | null;
   completed_at: number | null;
+  lease_owner: string | null;
+  lease_expires_at: number | null;
+  attempt_count: number;
+  next_run_at: number | null;
+  worker_version: string | null;
 };
 
 type SubjectRow = {
@@ -86,6 +92,11 @@ function toJob(row: JobRow): MonoJob {
     updatedAt: row.updated_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
+    leaseOwner: row.lease_owner,
+    leaseExpiresAt: row.lease_expires_at,
+    attemptCount: row.attempt_count,
+    nextRunAt: row.next_run_at,
+    workerVersion: row.worker_version,
   };
 }
 
@@ -250,6 +261,11 @@ export function createMonoJob(
     updatedAt: now,
     startedAt: null,
     completedAt: null,
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    attemptCount: 0,
+    nextRunAt: null,
+    workerVersion: null,
   };
   db.prepare(
     `INSERT INTO mono_jobs
@@ -320,31 +336,61 @@ export function getMonoJob(actor: MonoActor, jobId: string): MonoJob | null {
   return row ? toJob(row) : null;
 }
 
-export function claimMonoJob(jobId: string): MonoJob | null {
+/** 默认租约 5 分钟：单个 Provider 调用（含轮询）一般不会跑这么久，跑满说明 worker 大概率已经挂了。 */
+const DEFAULT_LEASE_MS = 5 * 60 * 1000;
+export const INLINE_WORKER_ID = "inline";
+
+export type ClaimJobOptions = {
+  /** 认领者标识；同一个 workerId 的心跳/日志能对上同一个 worker（架构治理 Phase 4）。 */
+  workerId?: string;
+  /** 租约时长（毫秒）；租约到期还没完成会被 reclaimExpiredLeases 当孤儿任务收回。 */
+  leaseMs?: number;
+  /** 认领它的 worker 所在版本，纯记录用途，不参与任何判断逻辑。 */
+  workerVersion?: string;
+};
+
+export function claimMonoJob(jobId: string, options: ClaimJobOptions = {}): MonoJob | null {
   const db = getDb();
   const now = Date.now();
+  const workerId = options.workerId ?? INLINE_WORKER_ID;
+  const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
   const result = db.prepare(
-    "UPDATE mono_jobs SET status = 'running', started_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'",
-  ).run(now, now, jobId);
+    `UPDATE mono_jobs
+     SET status = 'running', started_at = ?, updated_at = ?,
+         lease_owner = ?, lease_expires_at = ?, attempt_count = attempt_count + 1,
+         worker_version = ?
+     WHERE id = ? AND status = 'queued'`,
+  ).run(now, now, workerId, now + leaseMs, options.workerVersion ?? null, jobId);
   if (result.changes === 0) return null;
-  appendMonoJobEvent(jobId, "running");
+  appendMonoJobEvent(jobId, "running", { workerId });
   const row = db.prepare("SELECT * FROM mono_jobs WHERE id = ?").get(jobId) as JobRow;
   return toJob(row);
 }
 
-/** 只认领还有并发空位的那几类任务，避免被一类占满时饿死其他类。 */
-export function claimNextMonoJob(kinds: readonly MonoJobKind[]): MonoJob | null {
+/**
+ * 只认领还有并发空位的那几类任务，避免被一类占满时饿死其他类；
+ * 同时排除 next_run_at 还没到的任务（重试退避中）。
+ */
+export function claimNextMonoJob(kinds: readonly MonoJobKind[], options: ClaimJobOptions = {}): MonoJob | null {
   if (!kinds.length) return null;
+  const now = Date.now();
   const row = getDb().prepare(
-    `SELECT id FROM mono_jobs WHERE status = 'queued' AND kind IN (${kinds.map(() => "?").join(",")}) ORDER BY created_at ASC LIMIT 1`,
-  ).get(...kinds) as { id: string } | undefined;
-  return row ? claimMonoJob(row.id) : null;
+    `SELECT id FROM mono_jobs
+     WHERE status = 'queued' AND kind IN (${kinds.map(() => "?").join(",")})
+       AND (next_run_at IS NULL OR next_run_at <= ?)
+     ORDER BY created_at ASC LIMIT 1`,
+  ).get(...kinds, now) as { id: string } | undefined;
+  return row ? claimMonoJob(row.id, options) : null;
 }
 
+/** 进程刚启动：这个进程里不可能有任何任务真的在跑，running 状态只可能是上次异常退出留下的。 */
 export function requeueInterruptedMonoJobs(): number {
   const now = Date.now();
   const result = getDb().prepare(
-    "UPDATE mono_jobs SET status = 'queued', started_at = NULL, updated_at = ? WHERE status = 'running'",
+    `UPDATE mono_jobs
+     SET status = 'queued', started_at = NULL, updated_at = ?,
+         lease_owner = NULL, lease_expires_at = NULL
+     WHERE status = 'running'`,
   ).run(now);
   if (result.changes > 0) {
     getDb().prepare(
@@ -352,6 +398,173 @@ export function requeueInterruptedMonoJobs(): number {
     ).run(now, now);
   }
   return Number(result.changes);
+}
+
+/**
+ * 进程存活期间的周期性回收：只收租约明确过期的任务，不像
+ * requeueInterruptedMonoJobs 那样一上来就假定所有 running 都是孤儿——
+ * 独立 Worker 场景下同一时刻可能有多个进程，其他进程的任务还在正常跑。
+ */
+export function reclaimExpiredLeases(now: number = Date.now()): number {
+  const result = getDb().prepare(
+    `UPDATE mono_jobs
+     SET status = 'queued', started_at = NULL, updated_at = ?,
+         lease_owner = NULL, lease_expires_at = NULL
+     WHERE status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`,
+  ).run(now, now);
+  if (result.changes > 0) {
+    getDb().prepare(
+      "INSERT INTO mono_job_events (job_id, event_type, detail_json, created_at) SELECT id, 'lease_expired', NULL, ? FROM mono_jobs WHERE status = 'queued' AND updated_at = ?",
+    ).run(now, now);
+  }
+  return Number(result.changes);
+}
+
+/** 长任务的心跳：还在正常跑就把租约续一段，避免被回收器当孤儿收走。 */
+export function renewMonoJobLease(jobId: string, workerId: string, leaseMs: number = DEFAULT_LEASE_MS): boolean {
+  const now = Date.now();
+  const result = getDb().prepare(
+    `UPDATE mono_jobs SET lease_expires_at = ?, updated_at = ?
+     WHERE id = ? AND status = 'running' AND lease_owner = ?`,
+  ).run(now + leaseMs, now, jobId, workerId);
+  return result.changes > 0;
+}
+
+/**
+ * 失败时的重试决策：attempt_count 还没到上限就退避重排队（保留 error 供 UI
+ * 展示"上一次失败原因"），到上限了才真正 failMonoJob。调用方（service.ts）
+ * 决定 maxAttempts/backoffMs，这里只管原子地把结果落库。
+ */
+export function failOrRetryMonoJob(
+  jobId: string,
+  error: string,
+  maxAttempts: number,
+  backoffMs: number,
+): Extract<MonoJobStatus, "queued" | "failed"> {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT attempt_count FROM mono_jobs WHERE id = ? AND status = 'running'",
+  ).get(jobId) as { attempt_count: number } | undefined;
+  if (row && row.attempt_count < maxAttempts) {
+    const now = Date.now();
+    const nextRunAt = now + backoffMs;
+    const result = db.prepare(
+      `UPDATE mono_jobs
+       SET status = 'queued', started_at = NULL, updated_at = ?, next_run_at = ?,
+           lease_owner = NULL, lease_expires_at = NULL, error = ?
+       WHERE id = ? AND status = 'running'`,
+    ).run(now, nextRunAt, error, jobId);
+    if (result.changes > 0) {
+      appendMonoJobEvent(jobId, "retry_scheduled", { error, attempt: row.attempt_count, nextRunAt });
+      return "queued";
+    }
+  }
+  failMonoJob(jobId, error);
+  return "failed";
+}
+
+export type MonoWorkerHeartbeat = {
+  id: string;
+  mode: "inline" | "standalone";
+  hostname: string | null;
+  pid: number | null;
+  startedAt: number;
+  lastHeartbeatAt: number;
+  inFlight: Record<string, number>;
+};
+
+export function upsertMonoWorkerHeartbeat(worker: {
+  id: string;
+  mode: "inline" | "standalone";
+  hostname?: string;
+  pid?: number;
+  startedAt: number;
+  inFlight: Record<string, number>;
+}): void {
+  const now = Date.now();
+  getDb().prepare(
+    `INSERT INTO mono_workers (id, mode, hostname, pid, started_at, last_heartbeat_at, in_flight_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       mode = excluded.mode, hostname = excluded.hostname, pid = excluded.pid,
+       last_heartbeat_at = excluded.last_heartbeat_at, in_flight_json = excluded.in_flight_json`,
+  ).run(
+    worker.id,
+    worker.mode,
+    worker.hostname ?? null,
+    worker.pid ?? null,
+    worker.startedAt,
+    now,
+    JSON.stringify(worker.inFlight),
+  );
+}
+
+export function listMonoWorkers(): MonoWorkerHeartbeat[] {
+  const rows = getDb().prepare(
+    "SELECT * FROM mono_workers ORDER BY last_heartbeat_at DESC",
+  ).all() as {
+    id: string;
+    mode: string;
+    hostname: string | null;
+    pid: number | null;
+    started_at: number;
+    last_heartbeat_at: number;
+    in_flight_json: string | null;
+  }[];
+  return rows.map((row) => ({
+    id: row.id,
+    mode: row.mode as "inline" | "standalone",
+    hostname: row.hostname,
+    pid: row.pid,
+    startedAt: row.started_at,
+    lastHeartbeatAt: row.last_heartbeat_at,
+    inFlight: row.in_flight_json ? (JSON.parse(row.in_flight_json) as Record<string, number>) : {},
+  }));
+}
+
+export type MonoJobQueueStats = {
+  queueDepthByKind: Record<MonoJobKind, number>;
+  runningByKind: Record<MonoJobKind, number>;
+  oldestQueuedAgeMs: number | null;
+  recentFailureRate: { window: number; failed: number; rate: number };
+};
+
+function emptyKindCounter(): Record<MonoJobKind, number> {
+  const counter = {} as Record<MonoJobKind, number>;
+  for (const kind of monoJobKinds) counter[kind] = 0;
+  return counter;
+}
+
+/** recentWindow 是"最近 N 条已完结任务"里失败了几条，不是时间窗口——单机低流量下更稳定，不会因为半夜没任务而失真。 */
+export function monoJobQueueStats(recentWindow: number = 100): MonoJobQueueStats {
+  const db = getDb();
+  const now = Date.now();
+  const queueDepthByKind = emptyKindCounter();
+  const runningByKind = emptyKindCounter();
+  const depthRows = db.prepare(
+    "SELECT kind, status, COUNT(*) as count FROM mono_jobs WHERE status IN ('queued','running') GROUP BY kind, status",
+  ).all() as { kind: MonoJobKind; status: "queued" | "running"; count: number }[];
+  for (const row of depthRows) {
+    if (row.status === "queued") queueDepthByKind[row.kind] = row.count;
+    else runningByKind[row.kind] = row.count;
+  }
+  const oldest = db.prepare(
+    "SELECT MIN(created_at) as oldest FROM mono_jobs WHERE status = 'queued'",
+  ).get() as { oldest: number | null };
+  const recentRows = db.prepare(
+    "SELECT status FROM mono_jobs WHERE status IN ('succeeded','failed') ORDER BY completed_at DESC LIMIT ?",
+  ).all(recentWindow) as { status: "succeeded" | "failed" }[];
+  const failed = recentRows.filter((row) => row.status === "failed").length;
+  return {
+    queueDepthByKind,
+    runningByKind,
+    oldestQueuedAgeMs: oldest.oldest != null ? now - oldest.oldest : null,
+    recentFailureRate: {
+      window: recentRows.length,
+      failed,
+      rate: recentRows.length ? failed / recentRows.length : 0,
+    },
+  };
 }
 
 export function updateMonoJobResult(jobId: string, result: Record<string, unknown>): void {

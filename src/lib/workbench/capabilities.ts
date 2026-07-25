@@ -19,7 +19,8 @@ export type CapabilityAction =
   | "matting-picker"
   | "import-picker"
   | "video-picker"
-  | "image2-mode";
+  | "image2-mode"
+  | "product-pipeline";
 
 export type CapabilityOption = {
   id: string;
@@ -56,6 +57,15 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
     label: "Mono",
     iconKey: "sparkles",
     options: [
+      {
+        id: "product-pipeline",
+        label: "商品套图",
+        prompt: "",
+        action: "product-pipeline",
+        iconKey: "image",
+        hint: "选择商品文件夹，一键生成帽子白底主图与详情套图",
+        slash: true,
+      },
       {
         id: "reverse-image",
         label: "反推图片",

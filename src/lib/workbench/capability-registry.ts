@@ -93,3 +93,18 @@ export function getCapability(capabilityId: string): CapabilityDefinition<any> |
 export function capabilityIdForJobKind(kind: MonoJobKind): string | undefined {
   return Object.values(CAPABILITY_REGISTRY).find((capability) => capability.jobKind === kind)?.id;
 }
+
+/**
+ * Phase 3「入口迁移」的按能力回滚开关：把 capabilityId 加进
+ * WORKBENCH_CAPABILITY_BUS_DISABLED（逗号分隔）后，已迁移的入口（/api/mono/*、
+ * 聊天工具）会跳过命令总线，退回迁移前直接调用 mono/service.ts 的旧路径——
+ * 不需要发版即可单独回滚某一个能力，其余能力不受影响。读取的是环境变量，
+ * 每次调用都重新读，方便测试里用 process.env 直接切换。
+ */
+export function isCapabilityBusEnabled(capabilityId: string): boolean {
+  const disabled = (process.env.WORKBENCH_CAPABILITY_BUS_DISABLED ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  return !disabled.includes(capabilityId);
+}

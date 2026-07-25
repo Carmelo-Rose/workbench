@@ -19,6 +19,7 @@ import type {
   MonoJob,
   MonoJobKind,
   MonoMattingInput,
+  ProductPipelineInput,
   MonoSubject,
   MonoSubjectInput,
   MonoSubjectPatch,
@@ -46,19 +47,26 @@ import {
   createMonoJob,
   createMonoSubject,
   deleteMonoSubject,
-  failMonoJob,
+  failOrRetryMonoJob,
   getMonoAsset,
   getMonoJob,
   getMonoSubject,
+  INLINE_WORKER_ID,
   listMonoJobs,
   listMonoSubjects,
+  listMonoWorkers,
+  monoJobQueueStats,
   purgeMonoJob,
   purgeUnfavoriteMonoJobs,
+  reclaimExpiredLeases,
   requeueInterruptedMonoJobs,
   setMonoJobFavorite,
   updateMonoJobResult,
   updateMonoSubject,
+  upsertMonoWorkerHeartbeat,
+  type ClaimJobOptions,
 } from "./store";
+import { runProductPipeline, validateProductPipelineInput } from "./product-pipeline";
 
 const MAX_IMAGE_ATTEMPTS = 3;
 const controllers = new Map<string, AbortController>();
@@ -78,11 +86,37 @@ const JOB_CONCURRENCY: Record<MonoJobKind, number> = {
   image_generation: Math.max(1, Number(process.env.MONO_IMAGE_JOB_CONCURRENCY) || 3),
   video_analysis: 1,
   matting: 1,
+  product_pipeline: 1,
 };
+
+/**
+ * 架构治理 Phase 4：独立 Worker 队列配置。全部有向后兼容的默认值——不设置
+ * 任何一个新环境变量时，行为和 Phase 3 完全一致（inline 模式、失败即
+ * failed、不重试）。
+ *
+ * - MONO_WORKER_MODE=standalone：web 进程的 scheduleMonoWorker() 变成空操作，
+ *   只负责入队，认领/执行交给单独跑的 `npm run mono:worker` 进程。默认 inline
+ *   （web 进程自己 drain，等价于这之前的唯一模式）。
+ * - MONO_JOB_MAX_ATTEMPTS：默认 1，即"失败就 failed，不重试"——跟迁移前
+ *   完全一样。大于 1 时，dispatchClaimedJob 的 catch 分支会退避重排队而不是
+ *   直接判失败（图片生成每个 slot 自己的 MAX_IMAGE_ATTEMPTS 重试不受这个影响，
+ *   那是另一层，只在这里的 catch 兜不住的意外错误上生效）。
+ * - MONO_JOB_LEASE_MS：租约时长，默认 5 分钟。
+ */
+const MONO_WORKER_MODE: "inline" | "standalone" =
+  process.env.MONO_WORKER_MODE === "standalone" ? "standalone" : "inline";
+const MONO_JOB_MAX_ATTEMPTS = Math.max(1, Number(process.env.MONO_JOB_MAX_ATTEMPTS) || 1);
+const MONO_JOB_RETRY_BACKOFF_MS = Math.max(0, Number(process.env.MONO_JOB_RETRY_BACKOFF_MS) || 10_000);
+const MONO_JOB_MAX_RETRY_BACKOFF_MS = Math.max(
+  MONO_JOB_RETRY_BACKOFF_MS,
+  Number(process.env.MONO_JOB_MAX_RETRY_BACKOFF_MS) || 5 * 60 * 1000,
+);
+const MONO_JOB_LEASE_MS = Math.max(30_000, Number(process.env.MONO_JOB_LEASE_MS) || 5 * 60 * 1000);
+const MONO_WORKER_VERSION = process.env.MONO_WORKER_VERSION ?? process.env.npm_package_version ?? "dev";
 
 type WorkerState = { started: boolean; scheduled: boolean; inFlight: Record<MonoJobKind, number> };
 const emptyInFlight = (): Record<MonoJobKind, number> =>
-  ({ image_generation: 0, video_analysis: 0, matting: 0 });
+  ({ image_generation: 0, video_analysis: 0, matting: 0, product_pipeline: 0 });
 
 // worker 状态挂在 globalThis 上跨模块实例复用，开发态热更会留下上一版形状的对象。
 // 缺字段必须补齐：drain 在 setImmediate 里跑，抛出去没人接，整个队列会静默卡死。
@@ -206,6 +240,23 @@ export function createMattingJob(actor: MonoActor, input: MonoMattingInput): Mon
     backgroundColor: input.backgroundColor ?? null,
     backgroundAssetId: input.backgroundAssetId ?? null,
   }, input.idempotencyKey);
+  scheduleMonoWorker();
+  return job;
+}
+
+export function createProductPipelineJob(actor: MonoActor, input: ProductPipelineInput): MonoJob {
+  const resolved = validateProductPipelineInput(input);
+  const existing = listMonoJobs(actor, { kind: "product_pipeline", limit: 200 }).find((job) =>
+    (job.status === "queued" || job.status === "running") && job.input.folderId === input.folderId,
+  );
+  if (existing) throw new MonoHttpError(409, "该商品已有正在运行的套图任务");
+  const job = createMonoJob(actor, "product_pipeline", {
+    folderId: input.folderId,
+    workflowId: input.workflowId,
+    // The resolved relative path is retained only in the private job record;
+    // API responses redact it before leaving the server.
+    folderRelativePath: resolved.relativePath,
+  });
   scheduleMonoWorker();
   return job;
 }
@@ -353,6 +404,10 @@ export function cancelJob(actor: MonoActor, jobId: string): MonoJob | null {
 }
 
 export function scheduleMonoWorker(): void {
+  // standalone 模式下 web 进程只入队，不认领——认领/执行是独立 mono:worker
+  // 进程的事，这里提前返回避免两边抢同一批任务（虽然 claim 本身是原子的，
+  // 抢了也不会错，但没必要让 web 进程在没人要求它执行的情况下还占着并发位）。
+  if (MONO_WORKER_MODE === "standalone") return;
   if (!worker.started) {
     requeueInterruptedMonoJobs();
     worker.started = true;
@@ -365,16 +420,30 @@ export function scheduleMonoWorker(): void {
   });
 }
 
+const INLINE_CLAIM_OPTIONS: ClaimJobOptions = {
+  workerId: INLINE_WORKER_ID,
+  leaseMs: MONO_JOB_LEASE_MS,
+  workerVersion: MONO_WORKER_VERSION,
+};
+const workerStartedAt = Date.now();
+
 /**
  * 认领到没有空位为止。这里不 await 任务本身——整个函数是同步的，
  * 所以不会有回调插进来改 inFlight；每个任务结束后自己再叫一次 worker 补位。
  */
 function drainMonoJobs(): void {
   try {
+    upsertMonoWorkerHeartbeat({
+      id: INLINE_WORKER_ID,
+      mode: "inline",
+      pid: process.pid,
+      startedAt: workerStartedAt,
+      inFlight: worker.inFlight,
+    });
     for (;;) {
       const kinds = monoJobKinds.filter((kind) => worker.inFlight[kind] < JOB_CONCURRENCY[kind]);
       if (!kinds.length) return;
-      const job = claimNextMonoJob(kinds);
+      const job = claimNextMonoJob(kinds, INLINE_CLAIM_OPTIONS);
       if (!job) return;
       worker.inFlight[job.kind] += 1;
       void dispatchClaimedJob(job).finally(() => {
@@ -389,8 +458,67 @@ function drainMonoJobs(): void {
 }
 
 export async function dispatchJob(jobId: string): Promise<void> {
-  const job = claimMonoJob(jobId);
+  const job = claimMonoJob(jobId, INLINE_CLAIM_OPTIONS);
   if (job) await dispatchClaimedJob(job);
+}
+
+/**
+ * 独立 Worker 进程用的一次轮询：先回收租约过期的孤儿任务（可能是别的 worker
+ * 异常退出留下的），再按并发上限认领并派发——跟 inline 模式共用同一个
+ * dispatchClaimedJob，执行逻辑不重复一份，只是调度者和进程边界不同。
+ * 调用方（scripts/mono-worker.ts）负责轮询节奏、心跳节奏和优雅退出。
+ */
+export async function runStandaloneWorkerTick(
+  workerId: string,
+  inFlight: Record<MonoJobKind, number>,
+  concurrency: Partial<Record<MonoJobKind, number>> = {},
+): Promise<number> {
+  reclaimExpiredLeases();
+  const effectiveConcurrency = { ...JOB_CONCURRENCY, ...concurrency };
+  let claimed = 0;
+  for (;;) {
+    const kinds = monoJobKinds.filter((kind) => inFlight[kind] < effectiveConcurrency[kind]);
+    if (!kinds.length) break;
+    const job = claimNextMonoJob(kinds, {
+      workerId,
+      leaseMs: MONO_JOB_LEASE_MS,
+      workerVersion: MONO_WORKER_VERSION,
+    });
+    if (!job) break;
+    claimed += 1;
+    inFlight[job.kind] += 1;
+    void dispatchClaimedJob(job).finally(() => {
+      inFlight[job.kind] -= 1;
+    });
+  }
+  return claimed;
+}
+
+export function createEmptyWorkerInFlight(): Record<MonoJobKind, number> {
+  return emptyInFlight();
+}
+
+export function reportStandaloneWorkerHeartbeat(
+  workerId: string,
+  inFlight: Record<MonoJobKind, number>,
+  startedAt: number,
+): void {
+  upsertMonoWorkerHeartbeat({
+    id: workerId,
+    mode: "standalone",
+    hostname: process.env.HOSTNAME,
+    pid: process.pid,
+    startedAt,
+    inFlight,
+  });
+}
+
+export function getMonoJobQueueStats(recentWindow?: number) {
+  return monoJobQueueStats(recentWindow);
+}
+
+export function listMonoWorkerHeartbeats() {
+  return listMonoWorkers();
 }
 
 async function dispatchClaimedJob(job: MonoJob): Promise<void> {
@@ -413,6 +541,8 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
         completeMonoJob(job.id, await runVideoAnalysis(job, controller.signal));
       } else if (job.kind === "matting") {
         completeMonoJob(job.id, await runMatting(job, controller.signal));
+      } else if (job.kind === "product_pipeline") {
+        completeMonoJob(job.id, await runProductPipeline(job, controller.signal));
       } else {
         const result = await runImageGenerationBatch(job.id, job.input, controller.signal);
         const stopped = stopRequested.has(job.id);
@@ -426,7 +556,14 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
       }
     } catch (error) {
       if (!controller.signal.aborted) {
-        failMonoJob(job.id, error instanceof Error ? error.message : "Mono 任务执行失败");
+        const message = error instanceof Error ? error.message : "Mono 任务执行失败";
+        // job.attemptCount 是 claim 时刚自增过的值（1-indexed），退避随次数指数
+        // 增长；MONO_JOB_MAX_ATTEMPTS 默认 1，默认行为等价于"失败就 failed"。
+        const backoffMs = Math.min(
+          MONO_JOB_RETRY_BACKOFF_MS * 2 ** Math.max(0, job.attemptCount - 1),
+          MONO_JOB_MAX_RETRY_BACKOFF_MS,
+        );
+        failOrRetryMonoJob(job.id, message, MONO_JOB_MAX_ATTEMPTS, backoffMs);
       }
     } finally {
       controllers.delete(job.id);

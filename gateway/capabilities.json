@@ -2,6 +2,19 @@
   "_说明": "工具箱能力注册表。status: ready=可提交任务 / planned=留口子未上线。adapter.command 中的占位符见 adapters.py 顶部注释。改这个文件不用重启网关。",
   "capabilities": [
     {
+      "id": "product_cutout",
+      "name": "Product cutout",
+      "status": "ready",
+      "description": "Deterministic BiRefNet_HR-matting product cutout; output is a transparent PNG.",
+      "inputs_spec": [{ "field": "image", "required": true, "kind": "image" }],
+      "adapter": {
+        "cwd": "D:/hyk_sort/workspace/video-toolbox/gateway/capabilities/product-cutout",
+        "command": ["{cwd}/.venv/Scripts/python.exe", "toolbox_run.py", "--input", "{input.image}", "--output-dir", "{output_dir}", "--params", "{params_json}"],
+        "env": {},
+        "timeout_sec": 900
+      }
+    },
+    {
       "id": "smart_erase",
       "name": "智能擦除",
       "status": "ready",

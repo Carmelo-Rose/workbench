@@ -6,6 +6,7 @@ import {
   monoSubjectInputSchema,
   monoSubjectPatchSchema,
   monoVideoAnalysisSchema,
+  type MonoJob,
 } from "@/lib/mono/contracts";
 import {
   cancelJob,
@@ -22,6 +23,10 @@ import {
   updateSubject,
 } from "@/lib/mono/service";
 import { z } from "zod";
+import { runCapabilityCommand } from "@/lib/workbench/capability-bus";
+import { getCapability, isCapabilityBusEnabled } from "@/lib/workbench/capability-registry";
+import { MonoHttpError } from "@/lib/mono/http";
+import type { MonoActor } from "@/lib/mono/contracts";
 
 type MonoToolContext = {
   sessionId?: string;
@@ -36,6 +41,28 @@ type MonoToolContext = {
    */
   videoAssetId?: string;
 };
+
+/**
+ * 架构治理 Phase 3：三个已注册进 CAPABILITY_REGISTRY 的能力（视频分析/抠像/
+ * 生图）改为经 runCapabilityCommand 分发，而不是各自直连 mono/service.ts；
+ * 异步能力用 run.id 回查一次完整 MonoJob 还原成迁移前的返回形状——工具结果会
+ * 整段落进 assistant-ui 的消息历史，形状变化会直接破坏 MonoToolUI 卡片渲染，
+ * 所以这里不能像 /api/mono/* 那样只保证 JSON 响应体兼容，必须是同一个 TS 类型。
+ * isCapabilityBusEnabled 提供按能力回滚开关，禁用时退回旧的直连调用。
+ */
+async function runJobCapability(
+  capabilityId: string,
+  actor: MonoActor,
+  input: unknown,
+  assetIds: string[],
+  fallback: () => MonoJob,
+): Promise<MonoJob> {
+  if (!isCapabilityBusEnabled(capabilityId)) return fallback();
+  const run = await runCapabilityCommand({ capabilityId, input, assetIds, actor });
+  const job = getJob(actor, run.id);
+  if (!job) throw new MonoHttpError(500, `${capabilityId} 任务创建后未能读取`);
+  return job;
+}
 
 /** One registry powers direct AI SDK tools and the MCP adapter's business calls. */
 export function createMonoTools(context: MonoToolContext = {}) {
@@ -52,12 +79,18 @@ export function createMonoTools(context: MonoToolContext = {}) {
       execute: (input) => createAsset(actor, input),
     }),
     mono_analyze_video: tool({
-      description: "创建视频音画分析任务。适用于用户提供视频直链、抖音分享链接或已登记视频素材，并希望分析内容、镜头、节奏、音频或提示词时调用。",
+      description: getCapability("mono_analyze_video")!.chatToolDescription,
       inputSchema: monoVideoAnalysisSchema,
-      execute: (input) => createVideoAnalysisJob(actor, {
-        ...input,
-        assetId: context.videoAssetId ?? input.assetId,
-      }),
+      execute: (input) => {
+        const mergedInput = { ...input, assetId: context.videoAssetId ?? input.assetId };
+        return runJobCapability(
+          "mono_analyze_video",
+          actor,
+          mergedInput,
+          mergedInput.assetId ? [mergedInput.assetId] : [],
+          () => createVideoAnalysisJob(actor, mergedInput),
+        );
+      },
     }),
     mono_list_subjects: tool({
       description: "列出当前用户可用的私有主体和工作区共享主体。",
@@ -84,25 +117,38 @@ export function createMonoTools(context: MonoToolContext = {}) {
       execute: ({ subjectId }) => ({ deleted: deleteSubject(actor, subjectId) }),
     }),
     mono_matting: tool({
-      description: "人物/主体抠像换背景任务。输入已登记素材 id 或公开媒体 URL（图片、视频均可）；用户直接发图片附件时可都不填。可选纯色背景（#RRGGBB）或背景图素材，缺省输出透明背景。",
+      description: `${getCapability("mono_matting")!.chatToolDescription}用户直接发图片附件时可都不填。`,
       inputSchema: monoMattingBaseSchema,
-      execute: (input) => {
+      execute: async (input) => {
         let assetId = input.assetId;
         if (!assetId && !input.mediaUrl) {
           if (!context.attachmentUrl) throw new Error("请提供素材 id、媒体 URL，或直接附上图片");
           assetId = createAsset(actor, { sourceUrl: context.attachmentUrl, mimeType: "image/*" }).id;
         }
-        return createMattingJob(actor, { ...input, assetId });
+        const mergedInput = { ...input, assetId };
+        return runJobCapability(
+          "mono_matting",
+          actor,
+          mergedInput,
+          assetId ? [assetId] : [],
+          () => createMattingJob(actor, mergedInput),
+        );
       },
     }),
     mono_generate_image: tool({
-      description: "直接创建 Image2 图片生成任务。支持模板、多参考图、结构化双参考图、画面比例，以及一次生成 1、2、4 或 6 张图片。",
+      description: getCapability("mono_generate_image")!.chatToolDescription,
       inputSchema: monoImageGenerationSchema,
       // 工具结果会整段落进消息历史，之后每一轮都原样回发给模型——参考图是
       // base64 data URL，一张就有 2MB+，必须瘦身，否则几轮内就能把上下文塞爆。
       // 前端卡片展示走的是 /api/workbench/mono/jobs/{id} 的独立轮询（未瘦身），
       // 不受这里影响；「再次生成」需要完整参考图时会另外发起一次 GET 去补。
-      execute: (input) => lightenMonoJob(createImageGenerationJob(actor, input)),
+      execute: async (input) => lightenMonoJob(await runJobCapability(
+        "mono_generate_image",
+        actor,
+        input,
+        [],
+        () => createImageGenerationJob(actor, input),
+      )),
     }),
     mono_get_job: tool({
       description: "查询 Mono 视频分析或图片生成任务的进度和结果。",

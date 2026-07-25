@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { monoImage2TemplateIds } from "./image2-templates";
 
-export const monoJobKinds = ["video_analysis", "image_generation", "matting"] as const;
+export const monoJobKinds = ["video_analysis", "image_generation", "matting", "product_pipeline"] as const;
 export const monoJobStatuses = [
   "queued",
   "running",
@@ -113,6 +113,13 @@ export const monoImageGenerationSchema = z.object({
   idempotencyKey: z.string().min(1).max(180).optional(),
 });
 
+/** The browser never submits a path. `folderId` is an opaque server-issued id. */
+export const productPipelineWorkflowId = "hat-62604171-v1" as const;
+export const productPipelineInputSchema = z.object({
+  folderId: z.string().min(8).max(2_000),
+  workflowId: z.literal(productPipelineWorkflowId),
+});
+
 export const monoImageGenerationSlotSchema = z.object({
   index: z.number().int().min(0),
   status: z.enum(monoImageSlotStatuses),
@@ -135,6 +142,7 @@ export type MonoImageAnalysisInput = z.infer<typeof monoImageAnalysisSchema>;
 export type MonoVideoAnalysisInput = z.infer<typeof monoVideoAnalysisSchema>;
 export type MonoMattingInput = z.infer<typeof monoMattingSchema>;
 export type MonoImageGenerationInput = z.infer<typeof monoImageGenerationSchema>;
+export type ProductPipelineInput = z.infer<typeof productPipelineInputSchema>;
 export type MonoImageGenerationSlot = z.infer<typeof monoImageGenerationSlotSchema>;
 export type MonoImageGenerationResult = z.infer<typeof monoImageGenerationResultSchema>;
 export type MonoSubjectInput = z.infer<typeof monoSubjectInputSchema>;
@@ -184,4 +192,14 @@ export type MonoJob = {
   updatedAt: number;
   startedAt: number | null;
   completedAt: number | null;
+  /** 架构治理 Phase 4：当前持有租约的 worker id（inline 模式下是固定的进程内标识）。 */
+  leaseOwner: string | null;
+  /** 租约到期时间——过期仍是 running 的任务会被判定为孤儿，重新入队。 */
+  leaseExpiresAt: number | null;
+  /** 已认领执行过的次数，从 0 开始；重试退避判断依据 MONO_JOB_MAX_ATTEMPTS。 */
+  attemptCount: number;
+  /** 重试退避：非空时表示这个任务在这个时间点之前不参与认领。 */
+  nextRunAt: number | null;
+  /** 最后一次认领它的 worker 所在的构建/版本标识，供排障时区分是哪版代码跑的。 */
+  workerVersion: string | null;
 };
