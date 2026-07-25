@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { access, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { getMonoJob, updateMonoJobResult } from "./store";
@@ -9,6 +9,15 @@ import type { MonoJob, ProductPipelineInput } from "./contracts";
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 const WORKFLOW_ID = "hat-62604171-v1";
 const PRODUCT_CUTOUT_CONCURRENCY = Math.max(1, Math.min(3, Number(process.env.PRODUCT_PIPELINE_CUTOUT_CONCURRENCY) || 3));
+const MODEL_CONCURRENCY = 2;
+const DETAIL_SLOTS = [
+  ["01", 790, 1243, "model"], ["02", 790, 681, "fixed"], ["03", 790, 1021, "model"],
+  ["04", 790, 1008, "model"], ["05", 790, 1005, "model"], ["06", 790, 1004, "model"],
+  ["07", 790, 1005, "model"], ["08", 790, 1025, "model"], ["09", 790, 688, "fixed"],
+  ["10", 790, 610, "master"], ["11", 790, 1026, "original"],
+] as const;
+type DetailSlot = typeof DETAIL_SLOTS[number];
+type TemplateManifest = { version: string; files: Record<string, { sha256: string; kind: string }> };
 
 export type ProductFolder = { id: string; name: string; imageCount: number };
 type SourceImage = { path: string; name: string; stem: string; size: number; mtimeMs: number; hash: string };
@@ -233,25 +242,114 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   const sources = await sourceImages(path.join(absolutePath, "原图"));
   const stagingRoot = path.join(process.cwd(), "data", "product-pipeline-staging", job.id);
   const masterStage = path.join(stagingRoot, "主图");
-  await mkdir(masterStage, { recursive: true });
-  progress(job, "正在生成白底主图", 5, { sourceCount: sources.length, outputs: [] });
-  const outputs: ({ name: string; sha256: string } | undefined)[] = Array.from({ length: sources.length });
-  await runWithConcurrency(sources, PRODUCT_CUTOUT_CONCURRENCY, async (source, index) => {
-    if (signal.aborted) throw new Error("任务已取消");
+  const masterDestination = path.join(absolutePath, "主图");
+  const reusable = await findReusableMasters(masterDestination, sources);
+  let masters: string[];
+  if (reusable) {
+    progress(job, "main_published", 20, { sourceCount: sources.length, resumed: true, masterHashes: reusable.map((item) => item.hash) });
+    masters = reusable.map((item) => item.path);
+  } else {
+    await mkdir(masterStage, { recursive: true });
+    progress(job, "正在生成白底主图", 5, { sourceCount: sources.length, outputs: [] });
+    const outputs: ({ name: string; sha256: string } | undefined)[] = Array.from({ length: sources.length });
+    await runWithConcurrency(sources, PRODUCT_CUTOUT_CONCURRENCY, async (source, index) => {
+      if (signal.aborted) throw new Error("任务已取消");
+      await assertSourcesUnchanged(sources);
+      const name = `${source.stem}.jpg`; const output = path.join(masterStage, name);
+      await makeWhiteMaster(source, output, signal);
+      outputs[index] = { name, sha256: sha256(await readFile(output)) };
+      progress(job, "正在生成白底主图", Math.round(5 + (outputs.filter(Boolean).length / sources.length) * 70), { sourceCount: sources.length, outputs: outputs.filter(Boolean) });
+    });
     await assertSourcesUnchanged(sources);
-    const name = `${source.stem}.jpg`;
-    const output = path.join(masterStage, name);
-    await makeWhiteMaster(source, output, signal);
-    outputs[index] = { name, sha256: createHash("sha256").update(await readFile(output)).digest("hex") };
-    const complete = outputs.filter(Boolean).length;
-    progress(job, "正在生成白底主图", Math.round(5 + (complete / sources.length) * 70), { sourceCount: sources.length, outputs: outputs.filter(Boolean) });
-  });
+    await atomicPublish(masterStage, masterDestination);
+    masters = sources.map((source) => path.join(masterDestination, `${source.stem}.jpg`));
+    progress(job, "main_published", 25, { resumed: false, masterHashes: await Promise.all(masters.map(fileHash)) });
+  }
+  const templateRoot = path.join(process.cwd(), "config", "product-pipeline", WORKFLOW_ID);
+  const manifest = await validateTemplateBundle(templateRoot);
   await assertSourcesUnchanged(sources);
-  await atomicPublish(masterStage, path.join(absolutePath, "主图"));
-  // Never create a partial images directory. It is only published after all eleven
-  // template artifacts have been generated and verified by the image-model stage.
-  const templateRoot = process.env.PRODUCT_PIPELINE_TEMPLATE_ROOT;
-  if (!templateRoot) throw new Error("白底主图已完成；详情套图模板包尚未配置，未发布 images 阶段");
-  await cp(templateRoot, path.join(stagingRoot, "template-validation"), { recursive: true, errorOnExist: true });
-  throw new Error("详情套图生成器尚未部署，未发布 images 阶段");
+  progress(job, "classifying", 30, { templateVersion: manifest.version });
+  const selected = await chooseProducts(masters, sources.length);
+  if (!selected.length) throw new Error("无法识别可用商品颜色；未调用付费生图服务");
+  const detailStage = path.join(stagingRoot, "images"); await mkdir(detailStage, { recursive: true });
+  const baseName = path.basename(absolutePath);
+  const records: Record<string, unknown>[] = [];
+  progress(job, "generating_models", 35, { colorAssignments: selected.map((item) => item.index) });
+  await runWithConcurrency(DETAIL_SLOTS.filter((slot) => slot[3] === "model"), MODEL_CONCURRENCY, async (slot, index) => {
+    const assignment = selected.length === 1 ? 0 : selected.length === 2
+      ? (index < 4 ? 0 : 1)
+      : ([0, 0, 0, 1, 1, 2, 2][index] ?? 2);
+    const product = selected[assignment].path;
+    const scene = path.join(templateRoot, `model-${slot[0]}.svg`);
+    const output = path.join(detailStage, `${baseName}_${slot[0]}.jpg`);
+    const record = await generateModelSlot(product, scene, output, slot, signal);
+    records.push({ slot: slot[0], ...record });
+    progress(job, "generating_models", 35 + records.length * 5, { slots: records });
+  });
+  progress(job, "compositing", 75, { slots: records });
+  for (const slot of DETAIL_SLOTS.filter((item) => item[3] !== "model")) {
+    const output = path.join(detailStage, `${baseName}_${slot[0]}.jpg`);
+    if (slot[3] === "fixed") await sharp(path.join(templateRoot, `fixed-${slot[0]}.svg`)).jpeg({ quality: 95 }).resize(slot[1], slot[2], { fit: "fill" }).toFile(output);
+    else await makeCollage(slot[3] === "master" ? masters : sources.map((source) => source.path), output, slot[1], slot[2]);
+    records.push({ slot: slot[0], attempts: 0, qa: "not-required", sha256: await fileHash(output) });
+  }
+  progress(job, "qa", 87, { slots: records });
+  await verifyDetailOutputs(detailStage, baseName, sources, DETAIL_SLOTS);
+  await assertSourcesUnchanged(sources);
+  progress(job, "publishing_images", 93, { slots: records });
+  await publishImages(detailStage, path.join(absolutePath, "images"), baseName);
+  return { stage: "completed", progress: 100, relativePath, templateVersion: manifest.version, slots: records, resumed: Boolean(reusable) };
+}
+
+const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+async function fileHash(file: string): Promise<string> { return sha256(await readFile(file)); }
+async function findReusableMasters(destination: string, sources: SourceImage[]): Promise<{ path: string; hash: string }[] | null> {
+  try { const results = await Promise.all(sources.map(async (source) => { const file = path.join(destination, `${source.stem}.jpg`); await sharp(file).metadata(); return { path: file, hash: await fileHash(file) }; })); return results; } catch { return null; }
+}
+async function validateTemplateBundle(root: string): Promise<TemplateManifest> {
+  const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8")) as TemplateManifest;
+  if (manifest.version !== WORKFLOW_ID) throw new Error("商品套图模板版本不匹配");
+  for (const [name, info] of Object.entries(manifest.files)) if (await fileHash(path.join(root, name)) !== info.sha256) throw new Error(`商品套图模板损坏: ${name}`);
+  return manifest;
+}
+async function chooseProducts(masters: string[], sourceCount: number): Promise<{ path: string; index: number }[]> {
+  const scored = await Promise.all(masters.map(async (file, index) => ({ path: file, index, score: (await sharp(file).stats()).channels.reduce((sum, channel) => sum + channel.stdev, 0) })));
+  scored.sort((a, b) => b.score - a.score);
+  const count = Math.min(3, Math.max(1, sourceCount)); return scored.slice(0, count);
+}
+async function generateModelSlot(product: string, scene: string, output: string, slot: DetailSlot, signal: AbortSignal): Promise<Record<string, unknown>> {
+  let best: Buffer | null = null; let warning: string | undefined;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const generated = await requestModelImage(product, scene, slot, signal);
+    try { await sharp(generated).metadata(); best = generated; break; } catch { warning = "生成结果无法解码"; }
+  }
+  if (!best) throw new Error(`模特槽位 ${slot[0]} 没有有效候选图，未发布 images`);
+  await sharp(best).resize(slot[1], slot[2], { fit: "cover", position: "centre" }).jpeg({ quality: 95 }).toFile(output);
+  return { attempts: 1, qa: warning ? "warning" : "passed", warning, sha256: await fileHash(output) };
+}
+async function requestModelImage(product: string, scene: string, slot: DetailSlot, signal: AbortSignal): Promise<Buffer> {
+  const base = process.env.MONO_IMAGE_BASE_URL; const key = process.env.MONO_IMAGE_API_KEY;
+  if (!base || !key) throw new Error("详情套图需要配置 MONO_IMAGE_BASE_URL 和 MONO_IMAGE_API_KEY（将调用付费 gpt-image-2）");
+  const endpoint = process.env.MONO_IMAGE_GENERATE_URL ?? new URL("/v1/api/generate", base).toString();
+  const [productBytes, sceneBytes] = await Promise.all([readFile(product), readFile(scene)]);
+  const dataUrl = (bytes: Buffer, mime: string) => `data:${mime};base64,${bytes.toString("base64")}`;
+  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify({ model: "gpt-image-2", prompt: `Create product model image slot ${slot[0]}. Product reference is authoritative for hat color, logo, embroidery, crown, brim and construction. Scene reference only constrains pose, composition, clothing mood and light; do not reproduce the reference person's identity. No extra hats or text.`, images: [dataUrl(productBytes, "image/jpeg"), dataUrl(sceneBytes, "image/svg+xml")], aspectRatio: `${slot[1]}:${slot[2]}`, replyType: "json" }), signal });
+  const json = await response.json().catch(() => null) as { url?: string; results?: { url?: string }[] } | null;
+  const url = json?.url ?? json?.results?.[0]?.url; if (!response.ok || !url) throw new Error(`gpt-image-2 请求失败 (HTTP ${response.status})`);
+  const image = await fetch(url, { signal }); if (!image.ok) throw new Error("无法下载 gpt-image-2 结果"); return Buffer.from(await image.arrayBuffer());
+}
+async function makeCollage(inputs: string[], output: string, width: number, height: number): Promise<void> {
+  const count = Math.min(3, inputs.length); const cell = Math.floor(width / count);
+  const layers = await Promise.all(inputs.slice(0, count).map(async (input, index) => ({ input: await sharp(input).resize(cell, height, { fit: "contain", background: "white" }).jpeg().toBuffer(), left: index * cell, top: 0 })));
+  await sharp({ create: { width, height, channels: 3, background: "white" } }).composite(layers).jpeg({ quality: 95 }).toFile(output);
+}
+async function verifyDetailOutputs(stage: string, base: string, sources: SourceImage[], slots: readonly DetailSlot[]): Promise<void> {
+  for (const [id, width, height] of slots) { const meta = await sharp(path.join(stage, `${base}_${id}.jpg`)).metadata(); if (meta.width !== width || meta.height !== height) throw new Error(`详情图 ${id} 尺寸校验失败`); }
+  await assertSourcesUnchanged(sources);
+}
+async function publishImages(stage: string, destination: string, base: string): Promise<void> {
+  const merge = `${stage}-merged`; await mkdir(merge, { recursive: true });
+  try { await cp(destination, merge, { recursive: true, errorOnExist: false }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  for (const [id] of DETAIL_SLOTS) await cp(path.join(stage, `${base}_${id}.jpg`), path.join(merge, `${base}_${id}.jpg`));
+  await atomicPublish(merge, destination);
 }
