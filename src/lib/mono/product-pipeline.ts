@@ -127,10 +127,27 @@ async function requestCutout(source: SourceImage, signal: AbortSignal): Promise<
   throw new Error("product_cutout 超时");
 }
 
+export async function composeWhiteMaster(sourcePath: string, cutout: Buffer, output: string): Promise<void> {
+  const [sourceMeta, cutoutMeta] = await Promise.all([sharp(sourcePath).metadata(), sharp(cutout).metadata()]);
+  if (!sourceMeta.width || !sourceMeta.height) throw new Error("无法读取原图尺寸");
+  if (cutoutMeta.width !== sourceMeta.width || cutoutMeta.height !== sourceMeta.height) {
+    throw new Error("抠图产物尺寸与原图不一致，已拒绝改变商品构图");
+  }
+  // Retain the source pixels wherever the mask is opaque.  The cutout only
+  // supplies alpha; it must never be resized or letterboxed into a new canvas.
+  const [sourceRgb, alpha] = await Promise.all([
+    sharp(sourcePath).removeAlpha().toColorspace("srgb").toBuffer(),
+    sharp(cutout).ensureAlpha().extractChannel("alpha").toBuffer(),
+  ]);
+  const foreground = await sharp(sourceRgb).joinChannel(alpha).png().toBuffer();
+  await sharp({ create: { width: sourceMeta.width, height: sourceMeta.height, channels: 3, background: "#ffffff" } })
+    .composite([{ input: foreground, left: 0, top: 0 }])
+    .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
+    .toFile(output);
+}
+
 async function makeWhiteMaster(source: SourceImage, output: string, signal: AbortSignal): Promise<void> {
-  const product = await sharp(await requestCutout(source, signal)).resize({ width: 760, height: 760, fit: "contain", withoutEnlargement: true }).png().toBuffer();
-  await sharp({ create: { width: 800, height: 800, channels: 3, background: "#ffffff" } })
-    .composite([{ input: product, gravity: "centre" }]).jpeg({ quality: 92, chromaSubsampling: "4:4:4" }).toFile(output);
+  await composeWhiteMaster(source.path, await requestCutout(source, signal), output);
 }
 
 /** Runs a bounded number of independent source-image jobs without allowing a

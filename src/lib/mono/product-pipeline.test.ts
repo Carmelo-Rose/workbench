@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { atomicPublish, listProductFolders, resolveProductFolder, runWithConcurrency } from "./product-pipeline";
+import sharp from "sharp";
+import { atomicPublish, composeWhiteMaster, listProductFolders, resolveProductFolder, runWithConcurrency } from "./product-pipeline";
 import { productPipelineInputSchema } from "./contracts";
 
 const roots: string[] = [];
@@ -68,5 +69,36 @@ describe("product pipeline cutout concurrency", () => {
     });
     expect(peak).toBe(3);
     expect(completed.sort()).toEqual([0, 1, 2, 3, 4, 5, 6]);
+  });
+});
+
+describe("white master composition", () => {
+  it("keeps the original canvas and replaces only transparent cutout pixels with white", async () => {
+    const root = await fixture();
+    const source = path.join(root, "source.png");
+    const cutout = path.join(root, "cutout.png");
+    const output = path.join(root, "output.jpg");
+    await sharp({ create: { width: 6, height: 4, channels: 3, background: "#2468c0" } }).png().toFile(source);
+    const opaqueProduct = await sharp({ create: { width: 2, height: 2, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
+    await sharp({ create: { width: 6, height: 4, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: opaqueProduct, left: 2, top: 1 }]).png().toFile(cutout);
+
+    await composeWhiteMaster(source, await readFile(cutout), output);
+
+    const rendered = sharp(output);
+    await expect(rendered.metadata()).resolves.toMatchObject({ width: 6, height: 4, format: "jpeg" });
+    const { data, info } = await rendered.raw().toBuffer({ resolveWithObject: true });
+    const pixel = (x: number, y: number) => Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x + 1) * info.channels));
+    expect(pixel(0, 0)).toEqual([255, 255, 255]);
+    expect(pixel(2, 1)[2]).toBeGreaterThan(150);
+  });
+
+  it("rejects a cutout whose canvas would alter the original composition", async () => {
+    const root = await fixture();
+    const source = path.join(root, "source.png");
+    const cutout = path.join(root, "cutout.png");
+    await sharp({ create: { width: 6, height: 4, channels: 3, background: "#ffffff" } }).png().toFile(source);
+    await sharp({ create: { width: 5, height: 4, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(cutout);
+    await expect(composeWhiteMaster(source, await readFile(cutout), path.join(root, "output.jpg"))).rejects.toThrow("尺寸与原图不一致");
   });
 });
