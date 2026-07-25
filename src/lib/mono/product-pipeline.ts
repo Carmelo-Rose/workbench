@@ -132,18 +132,46 @@ async function makeWhiteMaster(source: SourceImage, output: string, signal: Abor
     .composite([{ input: product, gravity: "centre" }]).jpeg({ quality: 92, chromaSubsampling: "4:4:4" }).toFile(output);
 }
 
-async function atomicPublish(stage: string, destination: string): Promise<void> {
+/**
+ * Publish from the local Workbench staging disk to the product share.
+ *
+ * A rename is atomic only within one filesystem.  The staging area lives on
+ * the Workbench disk whereas the product directory is a UNC share, so first
+ * copy to a sibling directory on the share and only then rename on that share.
+ */
+export async function atomicPublish(stage: string, destination: string): Promise<void> {
   const parent = path.dirname(destination);
   await mkdir(parent, { recursive: true });
+  const publishStage = path.join(parent, `.${path.basename(destination)}.workbench-stage-${randomUUID()}`);
   const backup = `${destination}.backup-${randomUUID()}`;
+  let movedExisting = false;
+  let published = false;
   try {
-    try { await rename(destination, backup); } catch { /* no existing stage */ }
-    await rename(stage, destination);
-    await rm(backup, { recursive: true, force: true });
+    await cp(stage, publishStage, { recursive: true, errorOnExist: true });
+    try {
+      await rename(destination, backup);
+      movedExisting = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await rename(publishStage, destination);
+    published = true;
   } catch (error) {
-    try { await rename(backup, destination); } catch { /* best effort restoration */ }
+    if (movedExisting && !published) {
+      try { await rename(backup, destination); } catch { /* best effort restoration */ }
+    }
     throw error;
+  } finally {
+    // A failed copy never affects the existing product directory.  A failed
+    // publish leaves the local staging data for diagnosis/retry.
+    if (!published) await rm(publishStage, { recursive: true, force: true });
   }
+  // Cleanup must not turn an already-published, valid directory into a failed
+  // job.  A stale backup is harmless and can be recovered manually if needed.
+  await Promise.all([
+    rm(backup, { recursive: true, force: true }),
+    rm(stage, { recursive: true, force: true }),
+  ]);
 }
 
 function progress(job: MonoJob, stage: string, percent: number, result: Record<string, unknown>): void {

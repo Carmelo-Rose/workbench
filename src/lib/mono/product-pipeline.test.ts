@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listProductFolders, resolveProductFolder } from "./product-pipeline";
+import { atomicPublish, listProductFolders, resolveProductFolder } from "./product-pipeline";
 import { productPipelineInputSchema } from "./contracts";
 
 const roots: string[] = [];
@@ -31,5 +31,25 @@ describe("product pipeline folder isolation", () => {
       folderId: Buffer.from("123").toString("base64url"),
       workflowId: "hat-62604171-v1",
     }).success).toBe(true);
+  });
+});
+
+describe("product pipeline publishing", () => {
+  it("copies local staging to a sibling share stage before atomically replacing the destination", async () => {
+    const root = await fixture();
+    const localStage = path.join(root, "local-staging", "主图");
+    const destination = path.join(root, "A", "商品一", "主图");
+    await mkdir(localStage, { recursive: true });
+    await mkdir(destination, { recursive: true });
+    await writeFile(path.join(localStage, "new.jpg"), "new-master");
+    await writeFile(path.join(destination, "old.jpg"), "old-master");
+
+    await atomicPublish(localStage, destination);
+
+    await expect(readFile(path.join(destination, "new.jpg"), "utf8")).resolves.toBe("new-master");
+    await expect(access(path.join(destination, "old.jpg"))).rejects.toThrow();
+    await expect(access(localStage)).rejects.toThrow();
+    const siblings = await (await import("node:fs/promises")).readdir(path.dirname(destination));
+    expect(siblings.some((name) => name.includes(".workbench-stage-") || name.includes(".backup-"))).toBe(false);
   });
 });
