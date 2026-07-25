@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -67,6 +68,29 @@ class TenantIsolationTest(unittest.TestCase):
                 f"job:{job['id']}/result.mp4",
                 "workspace-b",
             )
+
+    def test_product_workers_claim_each_queued_job_once(self) -> None:
+        jobs = [
+            store.create_job("workspace-a", "user-a", "product_cutout", {}, {})
+            for _ in range(3)
+        ]
+        claimed: list[str] = []
+        lock = threading.Lock()
+
+        def claim() -> None:
+            job = store.claim_next_queued("product_cutout")
+            if job:
+                with lock:
+                    claimed.append(job["id"])
+
+        threads = [threading.Thread(target=claim) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(set(claimed), {job["id"] for job in jobs})
+        self.assertEqual(len(claimed), len(set(claimed)))
 
 
 if __name__ == "__main__":

@@ -260,12 +260,39 @@ def update_job(job_id: str, **fields: Any) -> None:
         conn.execute(f"UPDATE jobs SET {', '.join(cols)} WHERE id=?", vals)
 
 
-def next_queued() -> dict[str, Any] | None:
+def claim_next_queued(
+    capability: str | None = None,
+    exclude_capabilities: tuple[str, ...] = (),
+) -> dict[str, Any] | None:
+    """Atomically claim the oldest matching queued job for one worker thread."""
     with _conn() as conn:
+        conditions = ["status='queued'"]
+        values: list[Any] = []
+        if capability is not None:
+            conditions.append("capability=?")
+            values.append(capability)
+        if exclude_capabilities:
+            conditions.append(
+                f"capability NOT IN ({','.join('?' for _ in exclude_capabilities)})"
+            )
+            values.extend(exclude_capabilities)
+        where = " AND ".join(conditions)
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT * FROM jobs WHERE status='queued' ORDER BY created_at ASC LIMIT 1"
+            f"SELECT id FROM jobs WHERE {where} ORDER BY created_at ASC LIMIT 1",
+            values,
         ).fetchone()
-    return _row_to_job(row) if row else None
+        if row is None:
+            return None
+        now = now_iso()
+        claimed = conn.execute(
+            "UPDATE jobs SET status='running', started_at=? WHERE id=? AND status='queued'",
+            (now, row["id"]),
+        )
+        if claimed.rowcount != 1:
+            return None
+        job = conn.execute("SELECT * FROM jobs WHERE id=?", (row["id"],)).fetchone()
+    return _row_to_job(job) if job else None
 
 
 def count_by_status() -> dict[str, int]:

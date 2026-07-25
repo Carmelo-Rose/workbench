@@ -20,25 +20,48 @@ _PROGRESS_RE = re.compile(r"^PROGRESS\s+(\d{1,3})\s*(.*)$")
 
 POLL_INTERVAL = 1.0
 
-_worker_thread: threading.Thread | None = None
+PRODUCT_CUTOUT_CONCURRENCY = max(
+    1, min(3, int(os.environ.get("TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY", "3")))
+)
+_worker_threads: list[threading.Thread] = []
 
 
 def start_worker() -> None:
-    global _worker_thread
-    if _worker_thread and _worker_thread.is_alive():
+    global _worker_threads
+    if any(thread.is_alive() for thread in _worker_threads):
         return
-    _worker_thread = threading.Thread(target=_loop, name="gpu-worker", daemon=True)
-    _worker_thread.start()
+    _worker_threads = [
+        threading.Thread(
+            target=_loop,
+            kwargs={"capability": "product_cutout"},
+            name=f"product-cutout-worker-{index + 1}",
+            daemon=True,
+        )
+        for index in range(PRODUCT_CUTOUT_CONCURRENCY)
+    ]
+    _worker_threads.append(
+        threading.Thread(
+            target=_loop,
+            kwargs={"exclude_capabilities": ("product_cutout",)},
+            name="gpu-worker",
+            daemon=True,
+        )
+    )
+    for thread in _worker_threads:
+        thread.start()
 
 
 def worker_alive() -> bool:
-    return bool(_worker_thread and _worker_thread.is_alive())
+    return bool(_worker_threads and all(thread.is_alive() for thread in _worker_threads))
 
 
-def _loop() -> None:
+def _loop(
+    capability: str | None = None,
+    exclude_capabilities: tuple[str, ...] = (),
+) -> None:
     while True:
         try:
-            job = store.next_queued()
+            job = store.claim_next_queued(capability, exclude_capabilities)
             if job:
                 _run_job(job)
             else:

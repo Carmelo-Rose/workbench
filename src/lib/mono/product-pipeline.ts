@@ -8,6 +8,7 @@ import type { MonoJob, ProductPipelineInput } from "./contracts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 const WORKFLOW_ID = "hat-62604171-v1";
+const PRODUCT_CUTOUT_CONCURRENCY = Math.max(1, Math.min(3, Number(process.env.PRODUCT_PIPELINE_CUTOUT_CONCURRENCY) || 3));
 
 export type ProductFolder = { id: string; name: string; imageCount: number };
 type SourceImage = { path: string; name: string; stem: string; size: number; mtimeMs: number; hash: string };
@@ -132,6 +133,33 @@ async function makeWhiteMaster(source: SourceImage, output: string, signal: Abor
     .composite([{ input: product, gravity: "centre" }]).jpeg({ quality: 92, chromaSubsampling: "4:4:4" }).toFile(output);
 }
 
+/** Runs a bounded number of independent source-image jobs without allowing a
+ * single product run to flood the gateway queue. */
+export async function runWithConcurrency<T>(
+  values: readonly T[],
+  concurrency: number,
+  worker: (value: T, index: number) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  let failure: unknown;
+  const run = async (): Promise<void> => {
+    for (;;) {
+      if (failure) return;
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= values.length) return;
+      try {
+        await worker(values[index], index);
+      } catch (error) {
+        failure ??= error;
+        return;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, concurrency), values.length) }, run));
+  if (failure) throw failure;
+}
+
 /**
  * Publish from the local Workbench staging disk to the product share.
  *
@@ -190,17 +218,17 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   const masterStage = path.join(stagingRoot, "主图");
   await mkdir(masterStage, { recursive: true });
   progress(job, "正在生成白底主图", 5, { sourceCount: sources.length, outputs: [] });
-  const outputs: { name: string; sha256: string }[] = [];
-  for (let index = 0; index < sources.length; index += 1) {
+  const outputs: ({ name: string; sha256: string } | undefined)[] = Array.from({ length: sources.length });
+  await runWithConcurrency(sources, PRODUCT_CUTOUT_CONCURRENCY, async (source, index) => {
     if (signal.aborted) throw new Error("任务已取消");
     await assertSourcesUnchanged(sources);
-    const source = sources[index];
     const name = `${source.stem}.jpg`;
     const output = path.join(masterStage, name);
     await makeWhiteMaster(source, output, signal);
-    outputs.push({ name, sha256: createHash("sha256").update(await readFile(output)).digest("hex") });
-    progress(job, "正在生成白底主图", Math.round(5 + ((index + 1) / sources.length) * 70), { sourceCount: sources.length, outputs });
-  }
+    outputs[index] = { name, sha256: createHash("sha256").update(await readFile(output)).digest("hex") };
+    const complete = outputs.filter(Boolean).length;
+    progress(job, "正在生成白底主图", Math.round(5 + (complete / sources.length) * 70), { sourceCount: sources.length, outputs: outputs.filter(Boolean) });
+  });
   await assertSourcesUnchanged(sources);
   await atomicPublish(masterStage, path.join(absolutePath, "主图"));
   // Never create a partial images directory. It is only published after all eleven

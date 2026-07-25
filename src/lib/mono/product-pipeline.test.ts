@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { atomicPublish, listProductFolders, resolveProductFolder } from "./product-pipeline";
+import { atomicPublish, listProductFolders, resolveProductFolder, runWithConcurrency } from "./product-pipeline";
 import { productPipelineInputSchema } from "./contracts";
 
 const roots: string[] = [];
@@ -51,5 +51,22 @@ describe("product pipeline publishing", () => {
     await expect(access(localStage)).rejects.toThrow();
     const siblings = await (await import("node:fs/promises")).readdir(path.dirname(destination));
     expect(siblings.some((name) => name.includes(".workbench-stage-") || name.includes(".backup-"))).toBe(false);
+  });
+});
+
+describe("product pipeline cutout concurrency", () => {
+  it("limits in-flight white-master work to the configured bound", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const completed: number[] = [];
+    await runWithConcurrency([0, 1, 2, 3, 4, 5, 6], 3, async (value) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      completed.push(value);
+      inFlight -= 1;
+    });
+    expect(peak).toBe(3);
+    expect(completed.sort()).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
 });
