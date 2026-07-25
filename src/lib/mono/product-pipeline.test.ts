@@ -3,6 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listProductFolders, resolveProductFolder } from "./product-pipeline";
+import { productPipelineInputSchema } from "./contracts";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -24,5 +25,11 @@ describe("product pipeline folder isolation", () => {
     const root = await fixture();
     const id = Buffer.from("../outside").toString("base64url");
     expect(() => resolveProductFolder(id, root)).toThrow("超出允许目录");
+  });
+  it("accepts an opaque ID generated for a short folder name", () => {
+    expect(productPipelineInputSchema.safeParse({
+      folderId: Buffer.from("123").toString("base64url"),
+      workflowId: "hat-62604171-v1",
+    }).success).toBe(true);
   });
 });

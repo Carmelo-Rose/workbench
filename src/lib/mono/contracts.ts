@@ -116,7 +116,9 @@ export const monoImageGenerationSchema = z.object({
 /** The browser never submits a path. `folderId` is an opaque server-issued id. */
 export const productPipelineWorkflowId = "hat-62604171-v1" as const;
 export const productPipelineInputSchema = z.object({
-  folderId: z.string().min(8).max(2_000),
+  // Base64url IDs for short folder names (for example `123`) can be four
+  // characters long. Security comes from server-side containment validation.
+  folderId: z.string().min(1).max(2_000),
   workflowId: z.literal(productPipelineWorkflowId),
 });
 
