@@ -8,7 +8,7 @@
       "description": "Deterministic BiRefNet_HR-matting product cutout; output is a transparent PNG.",
       "inputs_spec": [{ "field": "image", "required": true, "kind": "image" }],
       "adapter": {
-        "cwd": "D:/hyk_sort/workspace/video-toolbox/gateway/capabilities/product-cutout",
+        "cwd": "D:/hyk_sort/apps/video-toolbox/gateway/capabilities/product-cutout",
         "command": ["{cwd}/.venv/Scripts/python.exe", "toolbox_run.py", "--input", "{input.image}", "--output-dir", "{output_dir}", "--params", "{params_json}"],
         "env": {},
         "timeout_sec": 900
