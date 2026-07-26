@@ -60,15 +60,15 @@ describe("product pipeline cutout concurrency", () => {
     let inFlight = 0;
     let peak = 0;
     const completed: number[] = [];
-    await runWithConcurrency([0, 1, 2, 3, 4, 5, 6], 3, async (value) => {
+    await runWithConcurrency([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], 6, async (value) => {
       inFlight += 1;
       peak = Math.max(peak, inFlight);
       await new Promise((resolve) => setTimeout(resolve, 5));
       completed.push(value);
       inFlight -= 1;
     });
-    expect(peak).toBe(3);
-    expect(completed.sort()).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(peak).toBe(6);
+    expect(completed.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   });
 });
 

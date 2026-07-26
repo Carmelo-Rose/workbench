@@ -21,7 +21,7 @@ _PROGRESS_RE = re.compile(r"^PROGRESS\s+(\d{1,3})\s*(.*)$")
 POLL_INTERVAL = 1.0
 
 PRODUCT_CUTOUT_CONCURRENCY = max(
-    1, min(3, int(os.environ.get("TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY", "3")))
+    1, min(6, int(os.environ.get("TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY", "6")))
 )
 _worker_threads: list[threading.Thread] = []
 

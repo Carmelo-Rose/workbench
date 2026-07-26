@@ -8,7 +8,7 @@ import type { MonoJob, ProductPipelineInput } from "./contracts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 const WORKFLOW_ID = "hat-62604171-v1";
-const PRODUCT_CUTOUT_CONCURRENCY = Math.max(1, Math.min(3, Number(process.env.PRODUCT_PIPELINE_CUTOUT_CONCURRENCY) || 3));
+const PRODUCT_CUTOUT_CONCURRENCY = Math.max(1, Math.min(6, Number(process.env.PRODUCT_PIPELINE_CUTOUT_CONCURRENCY) || 6));
 const MODEL_CONCURRENCY = 2;
 const DETAIL_SLOTS = [
   ["01", 790, 1243, "model"], ["02", 790, 681, "fixed"], ["03", 790, 1021, "model"],
