@@ -4,6 +4,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { updateMonoJobResult } from "./store";
 import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
+import { getConfigValue } from "@/lib/server/api-config";
 import type { MonoJob, ProductPipelineInput } from "./contracts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
@@ -499,7 +500,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     const product = selected[assignment].path;
     const scene = path.join(templateRoot, `model-${slot[0]}.svg`);
     const output = path.join(detailStage, `${baseName}_${slot[0]}.jpg`);
-    const record = await generateModelSlot(product, scene, output, slot, signal);
+    const record = await generateModelSlot(product, scene, output, slot, signal, job.workspaceId);
     records.push({ slot: slot[0], ...record });
     progress(job, "generating_models", 35 + records.length * 5, { slots: records });
   });
@@ -534,18 +535,18 @@ async function chooseProducts(masters: string[], sourceCount: number): Promise<{
   scored.sort((a, b) => b.score - a.score);
   const count = Math.min(3, Math.max(1, sourceCount)); return scored.slice(0, count);
 }
-async function generateModelSlot(product: string, scene: string, output: string, slot: DetailSlot, signal: AbortSignal): Promise<Record<string, unknown>> {
+async function generateModelSlot(product: string, scene: string, output: string, slot: DetailSlot, signal: AbortSignal, workspaceId: string): Promise<Record<string, unknown>> {
   let best: Buffer | null = null; let warning: string | undefined;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const generated = await requestModelImage(product, scene, slot, signal);
+    const generated = await requestModelImage(product, scene, slot, signal, workspaceId);
     try { await sharp(generated).metadata(); best = generated; break; } catch { warning = "生成结果无法解码"; }
   }
   if (!best) throw new Error(`模特槽位 ${slot[0]} 没有有效候选图，未发布 images`);
   await sharp(best).resize(slot[1], slot[2], { fit: "cover", position: "centre" }).jpeg({ quality: 95 }).toFile(output);
   return { attempts: 1, qa: warning ? "warning" : "passed", warning, sha256: await fileHash(output) };
 }
-async function requestModelImage(product: string, scene: string, slot: DetailSlot, signal: AbortSignal): Promise<Buffer> {
-  const base = process.env.MONO_IMAGE_BASE_URL; const key = process.env.MONO_IMAGE_API_KEY;
+async function requestModelImage(product: string, scene: string, slot: DetailSlot, signal: AbortSignal, workspaceId: string): Promise<Buffer> {
+  const base = getConfigValue("MONO_IMAGE_BASE_URL", workspaceId); const key = getConfigValue("MONO_IMAGE_API_KEY", workspaceId);
   if (!base || !key) throw new Error("详情套图需要配置 MONO_IMAGE_BASE_URL 和 MONO_IMAGE_API_KEY（将调用付费 gpt-image-2）");
   const endpoint = process.env.MONO_IMAGE_GENERATE_URL ?? new URL("/v1/api/generate", base).toString();
   const [productBytes, sceneBytes] = await Promise.all([readFile(product), readFile(scene)]);
