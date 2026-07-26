@@ -3,7 +3,15 @@ import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { atomicPublish, composeWhiteMaster, listProductFolders, resolveProductFolder, runWithConcurrency } from "./product-pipeline";
+import {
+  atomicPublish,
+  composeWhiteMaster,
+  listProductFolders,
+  ProductCutoutScheduler,
+  productPipelineSchedulingSettings,
+  resolveProductFolder,
+  runWithConcurrency,
+} from "./product-pipeline";
 import { productPipelineInputSchema } from "./contracts";
 
 const roots: string[] = [];
@@ -14,6 +22,14 @@ async function fixture(): Promise<string> {
   await mkdir(path.join(root, "B", "无效", "原图"), { recursive: true });
   await writeFile(path.join(root, "A", "商品一", "原图", "hat.JPG"), "not-a-real-image");
   return root;
+}
+
+async function waitFor(assertion: () => boolean, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (assertion()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error(message);
 }
 describe("product pipeline folder isolation", () => {
   it("lists only selectable leaves and never returns an absolute path", async () => {
@@ -69,6 +85,60 @@ describe("product pipeline cutout concurrency", () => {
     });
     expect(peak).toBe(6);
     expect(completed.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  });
+
+  it("fairly shares the global twelve slots among four active product folders", async () => {
+    const scheduler = new ProductCutoutScheduler({ globalCutouts: 12, perFolderCutouts: 6 });
+    const started: string[] = [];
+    let unblock!: () => void;
+    const hold = new Promise<void>((resolve) => { unblock = resolve; });
+    const tasks = ["A", "B", "C", "D"].flatMap((folder) =>
+      Array.from({ length: 6 }, () => scheduler.run(folder, async () => {
+        started.push(folder);
+        await hold;
+      })),
+    );
+
+    await waitFor(() => started.length === 12, "the first twelve fair permits were not granted");
+    expect(started.reduce<Record<string, number>>((counts, folder) => {
+      counts[folder] = (counts[folder] ?? 0) + 1;
+      return counts;
+    }, {})).toEqual({ A: 3, B: 3, C: 3, D: 3 });
+    expect(scheduler.getStats().active).toBe(12);
+
+    unblock();
+    await Promise.all(tasks);
+    expect(scheduler.getStats().active).toBe(0);
+  });
+
+  it("never lets one folder use more than six slots even when global capacity remains", async () => {
+    const scheduler = new ProductCutoutScheduler({ globalCutouts: 12, perFolderCutouts: 6 });
+    const started: string[] = [];
+    let unblock!: () => void;
+    const hold = new Promise<void>((resolve) => { unblock = resolve; });
+    const tasks = Array.from({ length: 12 }, () => scheduler.run("A", async () => {
+      started.push("A");
+      await hold;
+    }));
+
+    await waitFor(() => started.length === 6, "the per-folder ceiling was not reached");
+    expect(scheduler.getStats()).toMatchObject({ active: 6, activeByFolder: { A: 6 } });
+
+    unblock();
+    await Promise.all(tasks);
+  });
+
+  it("allows safe environment tuning while retaining the agreed hard ceilings", () => {
+    expect(productPipelineSchedulingSettings({
+      PRODUCT_PIPELINE_ACTIVE_FOLDERS: "2",
+      PRODUCT_PIPELINE_FOLDER_CUTOUT_CONCURRENCY: "5",
+      PRODUCT_PIPELINE_GLOBAL_CUTOUT_CONCURRENCY: "9",
+    })).toEqual({ activeFolders: 2, perFolderCutouts: 5, globalCutouts: 9 });
+    expect(productPipelineSchedulingSettings({
+      PRODUCT_PIPELINE_ACTIVE_FOLDERS: "99",
+      PRODUCT_PIPELINE_FOLDER_CUTOUT_CONCURRENCY: "99",
+      PRODUCT_PIPELINE_GLOBAL_CUTOUT_CONCURRENCY: "99",
+    })).toEqual({ activeFolders: 4, perFolderCutouts: 6, globalCutouts: 12 });
   });
 });
 

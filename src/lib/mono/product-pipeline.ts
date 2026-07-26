@@ -1,14 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
-import { getMonoJob, updateMonoJobResult } from "./store";
+import { updateMonoJobResult } from "./store";
 import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
 import type { MonoJob, ProductPipelineInput } from "./contracts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 const WORKFLOW_ID = "hat-62604171-v1";
-const PRODUCT_CUTOUT_CONCURRENCY = Math.max(1, Math.min(6, Number(process.env.PRODUCT_PIPELINE_CUTOUT_CONCURRENCY) || 6));
 const MODEL_CONCURRENCY = 2;
 const DETAIL_SLOTS = [
   ["01", 790, 1243, "model"], ["02", 790, 681, "fixed"], ["03", 790, 1021, "model"],
@@ -21,6 +20,203 @@ type TemplateManifest = { version: string; files: Record<string, { sha256: strin
 
 export type ProductFolder = { id: string; name: string; imageCount: number };
 type SourceImage = { path: string; name: string; stem: string; size: number; mtimeMs: number; hash: string };
+
+export type ProductPipelineSchedulingSettings = {
+  activeFolders: number;
+  perFolderCutouts: number;
+  globalCutouts: number;
+};
+
+type Environment = Record<string, string | undefined>;
+
+function boundedConcurrency(env: Environment, key: string, fallback: number, ceiling: number): number {
+  const value = Number(env[key]);
+  if (!Number.isFinite(value) || value < 1) return fallback;
+  return Math.min(ceiling, Math.floor(value));
+}
+
+/**
+ * These limits are intentionally configurable downward for GPU tuning, but the
+ * production-safe ceilings prevent an accidental environment value from
+ * exceeding the agreed four product slots / six per folder / twelve total.
+ */
+export function productPipelineSchedulingSettings(
+  env: Environment = process.env,
+): ProductPipelineSchedulingSettings {
+  const globalCutouts = boundedConcurrency(
+    env,
+    "PRODUCT_PIPELINE_GLOBAL_CUTOUT_CONCURRENCY",
+    12,
+    12,
+  );
+  const configuredPerFolder = env.PRODUCT_PIPELINE_FOLDER_CUTOUT_CONCURRENCY
+    ?? env.PRODUCT_PIPELINE_CUTOUT_CONCURRENCY;
+  const perFolderCutouts = Math.min(
+    globalCutouts,
+    boundedConcurrency(
+      { PRODUCT_PIPELINE_FOLDER_CUTOUT_CONCURRENCY: configuredPerFolder },
+      "PRODUCT_PIPELINE_FOLDER_CUTOUT_CONCURRENCY",
+      6,
+      6,
+    ),
+  );
+  return {
+    activeFolders: boundedConcurrency(env, "PRODUCT_PIPELINE_ACTIVE_FOLDERS", 4, 4),
+    perFolderCutouts,
+    globalCutouts,
+  };
+}
+
+type CutoutWaiter = {
+  folderKey: string;
+  resolve: (release: () => void) => void;
+  reject: (reason: Error) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+};
+
+/**
+ * One Workbench process can run several product jobs.  This arbiter applies a
+ * shared global ceiling while choosing the least-occupied product first; ties
+ * rotate, so four simultaneously active products receive 3/3/3/3 rather than
+ * letting the first folder flood the gateway queue.
+ */
+export class ProductCutoutScheduler {
+  private readonly globalCutouts: number;
+  private readonly perFolderCutouts: number;
+  private active = 0;
+  private readonly activeByFolder = new Map<string, number>();
+  private readonly waitersByFolder = new Map<string, CutoutWaiter[]>();
+  private folderOrder: string[] = [];
+  private lastGrantedFolder: string | null = null;
+  private drainScheduled = false;
+
+  constructor(settings: Pick<ProductPipelineSchedulingSettings, "globalCutouts" | "perFolderCutouts">) {
+    this.globalCutouts = Math.max(1, Math.floor(settings.globalCutouts));
+    this.perFolderCutouts = Math.min(
+      this.globalCutouts,
+      Math.max(1, Math.floor(settings.perFolderCutouts)),
+    );
+  }
+
+  async run<T>(folderKey: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const release = await this.acquire(folderKey, signal);
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  }
+
+  acquire(folderKey: string, signal?: AbortSignal): Promise<() => void> {
+    if (!folderKey) return Promise.reject(new Error("商品抠图缺少文件夹队列标识"));
+    if (signal?.aborted) return Promise.reject(new Error("任务已取消"));
+    return new Promise<() => void>((resolve, reject) => {
+      const waiter: CutoutWaiter = { folderKey, resolve, reject, signal };
+      const onAbort = () => {
+        this.removeWaiter(waiter);
+        reject(new Error("任务已取消"));
+        this.scheduleDrain();
+      };
+      waiter.onAbort = onAbort;
+      const queue = this.waitersByFolder.get(folderKey) ?? [];
+      if (!this.waitersByFolder.has(folderKey)) {
+        this.waitersByFolder.set(folderKey, queue);
+        this.folderOrder.push(folderKey);
+      }
+      queue.push(waiter);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+      this.scheduleDrain();
+    });
+  }
+
+  getStats(): { active: number; activeByFolder: Record<string, number>; queuedByFolder: Record<string, number> } {
+    return {
+      active: this.active,
+      activeByFolder: Object.fromEntries(this.activeByFolder),
+      queuedByFolder: Object.fromEntries(
+        [...this.waitersByFolder.entries()].filter(([, queue]) => queue.length).map(([key, queue]) => [key, queue.length]),
+      ),
+    };
+  }
+
+  private scheduleDrain(): void {
+    if (this.drainScheduled) return;
+    this.drainScheduled = true;
+    queueMicrotask(() => {
+      this.drainScheduled = false;
+      this.drain();
+    });
+  }
+
+  private drain(): void {
+    while (this.active < this.globalCutouts) {
+      const folderKey = this.nextFolderToGrant();
+      if (!folderKey) return;
+      const queue = this.waitersByFolder.get(folderKey);
+      const waiter = queue?.shift();
+      if (!waiter) {
+        this.pruneFolder(folderKey);
+        continue;
+      }
+      waiter.signal?.removeEventListener("abort", waiter.onAbort!);
+      this.active += 1;
+      this.activeByFolder.set(folderKey, (this.activeByFolder.get(folderKey) ?? 0) + 1);
+      this.lastGrantedFolder = folderKey;
+      waiter.resolve(this.releaseFor(folderKey));
+    }
+  }
+
+  private nextFolderToGrant(): string | null {
+    const candidates = this.folderOrder.filter((folderKey) => {
+      const queue = this.waitersByFolder.get(folderKey);
+      return Boolean(queue?.length) && (this.activeByFolder.get(folderKey) ?? 0) < this.perFolderCutouts;
+    });
+    if (!candidates.length) return null;
+    const fewestActive = Math.min(...candidates.map((key) => this.activeByFolder.get(key) ?? 0));
+    const eligible = new Set(candidates.filter((key) => (this.activeByFolder.get(key) ?? 0) === fewestActive));
+    const lastIndex = this.lastGrantedFolder ? this.folderOrder.indexOf(this.lastGrantedFolder) : -1;
+    for (let offset = 1; offset <= this.folderOrder.length; offset += 1) {
+      const key = this.folderOrder[(lastIndex + offset + this.folderOrder.length) % this.folderOrder.length];
+      if (eligible.has(key)) return key;
+    }
+    return candidates[0];
+  }
+
+  private releaseFor(folderKey: string): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const previous = this.activeByFolder.get(folderKey) ?? 0;
+      this.active = Math.max(0, this.active - 1);
+      if (previous <= 1) this.activeByFolder.delete(folderKey);
+      else this.activeByFolder.set(folderKey, previous - 1);
+      this.pruneFolder(folderKey);
+      this.scheduleDrain();
+    };
+  }
+
+  private removeWaiter(waiter: CutoutWaiter): void {
+    const queue = this.waitersByFolder.get(waiter.folderKey);
+    const index = queue?.indexOf(waiter) ?? -1;
+    if (index >= 0) queue!.splice(index, 1);
+    this.pruneFolder(waiter.folderKey);
+  }
+
+  private pruneFolder(folderKey: string): void {
+    const queue = this.waitersByFolder.get(folderKey);
+    if (queue?.length || (this.activeByFolder.get(folderKey) ?? 0) > 0) return;
+    this.waitersByFolder.delete(folderKey);
+    this.folderOrder = this.folderOrder.filter((key) => key !== folderKey);
+    if (this.lastGrantedFolder === folderKey) this.lastGrantedFolder = null;
+  }
+}
+
+const PRODUCT_PIPELINE_SCHEDULING = productPipelineSchedulingSettings();
+const PRODUCT_CUTOUT_CONCURRENCY = PRODUCT_PIPELINE_SCHEDULING.perFolderCutouts;
+const productCutoutScheduler = new ProductCutoutScheduler(PRODUCT_PIPELINE_SCHEDULING);
 
 /** Kept server-side. Do not send this value or an absolute path to a browser. */
 export function productSourceRoot(): string {
@@ -44,6 +240,14 @@ export function resolveProductFolder(id: string, root = productSourceRoot()): { 
   const absolutePath = path.resolve(resolvedRoot, relativePath);
   if (!contained(resolvedRoot, absolutePath)) throw new Error("商品文件夹超出允许目录");
   return { absolutePath, relativePath: path.relative(resolvedRoot, absolutePath) };
+}
+
+/** A server-only, opaque identity for a shared product folder. */
+export function productPipelineFolderKey(folderId: string): string {
+  // Canonicalize base64url first so a padded and an unpadded representation of
+  // the same server-issued folder id cannot create two independent queues.
+  const canonicalId = Buffer.from(folderId, "base64url").toString("base64url");
+  return createHash("sha256").update(canonicalId).digest("hex");
 }
 
 async function validImageCount(originalDir: string): Promise<number> {
@@ -74,10 +278,13 @@ export async function listProductFolders(query = "", root = productSourceRoot())
   return rows.sort((a, b) => a.name.localeCompare(b.name, "zh-CN"));
 }
 
-export function validateProductPipelineInput(input: ProductPipelineInput): { relativePath: string } {
+export function validateProductPipelineInput(input: ProductPipelineInput): { relativePath: string; folderKey: string } {
   if (input.workflowId !== WORKFLOW_ID) throw new Error("不支持的商品套图工作流");
   const resolved = resolveProductFolder(input.folderId);
-  return { relativePath: resolved.relativePath };
+  return {
+    relativePath: resolved.relativePath,
+    folderKey: productPipelineFolderKey(input.folderId),
+  };
 }
 
 async function sourceImages(originalDir: string): Promise<SourceImage[]> {
@@ -107,33 +314,42 @@ async function assertSourcesUnchanged(sources: SourceImage[]): Promise<void> {
   }
 }
 
-async function requestCutout(source: SourceImage, signal: AbortSignal): Promise<Buffer> {
-  const headers = gatewayHeaders();
-  const bytes = await readFile(source.path);
-  const uploaded = await fetch(`${gatewayBase()}/files/raw?name=${encodeURIComponent(source.name)}`, { method: "POST", headers: { ...headers, "content-type": "application/octet-stream" }, body: bytes, signal });
-  if (!uploaded.ok) throw new Error(`product_cutout 上传失败：${uploaded.status}`);
-  const file = await uploaded.json() as { file_id?: string };
-  if (!file.file_id) throw new Error("product_cutout 未返回输入文件标识");
-  const created = await fetch(`${gatewayBase()}/jobs`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ capability: "product_cutout", inputs: { image: file.file_id } }), signal });
-  if (!created.ok) throw new Error(`product_cutout 创建失败：${created.status}`);
-  const gatewayJob = await created.json() as { id?: string };
-  if (!gatewayJob.id) throw new Error("product_cutout 未返回任务标识");
-  for (let attempt = 0; attempt < 900; attempt += 1) {
-    if (signal.aborted) throw new Error("任务已取消");
-    const current = await fetch(`${gatewayBase()}/jobs/${encodeURIComponent(gatewayJob.id)}`, { headers, signal });
-    if (!current.ok) throw new Error(`product_cutout 查询失败：${current.status}`);
-    const info = await current.json() as { status?: string; error?: string; artifacts?: { path: string }[] };
-    if (info.status === "failed" || info.status === "canceled") throw new Error(info.error ?? "product_cutout 失败");
-    if (info.status === "succeeded") {
-      const artifact = info.artifacts?.find((item) => item.path.toLowerCase().endsWith(".png"));
-      if (!artifact) throw new Error("product_cutout 未返回 PNG 产物");
-      const response = await fetch(`${gatewayBase()}/jobs/${encodeURIComponent(gatewayJob.id)}/artifacts/${artifact.path.split("/").map(encodeURIComponent).join("/")}`, { headers, signal });
-      if (!response.ok) throw new Error(`product_cutout 下载失败：${response.status}`);
-      return Buffer.from(await response.arrayBuffer());
+async function requestCutout(source: SourceImage, folderKey: string, signal: AbortSignal): Promise<Buffer> {
+  return productCutoutScheduler.run(folderKey, async () => {
+    const headers = gatewayHeaders();
+    const bytes = await readFile(source.path);
+    const uploaded = await fetch(`${gatewayBase()}/files/raw?name=${encodeURIComponent(source.name)}`, { method: "POST", headers: { ...headers, "content-type": "application/octet-stream" }, body: bytes, signal });
+    if (!uploaded.ok) throw new Error(`product_cutout 上传失败：${uploaded.status}`);
+    const file = await uploaded.json() as { file_id?: string };
+    if (!file.file_id) throw new Error("product_cutout 未返回输入文件标识");
+    const created = await fetch(`${gatewayBase()}/jobs`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      // The gateway receives an opaque queue label only.  No UNC path or folder
+      // name is present in the request, logs, or browser-visible job response.
+      body: JSON.stringify({ capability: "product_cutout", params: { productFolderKey: folderKey }, inputs: { image: file.file_id } }),
+      signal,
+    });
+    if (!created.ok) throw new Error(`product_cutout 创建失败：${created.status}`);
+    const gatewayJob = await created.json() as { id?: string };
+    if (!gatewayJob.id) throw new Error("product_cutout 未返回任务标识");
+    for (let attempt = 0; attempt < 900; attempt += 1) {
+      if (signal.aborted) throw new Error("任务已取消");
+      const current = await fetch(`${gatewayBase()}/jobs/${encodeURIComponent(gatewayJob.id)}`, { headers, signal });
+      if (!current.ok) throw new Error(`product_cutout 查询失败：${current.status}`);
+      const info = await current.json() as { status?: string; error?: string; artifacts?: { path: string }[] };
+      if (info.status === "failed" || info.status === "canceled") throw new Error(info.error ?? "product_cutout 失败");
+      if (info.status === "succeeded") {
+        const artifact = info.artifacts?.find((item) => item.path.toLowerCase().endsWith(".png"));
+        if (!artifact) throw new Error("product_cutout 未返回 PNG 产物");
+        const response = await fetch(`${gatewayBase()}/jobs/${encodeURIComponent(gatewayJob.id)}/artifacts/${artifact.path.split("/").map(encodeURIComponent).join("/")}`, { headers, signal });
+        if (!response.ok) throw new Error(`product_cutout 下载失败：${response.status}`);
+        return Buffer.from(await response.arrayBuffer());
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-  throw new Error("product_cutout 超时");
+    throw new Error("product_cutout 超时");
+  }, signal);
 }
 
 export async function composeWhiteMaster(sourcePath: string, cutout: Buffer, output: string): Promise<void> {
@@ -155,8 +371,8 @@ export async function composeWhiteMaster(sourcePath: string, cutout: Buffer, out
     .toFile(output);
 }
 
-async function makeWhiteMaster(source: SourceImage, output: string, signal: AbortSignal): Promise<void> {
-  await composeWhiteMaster(source.path, await requestCutout(source, signal), output);
+async function makeWhiteMaster(source: SourceImage, output: string, folderKey: string, signal: AbortSignal): Promise<void> {
+  await composeWhiteMaster(source.path, await requestCutout(source, folderKey, signal), output);
 }
 
 /** Runs a bounded number of independent source-image jobs without allowing a
@@ -239,6 +455,7 @@ function progress(job: MonoJob, stage: string, percent: number, result: Record<s
 export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
   const folderId = String(job.input.folderId ?? "");
   const { absolutePath, relativePath } = resolveProductFolder(folderId);
+  const folderKey = productPipelineFolderKey(folderId);
   const sources = await sourceImages(path.join(absolutePath, "原图"));
   const stagingRoot = path.join(process.cwd(), "data", "product-pipeline-staging", job.id);
   const masterStage = path.join(stagingRoot, "主图");
@@ -256,7 +473,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
       if (signal.aborted) throw new Error("任务已取消");
       await assertSourcesUnchanged(sources);
       const name = `${source.stem}.jpg`; const output = path.join(masterStage, name);
-      await makeWhiteMaster(source, output, signal);
+      await makeWhiteMaster(source, output, folderKey, signal);
       outputs[index] = { name, sha256: sha256(await readFile(output)) };
       progress(job, "正在生成白底主图", Math.round(5 + (outputs.filter(Boolean).length / sources.length) * 70), { sourceCount: sources.length, outputs: outputs.filter(Boolean) });
     });

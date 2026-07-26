@@ -21,7 +21,10 @@ _PROGRESS_RE = re.compile(r"^PROGRESS\s+(\d{1,3})\s*(.*)$")
 POLL_INTERVAL = 1.0
 
 PRODUCT_CUTOUT_CONCURRENCY = max(
-    1, min(6, int(os.environ.get("TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY", "6")))
+    # Workbench fairly schedules at most six image cutouts per product folder;
+    # the gateway is the final cross-client guardrail and must never exceed the
+    # agreed twelve total GPU jobs.
+    1, min(12, int(os.environ.get("TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY", "12")))
 )
 _worker_threads: list[threading.Thread] = []
 

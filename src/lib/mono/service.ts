@@ -42,9 +42,11 @@ import {
   cancelMonoJob,
   claimMonoJob,
   claimNextMonoJob,
+  claimNextProductPipelineJob,
   completeMonoJob,
   createMonoAsset,
   createMonoJob,
+  createProductPipelineMonoJob,
   createMonoSubject,
   deleteMonoSubject,
   failOrRetryMonoJob,
@@ -60,13 +62,18 @@ import {
   purgeUnfavoriteMonoJobs,
   reclaimExpiredLeases,
   requeueInterruptedMonoJobs,
+  renewMonoJobLease,
   setMonoJobFavorite,
   updateMonoJobResult,
   updateMonoSubject,
   upsertMonoWorkerHeartbeat,
   type ClaimJobOptions,
 } from "./store";
-import { runProductPipeline, validateProductPipelineInput } from "./product-pipeline";
+import {
+  productPipelineSchedulingSettings,
+  runProductPipeline,
+  validateProductPipelineInput,
+} from "./product-pipeline";
 
 const MAX_IMAGE_ATTEMPTS = 3;
 const controllers = new Map<string, AbortController>();
@@ -76,6 +83,7 @@ const controllers = new Map<string, AbortController>();
  * 让我们自己看不到结果，图片服务那边并不会因此停下来。见 cancelJob 的说明。
  */
 const stopRequested = new Set<string>();
+const PRODUCT_PIPELINE_ACTIVE_FOLDERS = productPipelineSchedulingSettings().activeFolders;
 
 /**
  * 每类任务的并发上限。图片生成打的是远端 HTTP 接口，串行排队没有意义
@@ -86,7 +94,7 @@ const JOB_CONCURRENCY: Record<MonoJobKind, number> = {
   image_generation: Math.max(1, Number(process.env.MONO_IMAGE_JOB_CONCURRENCY) || 3),
   video_analysis: 1,
   matting: 1,
-  product_pipeline: 1,
+  product_pipeline: PRODUCT_PIPELINE_ACTIVE_FOLDERS,
 };
 
 /**
@@ -246,17 +254,13 @@ export function createMattingJob(actor: MonoActor, input: MonoMattingInput): Mon
 
 export function createProductPipelineJob(actor: MonoActor, input: ProductPipelineInput): MonoJob {
   const resolved = validateProductPipelineInput(input);
-  const existing = listMonoJobs(actor, { kind: "product_pipeline", limit: 200 }).find((job) =>
-    (job.status === "queued" || job.status === "running") && job.input.folderId === input.folderId,
-  );
-  if (existing) throw new MonoHttpError(409, "该商品已有正在运行的套图任务");
-  const job = createMonoJob(actor, "product_pipeline", {
+  const job = createProductPipelineMonoJob(actor, {
     folderId: input.folderId,
     workflowId: input.workflowId,
     // The resolved relative path is retained only in the private job record;
     // API responses redact it before leaving the server.
     folderRelativePath: resolved.relativePath,
-  });
+  }, resolved.folderKey);
   scheduleMonoWorker();
   return job;
 }
@@ -370,6 +374,9 @@ export function lightenMonoJob(job: MonoJob): MonoJob & { input: { referenceImag
   const input = { ...job.input };
   delete input.referenceImageUrls;
   delete input.compiledPrompt;
+  // Product paths are needed only by the background runner.  The browser keeps
+  // the opaque folderId it submitted, never the resolved share-relative path.
+  delete input.folderRelativePath;
   if (Array.isArray(input.subjectSnapshots)) {
     input.subjectSnapshots = input.subjectSnapshots.map((snapshot) => {
       if (typeof snapshot !== "object" || snapshot === null) return snapshot;
@@ -428,11 +435,28 @@ const INLINE_CLAIM_OPTIONS: ClaimJobOptions = {
 const workerStartedAt = Date.now();
 
 /**
+ * The persistent product claim enforces folder exclusivity and the four-folder
+ * global limit across processes.  Other Mono kinds retain their existing
+ * queue/lease behavior and get first access to their own independent slots.
+ */
+function claimNextRunnableMonoJob(
+  kinds: readonly MonoJobKind[],
+  options: ClaimJobOptions,
+): MonoJob | null {
+  const nonProductKinds = kinds.filter((kind) => kind !== "product_pipeline");
+  const standard = claimNextMonoJob(nonProductKinds, options);
+  if (standard) return standard;
+  if (!kinds.includes("product_pipeline")) return null;
+  return claimNextProductPipelineJob(PRODUCT_PIPELINE_ACTIVE_FOLDERS, options);
+}
+
+/**
  * 认领到没有空位为止。这里不 await 任务本身——整个函数是同步的，
  * 所以不会有回调插进来改 inFlight；每个任务结束后自己再叫一次 worker 补位。
  */
 function drainMonoJobs(): void {
   try {
+    reclaimExpiredLeases();
     upsertMonoWorkerHeartbeat({
       id: INLINE_WORKER_ID,
       mode: "inline",
@@ -443,7 +467,7 @@ function drainMonoJobs(): void {
     for (;;) {
       const kinds = monoJobKinds.filter((kind) => worker.inFlight[kind] < JOB_CONCURRENCY[kind]);
       if (!kinds.length) return;
-      const job = claimNextMonoJob(kinds, INLINE_CLAIM_OPTIONS);
+      const job = claimNextRunnableMonoJob(kinds, INLINE_CLAIM_OPTIONS);
       if (!job) return;
       worker.inFlight[job.kind] += 1;
       void dispatchClaimedJob(job).finally(() => {
@@ -479,7 +503,7 @@ export async function runStandaloneWorkerTick(
   for (;;) {
     const kinds = monoJobKinds.filter((kind) => inFlight[kind] < effectiveConcurrency[kind]);
     if (!kinds.length) break;
-    const job = claimNextMonoJob(kinds, {
+    const job = claimNextRunnableMonoJob(kinds, {
       workerId,
       leaseMs: MONO_JOB_LEASE_MS,
       workerVersion: MONO_WORKER_VERSION,
@@ -536,6 +560,17 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
   return runWithTenantContext(tenantActor, async () => {
     const controller = new AbortController();
     controllers.set(job.id, controller);
+    const leaseOwner = job.leaseOwner;
+    const leaseHeartbeat = leaseOwner
+      ? setInterval(() => {
+        if (renewMonoJobLease(job.id, leaseOwner, MONO_JOB_LEASE_MS)) return;
+        // If a worker cannot renew its lease, it must stop before it can
+        // publish a stale product stage after another worker has recovered it.
+        console.warn(`[mono] 任务 ${job.id} 的租约续期失败，停止当前执行器`);
+        controller.abort();
+      }, Math.max(10_000, Math.floor(MONO_JOB_LEASE_MS / 3)))
+      : null;
+    leaseHeartbeat?.unref();
     try {
       if (job.kind === "video_analysis") {
         completeMonoJob(job.id, await runVideoAnalysis(job, controller.signal));
@@ -566,6 +601,7 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
         failOrRetryMonoJob(job.id, message, MONO_JOB_MAX_ATTEMPTS, backoffMs);
       }
     } finally {
+      if (leaseHeartbeat) clearInterval(leaseHeartbeat);
       controllers.delete(job.id);
       stopRequested.delete(job.id);
     }

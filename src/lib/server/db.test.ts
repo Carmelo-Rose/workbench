@@ -73,7 +73,7 @@ describe("default workspace migration", () => {
       "SELECT organization_id FROM workspaces WHERE id = 'default'",
     ).get()).toEqual({ organization_id: "org_default" });
     expect(migrated.prepare("PRAGMA user_version").get())
-      .toEqual({ user_version: 10 });
+      .toEqual({ user_version: 11 });
     migrated.close();
   });
 
@@ -115,7 +115,7 @@ describe("default workspace migration", () => {
     migrated.close();
   });
 
-  it("adds mono_jobs lease/retry columns and the mono_workers table on a pre-v10 database", () => {
+  it("adds mono_jobs lease/retry columns and the product queue metadata on a pre-v10 database", () => {
     const dbPath = path.join(
       os.tmpdir(),
       `workbench-worker-queue-${crypto.randomUUID()}.db`,
@@ -164,8 +164,11 @@ describe("default workspace migration", () => {
     expect(migrated.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mono_workers'",
     ).get()).toEqual({ name: "mono_workers" });
+    expect(migrated.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mono_product_pipeline_jobs'",
+    ).get()).toEqual({ name: "mono_product_pipeline_jobs" });
     expect(migrated.prepare("PRAGMA user_version").get())
-      .toEqual({ user_version: 10 });
+      .toEqual({ user_version: 11 });
     migrated.close();
   });
 });

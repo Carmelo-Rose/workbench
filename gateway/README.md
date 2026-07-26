@@ -1,6 +1,6 @@
 # video-toolbox-gateway
 
-跑在 AILAB 服务机（192.168.1.198）上的视频工具箱 Job 网关：为 workbench 提供统一的异步视频处理协议。单 GPU（2080 Ti 22G）串行队列，每个能力独立 venv、以子进程方式执行。
+跑在 AILAB 服务机（192.168.1.198）上的视频工具箱 Job 网关：为 workbench 提供统一的异步视频处理协议。每个能力独立 venv、以子进程方式执行；`product_cutout` 可由 Workbench 的公平调度并行运行，网关仍以 12 个任务作为最终 GPU 硬上限。
 
 源码在 workbench 仓库 `gateway/` 目录维护，部署时同步到服务机 `D:\hyk_sort\workspace\video-toolbox\gateway`。
 
@@ -29,6 +29,12 @@ token、`x-workbench-workspace-id` 和 `x-workbench-user-id`。上传文件、�
 任务会归入 `default` / `local-user`。迁移完成后应关闭。只有完全隔离的本机开发
 环境才能用 `TOOLBOX_ALLOW_INSECURE_LOCAL=true` 跳过 token，生产或局域网部署
 禁止开启。
+
+## 商品白底图并发
+
+Workbench 负责商品文件夹 FIFO 独占、每文件夹最多 6 张和全局公平分配；网关负责
+最终全局保护。默认值为 `TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY=12`，可向下调整，
+但不要超过 12。Workbench 传入的 `productFolderKey` 是不可逆摘要，不含 UNC 路径。
 
 ## 部署（服务机）
 

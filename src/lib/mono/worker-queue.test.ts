@@ -67,6 +67,92 @@ describe("claimNextMonoJob lease exclusivity", () => {
   });
 });
 
+describe("product pipeline folder queue", () => {
+  it("runs four different folders, while a repeat of the same folder waits FIFO", async () => {
+    const store = await import("./store");
+    const { newMonoActor } = await import("./service");
+    const actor = newMonoActor({ userId: "u1", workspaceId: `ws-product-${crypto.randomUUID()}` });
+    const create = (folderKey: string) => store.createProductPipelineMonoJob(
+      actor,
+      { folderId: folderKey, workflowId: "hat-62604171-v1", folderRelativePath: folderKey },
+      folderKey,
+    );
+    const firstA = create("folder-a");
+    const secondA = create("folder-a");
+    const firstB = create("folder-b");
+    const firstC = create("folder-c");
+    const firstD = create("folder-d");
+    const firstE = create("folder-e");
+
+    const claimed = Array.from({ length: 5 }, (_, index) => store.claimNextProductPipelineJob(4, {
+      workerId: `product-worker-${index}`,
+    }));
+    expect(claimed.map((job) => job?.id)).toEqual([firstA.id, firstB.id, firstC.id, firstD.id, undefined]);
+    expect(store.getMonoJob(actor, secondA.id)?.status).toBe("queued");
+    expect(store.getMonoJob(actor, firstE.id)?.status).toBe("queued");
+
+    store.completeMonoJob(firstA.id, { ok: true });
+    const replacement = store.claimNextProductPipelineJob(4, { workerId: "product-worker-replacement" });
+    expect(replacement?.id).toBe(secondA.id);
+
+    for (const job of [...claimed, replacement]) {
+      if (job?.status === "running" && job.id !== firstA.id) store.completeMonoJob(job.id, { ok: true });
+    }
+    store.cancelMonoJob(actor, firstE.id);
+  });
+
+  it("treats a shared folder key as exclusive across workspaces", async () => {
+    const store = await import("./store");
+    const { newMonoActor } = await import("./service");
+    const actorA = newMonoActor({ userId: "u1", workspaceId: `ws-product-a-${crypto.randomUUID()}` });
+    const actorB = newMonoActor({ userId: "u2", workspaceId: `ws-product-b-${crypto.randomUUID()}` });
+    const input = { folderId: "shared", workflowId: "hat-62604171-v1", folderRelativePath: "shared" };
+    const first = store.createProductPipelineMonoJob(actorA, input, "shared-folder-key");
+    const second = store.createProductPipelineMonoJob(actorB, input, "shared-folder-key");
+
+    expect(store.claimNextProductPipelineJob(4, { workerId: "product-worker-a" })?.id).toBe(first.id);
+    expect(store.claimNextProductPipelineJob(4, { workerId: "product-worker-b" })).toBeNull();
+    expect(store.getMonoJob(actorB, second.id)?.status).toBe("queued");
+    store.completeMonoJob(first.id, { ok: true });
+    expect(store.claimNextProductPipelineJob(4, { workerId: "product-worker-b" })?.id).toBe(second.id);
+    store.completeMonoJob(second.id, { ok: true });
+  });
+
+  it("backfills queued product jobs created before folder metadata existed", async () => {
+    const store = await import("./store");
+    const { newMonoActor } = await import("./service");
+    const actor = newMonoActor({ userId: "u1", workspaceId: `ws-product-legacy-${crypto.randomUUID()}` });
+    const legacy = store.createMonoJob(actor, "product_pipeline", {
+      folderId: Buffer.from("legacy-folder").toString("base64url"),
+      workflowId: "hat-62604171-v1",
+      folderRelativePath: "legacy-folder",
+    });
+
+    expect(store.claimNextProductPipelineJob(4, { workerId: "product-worker-legacy" })?.id).toBe(legacy.id);
+    store.completeMonoJob(legacy.id, { ok: true });
+  });
+
+  it("does not allow a later same-folder retry to be bypassed", async () => {
+    const store = await import("./store");
+    const { newMonoActor } = await import("./service");
+    const actor = newMonoActor({ userId: "u1", workspaceId: `ws-product-retry-${crypto.randomUUID()}` });
+    const input = (folderId: string) => ({ folderId, workflowId: "hat-62604171-v1", folderRelativePath: folderId });
+    const retrying = store.createProductPipelineMonoJob(actor, input("folder-a"), "folder-a");
+    const laterA = store.createProductPipelineMonoJob(actor, input("folder-a"), "folder-a");
+    const otherFolder = store.createProductPipelineMonoJob(actor, input("folder-b"), "folder-b");
+
+    expect(store.claimNextProductPipelineJob(4, { workerId: "product-worker-a" })?.id).toBe(retrying.id);
+    expect(store.failOrRetryMonoJob(retrying.id, "transient", 2, 60_000)).toBe("queued");
+    // The earlier A retry is delayed, so A's later request stays behind it;
+    // a different product can still use the free active slot.
+    expect(store.claimNextProductPipelineJob(4, { workerId: "product-worker-b" })?.id).toBe(otherFolder.id);
+    expect(store.getMonoJob(actor, laterA.id)?.status).toBe("queued");
+    store.completeMonoJob(otherFolder.id, { ok: true });
+    store.cancelMonoJob(actor, retrying.id);
+    store.cancelMonoJob(actor, laterA.id);
+  });
+});
+
 describe("reclaimExpiredLeases", () => {
   it("requeues only jobs whose lease has actually expired", async () => {
     const store = await import("./store");

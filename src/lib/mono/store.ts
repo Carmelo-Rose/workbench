@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { getDb } from "@/lib/server/db";
 import { monoJobKinds } from "./contracts";
 import type {
@@ -230,22 +231,14 @@ export function deleteMonoSubject(actor: MonoActor, subjectId: string): boolean 
   return result.changes > 0;
 }
 
-export function createMonoJob(
+function newQueuedMonoJob(
   actor: MonoActor,
   kind: MonoJobKind,
   input: Record<string, unknown>,
   idempotencyKey?: string,
 ): MonoJob {
-  const db = getDb();
-  if (idempotencyKey) {
-    const existing = db.prepare(
-      "SELECT * FROM mono_jobs WHERE workspace_id = ? AND idempotency_key = ?",
-    ).get(actor.workspaceId, idempotencyKey) as JobRow | undefined;
-    if (existing) return toJob(existing);
-  }
-
   const now = Date.now();
-  const job: MonoJob = {
+  return {
     id: `job_${randomUUID()}`,
     workspaceId: actor.workspaceId,
     userId: actor.userId,
@@ -267,6 +260,9 @@ export function createMonoJob(
     nextRunAt: null,
     workerVersion: null,
   };
+}
+
+function insertMonoJob(db: DatabaseSync, job: MonoJob): void {
   db.prepare(
     `INSERT INTO mono_jobs
      (id, workspace_id, user_id, kind, status, input_json, idempotency_key, trace_id, created_at, updated_at)
@@ -283,8 +279,56 @@ export function createMonoJob(
     job.createdAt,
     job.updatedAt,
   );
+}
+
+export function createMonoJob(
+  actor: MonoActor,
+  kind: MonoJobKind,
+  input: Record<string, unknown>,
+  idempotencyKey?: string,
+): MonoJob {
+  const db = getDb();
+  if (idempotencyKey) {
+    const existing = db.prepare(
+      "SELECT * FROM mono_jobs WHERE workspace_id = ? AND idempotency_key = ?",
+    ).get(actor.workspaceId, idempotencyKey) as JobRow | undefined;
+    if (existing) return toJob(existing);
+  }
+
+  const job = newQueuedMonoJob(actor, kind, input, idempotencyKey);
+  insertMonoJob(db, job);
   appendMonoJobEvent(job.id, "queued", { traceId: actor.traceId });
   return job;
+}
+
+/**
+ * Product-pipeline jobs carry a private, stable folder key in a separate table.
+ * The metadata is inserted atomically with the queued job so a worker can never
+ * observe a product job before its folder-exclusivity key exists.
+ */
+export function createProductPipelineMonoJob(
+  actor: MonoActor,
+  input: Record<string, unknown>,
+  folderKey: string,
+): MonoJob {
+  if (!folderKey) throw new Error("商品任务缺少文件夹队列标识");
+  const db = getDb();
+  const job = newQueuedMonoJob(actor, "product_pipeline", input);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    insertMonoJob(db, job);
+    db.prepare(
+      "INSERT INTO mono_product_pipeline_jobs (job_id, folder_key) VALUES (?, ?)",
+    ).run(job.id, folderKey);
+    db.prepare(
+      "INSERT INTO mono_job_events (job_id, event_type, detail_json, created_at) VALUES (?, ?, ?, ?)",
+    ).run(job.id, "queued", JSON.stringify({ traceId: actor.traceId }), Date.now());
+    db.exec("COMMIT");
+    return job;
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+    throw error;
+  }
 }
 
 export function listMonoJobs(
@@ -349,8 +393,11 @@ export type ClaimJobOptions = {
   workerVersion?: string;
 };
 
-export function claimMonoJob(jobId: string, options: ClaimJobOptions = {}): MonoJob | null {
-  const db = getDb();
+function claimMonoJobWithDb(
+  db: DatabaseSync,
+  jobId: string,
+  options: ClaimJobOptions = {},
+): MonoJob | null {
   const now = Date.now();
   const workerId = options.workerId ?? INLINE_WORKER_ID;
   const leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
@@ -362,9 +409,15 @@ export function claimMonoJob(jobId: string, options: ClaimJobOptions = {}): Mono
      WHERE id = ? AND status = 'queued'`,
   ).run(now, now, workerId, now + leaseMs, options.workerVersion ?? null, jobId);
   if (result.changes === 0) return null;
-  appendMonoJobEvent(jobId, "running", { workerId });
+  db.prepare(
+    "INSERT INTO mono_job_events (job_id, event_type, detail_json, created_at) VALUES (?, ?, ?, ?)",
+  ).run(jobId, "running", JSON.stringify({ workerId }), now);
   const row = db.prepare("SELECT * FROM mono_jobs WHERE id = ?").get(jobId) as JobRow;
   return toJob(row);
+}
+
+export function claimMonoJob(jobId: string, options: ClaimJobOptions = {}): MonoJob | null {
+  return claimMonoJobWithDb(getDb(), jobId, options);
 }
 
 /**
@@ -381,6 +434,100 @@ export function claimNextMonoJob(kinds: readonly MonoJobKind[], options: ClaimJo
      ORDER BY created_at ASC LIMIT 1`,
   ).get(...kinds, now) as { id: string } | undefined;
   return row ? claimMonoJob(row.id, options) : null;
+}
+
+function legacyProductFolderKey(inputJson: string): string | null {
+  try {
+    const input = JSON.parse(inputJson) as { folderId?: unknown };
+    if (typeof input.folderId !== "string" || !input.folderId) return null;
+    const canonicalId = Buffer.from(input.folderId, "base64url").toString("base64url");
+    return createHash("sha256").update(canonicalId).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Product jobs made before the v11 metadata table already have a validated
+ * opaque folderId in input_json.  Backfill it before scheduling so an upgrade
+ * cannot strand a queued/recovered job or let it bypass a newer same-folder job.
+ */
+function backfillProductPipelineMetadata(db: DatabaseSync): void {
+  const legacyRows = db.prepare(
+    `SELECT job.id, job.input_json
+     FROM mono_jobs AS job
+     LEFT JOIN mono_product_pipeline_jobs AS product ON product.job_id = job.id
+     WHERE job.kind = 'product_pipeline' AND product.job_id IS NULL`,
+  ).all() as { id: string; input_json: string }[];
+  const insert = db.prepare(
+    "INSERT OR IGNORE INTO mono_product_pipeline_jobs (job_id, folder_key) VALUES (?, ?)",
+  );
+  for (const row of legacyRows) {
+    const folderKey = legacyProductFolderKey(row.input_json);
+    if (folderKey) insert.run(row.id, folderKey);
+  }
+}
+
+/**
+ * Atomically claims the next eligible product pipeline.  It is deliberately
+ * separate from the generic queue because the product share is a real shared
+ * resource: only one running job may own a folder, while no more than the
+ * configured number of different folders may be active at once.
+ *
+ * `rowid` is the insertion-order tie breaker for jobs created in the same
+ * millisecond, preserving FIFO even when UUID ordering would not.
+ */
+export function claimNextProductPipelineJob(
+  activeFolderLimit: number,
+  options: ClaimJobOptions = {},
+): MonoJob | null {
+  const db = getDb();
+  const limit = Math.max(1, Math.floor(activeFolderLimit));
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    backfillProductPipelineMetadata(db);
+    const running = db.prepare(
+      "SELECT COUNT(*) AS count FROM mono_jobs WHERE kind = 'product_pipeline' AND status = 'running'",
+    ).get() as { count: number };
+    if (running.count >= limit) {
+      db.exec("COMMIT");
+      return null;
+    }
+
+    const row = db.prepare(
+      `SELECT job.id
+       FROM mono_jobs AS job
+       JOIN mono_product_pipeline_jobs AS product ON product.job_id = job.id
+       WHERE job.kind = 'product_pipeline'
+         AND job.status = 'queued'
+         AND (job.next_run_at IS NULL OR job.next_run_at <= ?)
+         AND NOT EXISTS (
+           SELECT 1
+           FROM mono_jobs AS blocker
+           JOIN mono_product_pipeline_jobs AS blocked_product
+             ON blocked_product.job_id = blocker.id
+           WHERE blocked_product.folder_key = product.folder_key
+             AND (
+               blocker.status = 'running'
+               OR (
+                 blocker.status = 'queued'
+                 AND (
+                   blocker.created_at < job.created_at
+                   OR (blocker.created_at = job.created_at AND blocker.rowid < job.rowid)
+                 )
+               )
+             )
+         )
+       ORDER BY job.created_at ASC, job.rowid ASC
+       LIMIT 1`,
+    ).get(Date.now()) as { id: string } | undefined;
+    const claimed = row ? claimMonoJobWithDb(db, row.id, options) : null;
+    db.exec("COMMIT");
+    return claimed;
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+    throw error;
+  }
 }
 
 /** 进程刚启动：这个进程里不可能有任何任务真的在跑，running 状态只可能是上次异常退出留下的。 */

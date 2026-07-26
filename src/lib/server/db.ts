@@ -204,6 +204,8 @@ CREATE INDEX IF NOT EXISTS mono_subjects_owner_updated
   ON mono_subjects(owner_user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS mono_jobs_workspace_updated
   ON mono_jobs(workspace_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS mono_product_pipeline_jobs_folder
+  ON mono_product_pipeline_jobs(folder_key, job_id);
 CREATE INDEX IF NOT EXISTS collector_items_workspace_imported
   ON collector_items(workspace_id, imported_at DESC);
 `;
@@ -495,8 +497,20 @@ function ensureSchema(db: DatabaseSync): void {
       ALTER TABLE mono_jobs ADD COLUMN worker_version TEXT;
     `);
   }
+  // v11：商品套图有自己的持久队列元数据。文件夹键是 Workbench 生成的不可逆
+  // 摘要，而不是 UNC 路径；它让多个 worker 可以原子地判断“同一商品只能有一个
+  // running 任务”，同时又不把共享盘路径泄露到 API 响应。
+  //
+  // 这张表必须在上面的旧 mono_jobs 重建之后才创建，否则旧库迁移时外键会指向被
+  // 重命名的临时表。
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mono_product_pipeline_jobs (
+      job_id TEXT PRIMARY KEY REFERENCES mono_jobs(id) ON DELETE CASCADE,
+      folder_key TEXT NOT NULL
+    );
+  `);
   db.exec(INDEX_DDL);
-  db.exec("PRAGMA user_version = 10");
+  db.exec("PRAGMA user_version = 11");
 }
 
 export function openWorkbenchDatabase(dbPath: string): DatabaseSync {
