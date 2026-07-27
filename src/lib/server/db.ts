@@ -516,6 +516,11 @@ function ensureSchema(db: DatabaseSync): void {
 export function openWorkbenchDatabase(dbPath: string): DatabaseSync {
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
+  // 长任务会持续写进度，而前端在轮询同一批行。默认的 rollback journal 让读写
+  // 互斥，且撞锁时立刻抛 SQLITE_BUSY（界面上就是"Mono 服务暂时不可用"）。
+  // WAL 允许读写并发，busy_timeout 再兜住短暂的排他写。
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA busy_timeout = 5000");
   ensureSchema(db);
   return db;
 }
