@@ -5,6 +5,14 @@ import sharp from "sharp";
 import { updateMonoJobResult } from "./store";
 import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
 import { getConfigValue } from "@/lib/server/api-config";
+import {
+  allocateModelSlots,
+  classifyProductSources,
+  measureColorPresence,
+  type SourceClassification,
+} from "./product-classify";
+import { applyBrandMark, renderDetailPresentation, renderTiledDisplay } from "./product-layouts";
+import { buildModelPrompt, loadProductTemplate, type ProductTemplate } from "./product-template";
 import type { MonoJob, ProductPipelineInput } from "./contracts";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
@@ -14,10 +22,20 @@ const DETAIL_SLOTS = [
   ["01", 790, 1243, "model"], ["02", 790, 681, "fixed"], ["03", 790, 1021, "model"],
   ["04", 790, 1008, "model"], ["05", 790, 1005, "model"], ["06", 790, 1004, "model"],
   ["07", 790, 1005, "model"], ["08", 790, 1025, "model"], ["09", 790, 688, "fixed"],
-  ["10", 790, 610, "master"], ["11", 790, 1026, "original"],
+  ["10", 790, 610, "tiled"], ["11", 790, 1026, "detail"],
 ] as const;
 type DetailSlot = typeof DETAIL_SLOTS[number];
 type TemplateManifest = { version: string; files: Record<string, { sha256: string; kind: string }> };
+
+/**
+ * Colour-fidelity gate for generated model shots. A generated frame should
+ * contain a meaningful patch of the product's colour; when it does not, the
+ * model has most likely substituted a different article. This is a heuristic
+ * over a whole photo, so it records a warning rather than failing the run —
+ * an unattended pipeline must not stall on a false positive.
+ */
+const COLOR_PRESENCE_DELTA_E = 20;
+const COLOR_PRESENCE_MIN_RATIO = 0.02;
 
 export type ProductFolder = { id: string; name: string; imageCount: number };
 type SourceImage = { path: string; name: string; stem: string; size: number; mtimeMs: number; hash: string };
@@ -363,7 +381,13 @@ export async function composeWhiteMaster(sourcePath: string, cutout: Buffer, out
   // supplies alpha; it must never be resized or letterboxed into a new canvas.
   const [sourceRgb, alpha] = await Promise.all([
     sharp(sourcePath).removeAlpha().toColorspace("srgb").toBuffer(),
-    sharp(cutout).ensureAlpha().extractChannel("alpha").toBuffer(),
+    // The gateway now returns the matte on its own as a grayscale PNG.  Earlier
+    // artifacts carried it as the alpha of a full-size RGBA copy of the source,
+    // whose colour channels were discarded right here — so accept either shape
+    // rather than pinning the two deployments to the same release.
+    cutoutMeta.hasAlpha
+      ? sharp(cutout).extractChannel("alpha").toBuffer()
+      : sharp(cutout).toColorspace("b-w").toBuffer(),
   ]);
   const foreground = await sharp(sourceRgb).joinChannel(alpha).png().toBuffer();
   await sharp({ create: { width: sourceMeta.width, height: sourceMeta.height, channels: 3, background: "#ffffff" } })
@@ -450,8 +474,11 @@ function progress(job: MonoJob, stage: string, percent: number, result: Record<s
 }
 
 /**
- * Deterministic white-master phase. Detail images intentionally require an installed,
- * versioned template bundle; this prevents accidental runtime use of 62604171.
+ * Deterministic white-master phase, then the detail set.
+ *
+ * The detail set requires an installed, hash-verified template bundle: the
+ * bundle carries only category-level styling, so an unattended run can never
+ * fall back to describing one particular article it happens to remember.
  */
 export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
   const folderId = String(job.input.folderId ?? "");
@@ -485,38 +512,96 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   }
   const templateRoot = path.join(process.cwd(), "config", "product-pipeline", WORKFLOW_ID);
   const manifest = await validateTemplateBundle(templateRoot);
+  const template = await loadProductTemplate(templateRoot);
+  if (template.version !== manifest.version) throw new Error("商品套图模板版本不匹配");
   await assertSourcesUnchanged(sources);
   progress(job, "classifying", 30, { templateVersion: manifest.version });
-  const selected = await chooseProducts(masters, sources.length);
-  if (!selected.length) throw new Error("无法识别可用商品颜色；未调用付费生图服务");
+
+  // Colourways and macro crops are recovered from the shoot itself; nothing in
+  // the folder labels them, and no human edits the set between steps.
+  const classification = await classifyProductSources(masters);
+  if (!classification.colors.length) throw new Error("无法识别可用商品颜色；未调用付费生图服务");
+  const modelSlots = DETAIL_SLOTS.filter((slot) => slot[3] === "model");
+  const allocation = allocateModelSlots(classification.colors.length, modelSlots.length);
+  const warnings = [...classification.warnings];
+  progress(job, "generating_models", 35, {
+    colors: classification.colors.map((color) => ({
+      rank: color.rank,
+      lab: color.lab.map((channel) => Math.round(channel * 10) / 10),
+      shots: color.members.length,
+    })),
+    detailShots: classification.details.length,
+    slotColorRanks: allocation,
+    warnings,
+  });
+
   const detailStage = path.join(stagingRoot, "images"); await mkdir(detailStage, { recursive: true });
   const baseName = path.basename(absolutePath);
   const records: Record<string, unknown>[] = [];
-  progress(job, "generating_models", 35, { colorAssignments: selected.map((item) => item.index) });
-  await runWithConcurrency(DETAIL_SLOTS.filter((slot) => slot[3] === "model"), MODEL_CONCURRENCY, async (slot, index) => {
-    const assignment = selected.length === 1 ? 0 : selected.length === 2
-      ? (index < 4 ? 0 : 1)
-      : ([0, 0, 0, 1, 1, 2, 2][index] ?? 2);
-    const product = selected[assignment].path;
-    const scene = path.join(templateRoot, `model-${slot[0]}.svg`);
+  await runWithConcurrency(modelSlots, MODEL_CONCURRENCY, async (slot, index) => {
+    const color = classification.colors[allocation[index]];
     const output = path.join(detailStage, `${baseName}_${slot[0]}.jpg`);
-    const record = await generateModelSlot(product, scene, output, slot, signal, job.workspaceId);
-    records.push({ slot: slot[0], ...record });
-    progress(job, "generating_models", 35 + records.length * 5, { slots: records });
+    const record = await generateModelSlot(template, templateRoot, color, output, slot, signal, job.workspaceId);
+    records.push({ slot: slot[0], colorRank: color.rank, ...record });
+    if (record.warning) warnings.push(`${slot[0]}: ${record.warning}`);
+    progress(job, "generating_models", 35 + records.length * 5, { slots: records, warnings });
   });
-  progress(job, "compositing", 75, { slots: records });
+
+  progress(job, "compositing", 75, { slots: records, warnings });
   for (const slot of DETAIL_SLOTS.filter((item) => item[3] !== "model")) {
     const output = path.join(detailStage, `${baseName}_${slot[0]}.jpg`);
-    if (slot[3] === "fixed") await sharp(path.join(templateRoot, `fixed-${slot[0]}.svg`)).jpeg({ quality: 95 }).resize(slot[1], slot[2], { fit: "fill" }).toFile(output);
-    else await makeCollage(slot[3] === "master" ? masters : sources.map((source) => source.path), output, slot[1], slot[2]);
+    await renderCompositedSlot(template, templateRoot, classification, slot, output);
     records.push({ slot: slot[0], attempts: 0, qa: "not-required", sha256: await fileHash(output) });
   }
-  progress(job, "qa", 87, { slots: records });
+  progress(job, "qa", 87, { slots: records, warnings });
   await verifyDetailOutputs(detailStage, baseName, sources, DETAIL_SLOTS);
   await assertSourcesUnchanged(sources);
-  progress(job, "publishing_images", 93, { slots: records });
+  progress(job, "publishing_images", 93, { slots: records, warnings });
   await publishImages(detailStage, path.join(absolutePath, "images"), baseName);
-  return { stage: "completed", progress: 100, relativePath, templateVersion: manifest.version, slots: records, resumed: Boolean(reusable) };
+  return {
+    stage: "completed",
+    progress: 100,
+    relativePath,
+    templateVersion: manifest.version,
+    slots: records,
+    warnings,
+    resumed: Boolean(reusable),
+  };
+}
+
+/**
+ * Slots that are assembled from the shoot rather than generated: the two
+ * ready-made spec pages, the colourway line-up and the detail page.
+ */
+async function renderCompositedSlot(
+  template: ProductTemplate,
+  templateRoot: string,
+  classification: SourceClassification,
+  slot: DetailSlot,
+  output: string,
+): Promise<void> {
+  const [id, width, height, kind] = slot;
+  if (kind === "fixed") {
+    const asset = template.fixedSlots[id];
+    if (!asset) throw new Error(`模板缺少固定页 ${id}`);
+    // The bundled page is already at the published size, so copy it through
+    // rather than re-encoding and softening the type on it.
+    await cp(path.join(templateRoot, asset), output);
+    return;
+  }
+  if (kind === "tiled") {
+    await renderTiledDisplay(
+      classification.colors.map((color) => color.representative),
+      output, width, height, template.pages["10"].title,
+    );
+    return;
+  }
+  // A shoot without macro crops still needs a detail page; fall back to the
+  // hero colourway's angles so the slot is never published empty.
+  const crops = classification.details.length ? classification.details : classification.colors[0].members;
+  await renderDetailPresentation(
+    crops, output, width, height, template.pages["11"].title, template.pages["11"].caption,
+  );
 }
 
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
@@ -530,36 +615,83 @@ async function validateTemplateBundle(root: string): Promise<TemplateManifest> {
   for (const [name, info] of Object.entries(manifest.files)) if (await fileHash(path.join(root, name)) !== info.sha256) throw new Error(`商品套图模板损坏: ${name}`);
   return manifest;
 }
-async function chooseProducts(masters: string[], sourceCount: number): Promise<{ path: string; index: number }[]> {
-  const scored = await Promise.all(masters.map(async (file, index) => ({ path: file, index, score: (await sharp(file).stats()).channels.reduce((sum, channel) => sum + channel.stdev, 0) })));
-  scored.sort((a, b) => b.score - a.score);
-  const count = Math.min(3, Math.max(1, sourceCount)); return scored.slice(0, count);
-}
-async function generateModelSlot(product: string, scene: string, output: string, slot: DetailSlot, signal: AbortSignal, workspaceId: string): Promise<Record<string, unknown>> {
-  let best: Buffer | null = null; let warning: string | undefined;
+/** How many angles of the chosen colourway are sent as product references. */
+const PRODUCT_REFERENCE_COUNT = 3;
+
+async function generateModelSlot(
+  template: ProductTemplate,
+  templateRoot: string,
+  color: SourceClassification["colors"][number],
+  output: string,
+  slot: DetailSlot,
+  signal: AbortSignal,
+  workspaceId: string,
+): Promise<Record<string, unknown>> {
+  const prompt = buildModelPrompt(template, slot[0], color.rank, slot[1], slot[2]);
+  // Several angles of the same colourway make it much harder for the model to
+  // invent a plain version of an article whose graphic sits on one face only.
+  const references = color.members.slice(0, PRODUCT_REFERENCE_COUNT).map((member) => member.path);
+  let best: Buffer | null = null;
+  let warning: string | undefined;
+  let attempts = 0;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const generated = await requestModelImage(product, scene, slot, signal, workspaceId);
+    attempts = attempt;
+    const generated = await requestModelImage(references, prompt, slot, signal, workspaceId);
     try { await sharp(generated).metadata(); best = generated; break; } catch { warning = "生成结果无法解码"; }
   }
   if (!best) throw new Error(`模特槽位 ${slot[0]} 没有有效候选图，未发布 images`);
   await sharp(best).resize(slot[1], slot[2], { fit: "cover", position: "centre" }).jpeg({ quality: 95 }).toFile(output);
-  return { attempts: 1, qa: warning ? "warning" : "passed", warning, sha256: await fileHash(output) };
+  if (template.brandMark?.slots.includes(slot[0])) {
+    // The wordmark is decoration over an image that has already been paid for.
+    // Losing it is worth a warning, never worth discarding the generation.
+    try {
+      await applyBrandMark(output, template.brandMark, templateRoot);
+    } catch (error) {
+      warning = `品牌角标未能叠加：${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  // Coarse fidelity signal only: it catches a wholly wrong colourway, not a
+  // dropped print or embroidery, so it never blocks publishing on its own.
+  const presence = await measureColorPresence(output, color.lab, COLOR_PRESENCE_DELTA_E);
+  if (presence < COLOR_PRESENCE_MIN_RATIO) {
+    warning = `画面中几乎找不到该颜色（${(presence * 100).toFixed(1)}%），商品可能被换色，请人工复核`;
+  }
+  return {
+    attempts,
+    qa: warning ? "warning" : "passed",
+    warning,
+    colorPresence: Math.round(presence * 1000) / 1000,
+    sha256: await fileHash(output),
+  };
 }
-async function requestModelImage(product: string, scene: string, slot: DetailSlot, signal: AbortSignal, workspaceId: string): Promise<Buffer> {
+
+async function requestModelImage(
+  references: readonly string[],
+  prompt: string,
+  slot: DetailSlot,
+  signal: AbortSignal,
+  workspaceId: string,
+): Promise<Buffer> {
   const base = getConfigValue("MONO_IMAGE_BASE_URL", workspaceId); const key = getConfigValue("MONO_IMAGE_API_KEY", workspaceId);
   if (!base || !key) throw new Error("详情套图需要配置 MONO_IMAGE_BASE_URL 和 MONO_IMAGE_API_KEY（将调用付费 gpt-image-2）");
   const endpoint = process.env.MONO_IMAGE_GENERATE_URL ?? new URL("/v1/api/generate", base).toString();
-  const [productBytes, sceneBytes] = await Promise.all([readFile(product), readFile(scene)]);
-  const dataUrl = (bytes: Buffer, mime: string) => `data:${mime};base64,${bytes.toString("base64")}`;
-  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${key}` }, body: JSON.stringify({ model: "gpt-image-2", prompt: `Create product model image slot ${slot[0]}. Product reference is authoritative for hat color, logo, embroidery, crown, brim and construction. Scene reference only constrains pose, composition, clothing mood and light; do not reproduce the reference person's identity. No extra hats or text.`, images: [dataUrl(productBytes, "image/jpeg"), dataUrl(sceneBytes, "image/svg+xml")], aspectRatio: `${slot[1]}:${slot[2]}`, replyType: "json" }), signal });
+  const bytes = await Promise.all(references.map((file) => readFile(file)));
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model: "gpt-image-2",
+      prompt,
+      images: bytes.map((buffer) => `data:image/jpeg;base64,${buffer.toString("base64")}`),
+      aspectRatio: `${slot[1]}:${slot[2]}`,
+      replyType: "json",
+    }),
+    signal,
+  });
   const json = await response.json().catch(() => null) as { url?: string; results?: { url?: string }[] } | null;
   const url = json?.url ?? json?.results?.[0]?.url; if (!response.ok || !url) throw new Error(`gpt-image-2 请求失败 (HTTP ${response.status})`);
   const image = await fetch(url, { signal }); if (!image.ok) throw new Error("无法下载 gpt-image-2 结果"); return Buffer.from(await image.arrayBuffer());
-}
-async function makeCollage(inputs: string[], output: string, width: number, height: number): Promise<void> {
-  const count = Math.min(3, inputs.length); const cell = Math.floor(width / count);
-  const layers = await Promise.all(inputs.slice(0, count).map(async (input, index) => ({ input: await sharp(input).resize(cell, height, { fit: "contain", background: "white" }).jpeg().toBuffer(), left: index * cell, top: 0 })));
-  await sharp({ create: { width, height, channels: 3, background: "white" } }).composite(layers).jpeg({ quality: 95 }).toFile(output);
 }
 async function verifyDetailOutputs(stage: string, base: string, sources: SourceImage[], slots: readonly DetailSlot[]): Promise<void> {
   for (const [id, width, height] of slots) { const meta = await sharp(path.join(stage, `${base}_${id}.jpg`)).metadata(); if (meta.width !== width || meta.height !== height) throw new Error(`详情图 ${id} 尺寸校验失败`); }

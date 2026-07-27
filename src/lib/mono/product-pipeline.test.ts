@@ -163,6 +163,26 @@ describe("white master composition", () => {
     expect(pixel(2, 1)[2]).toBeGreaterThan(150);
   });
 
+  it("reads a standalone grayscale matte the same way as a legacy RGBA cutout", async () => {
+    const root = await fixture();
+    const source = path.join(root, "source.png");
+    const mask = path.join(root, "mask.png");
+    const output = path.join(root, "output.jpg");
+    await sharp({ create: { width: 6, height: 4, channels: 3, background: "#2468c0" } }).png().toFile(source);
+    const opaqueProduct = await sharp({ create: { width: 2, height: 2, channels: 3, background: "#ffffff" } }).png().toBuffer();
+    const canvas = await sharp({ create: { width: 6, height: 4, channels: 3, background: "#000000" } })
+      .composite([{ input: opaqueProduct, left: 2, top: 1 }]).png().toBuffer();
+    await sharp(canvas).removeAlpha().toColorspace("b-w").png().toFile(mask);
+    await expect(sharp(mask).metadata()).resolves.toMatchObject({ channels: 1, hasAlpha: false });
+
+    await composeWhiteMaster(source, await readFile(mask), output);
+
+    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
+    const pixel = (x: number, y: number) => Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x + 1) * info.channels));
+    expect(pixel(0, 0)).toEqual([255, 255, 255]);
+    expect(pixel(2, 1)[2]).toBeGreaterThan(150);
+  });
+
   it("rejects a cutout whose canvas would alter the original composition", async () => {
     const root = await fixture();
     const source = path.join(root, "source.png");
