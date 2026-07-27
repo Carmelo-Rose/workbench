@@ -1,5 +1,17 @@
-torch==2.5.1
-torchvision==0.20.1
+# torch must be the CUDA build. A bare "torch==2.5.1" resolves to the CPU-only wheel on PyPI,
+# which this capability imports quite happily and then runs ~60x slower on the host CPU: 82s of
+# inference per frame instead of 1.4s, with nothing in the job log to say so. The adapter now
+# refuses to start on CPU unless PRODUCT_CUTOUT_DEVICE says otherwise, but pinning the source
+# here is what stops a rebuild from reintroducing the problem in the first place.
+#
+# The two large wheels come from the Aliyun mirror: pytorch's own index sits behind a CDN this
+# host cannot reliably reach, and a stalled download leaves the venv half-uninstalled. That
+# mirror is a flat directory of wheels and carries none of the ordinary dependencies, so the
+# index stays on TUNA.
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
+--find-links https://mirrors.aliyun.com/pytorch-wheels/cu124/
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
 transformers==4.47.1
 huggingface-hub==0.27.1
 pillow==11.2.1
