@@ -1,0 +1,5 @@
+# config/product-pipeline/**/*.json 会按 SHA-256 做完整性校验（product-pipeline.ts
+# 的 validateTemplateBundle），Windows 上 core.autocrlf 会把 LF 转成 CRLF，字节一变
+# 哈希就对不上，校验会误报"模板损坏"。这里强制 LF，保证任何平台 checkout 出来的
+# 字节都跟提交时一致。
+config/product-pipeline/**/*.json text eol=lf
