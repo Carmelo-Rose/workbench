@@ -33,8 +33,18 @@ token、`x-workbench-workspace-id` 和 `x-workbench-user-id`。上传文件、�
 ## 商品白底图并发
 
 Workbench 负责商品文件夹 FIFO 独占、每文件夹最多 6 张和全局公平分配；网关负责
-最终全局保护。默认值为 `TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY=12`，可向下调整，
-但不要超过 12。Workbench 传入的 `productFolderKey` 是不可逆摘要，不含 UNC 路径。
+最终全局保护。默认值为 `TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY=1`，上限 2。
+Workbench 传入的 `productFolderKey` 是不可逆摘要，不含 UNC 路径。
+
+这两个数由显存实测决定，不是拍脑袋定的：抠图在 2080 Ti 上单进程占约
+14.8 GiB / 22 GiB，两个并发峰值 22.1 GiB（只剩 432 MiB），三个直接 CUDA 崩溃。
+默认取 1 是因为第二个进程只换来约 20% 提速（单张 9.9s → 8.0s）——一个进程就
+已经把 GPU 喂饱，多开只是排队——却要吃掉整张卡的余量，共用这张卡的其他能力
+会被挤崩。Workbench 那边仍可提交更多，多出来的在网关排队，正好让显卡在两张图
+之间不空转。
+
+旧的默认值 12 只在抠图跑 CPU 版 torch 时才安全；换成 CUDA 版后必须下调，否则
+一次批量出图会把显卡打爆，并且连累共用这张卡的其他能力。
 
 ## 部署（服务机）
 

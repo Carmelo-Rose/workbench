@@ -17,12 +17,14 @@ import { getLuopanRankInsights } from "@/lib/luopan/insights";
 import { createMonoTools } from "@/lib/tools/mono";
 import {
   monoAspectRatios,
+  productPipelineInputSchema,
   type MonoActor,
   type MonoImageGenerationInput,
   type MonoJob,
+  type ProductPipelineInput,
 } from "@/lib/mono/contracts";
 import { getMonoImage2Template, monoImage2TemplateIds } from "@/lib/mono/image2-templates";
-import { createAsset, createImageGenerationJob, getSubject, newMonoActor } from "@/lib/mono/service";
+import { createAsset, createImageGenerationJob, createProductPipelineJob, getSubject, lightenMonoJob, newMonoActor } from "@/lib/mono/service";
 import { subjectIdsFromPrompt } from "@/lib/mono/subject-compiler";
 import {
   monoActorFromWorkspaceActor,
@@ -43,6 +45,7 @@ type ChatRequestBody = {
   config?: {
     modelName?: string;
     image2?: unknown;
+    productPipeline?: unknown;
   };
 };
 
@@ -145,7 +148,12 @@ export function forcedToolName(userText: string, hasImageAttachment: boolean) {
   ) {
     return "mono_matting" as const;
   }
-  if (/(生图|生成.*图|画.*图|绘制.*图|generate.*image|create.*image)/i.test(text)) {
+  // 商品套图必须先于生图判断：「生成商品套图」同时命中下面的「生成…图」，
+  // 会被强制走 Image2 而不是套图管线。这里只做排除、不反过来强制
+  // mono_product_pipeline —— 那条路一跑就是七张付费模特图并覆盖共享盘，
+  // 该由模型先把货号跟用户确认清楚再自己决定调不调。
+  const productPipelineIntent = /(商品套图|详情套图|商品详情图|套图)/i.test(text);
+  if (!productPipelineIntent && /(生图|生成.*图|画.*图|绘制.*图|generate.*image|create.*image)/i.test(text)) {
     return "mono_generate_image" as const;
   }
   // 榜单异动有明确的数据可用性语义，不能交给模型自行编排多次工具调用。
@@ -183,6 +191,22 @@ export async function POST(req: Request) {
       attachments: imageAttachments,
       attachmentParts: latestImageAttachmentParts(messages),
       config: image2Config.data,
+      actor,
+    });
+  }
+
+  // 商品套图的「开始生成」/「只重跑失败槽位」是已经确定的动作，不需要模型
+  // 参与决策：这里跳过 LLM，直接建任务并把结果合成一次 tool 结果消息，
+  // 见 productPipelineResponse（与下面的 rankInsightsResponse 是同一模式）。
+  const productPipelineConfig = productPipelineInputSchema.safeParse(config?.productPipeline);
+  if (productPipelineConfig.success) {
+    // Carried alongside the validated input rather than inside it: the label is
+    // only ever echoed back to the card, and has no business in the job record.
+    const folderName = (config?.productPipeline as { folderName?: unknown } | undefined)?.folderName;
+    return productPipelineResponse({
+      messages,
+      config: productPipelineConfig.data,
+      folderName: typeof folderName === "string" ? folderName : undefined,
       actor,
     });
   }
@@ -261,6 +285,52 @@ export async function POST(req: Request) {
       error instanceof Error ? error.message : "对话后端暂时不可用，请稍后重试",
     });
   });
+}
+
+/**
+ * Mirrors image2Response/rankInsightsResponse: the job is already fully
+ * specified by the caller (folder picker or "只重跑失败槽位" button), so this
+ * skips the model entirely and synthesizes the mono_product_pipeline tool
+ * result directly. Going through a real /api/chat turn — rather than a
+ * client-only thread().append() — is what makes the card a persisted,
+ * correctly-rendered assistant message instead of an ephemeral local splice.
+ */
+function productPipelineResponse({
+  messages,
+  config,
+  folderName,
+  actor,
+}: {
+  messages: UIMessage[];
+  config: ProductPipelineInput;
+  folderName?: string;
+  actor: MonoActor;
+}) {
+  const job = createProductPipelineJob(actor, config);
+  const toolInput = {
+    folderId: config.folderId,
+    workflowId: config.workflowId,
+    ...(folderName ? { folderName } : {}),
+    ...(config.onlySlots ? { onlySlots: config.onlySlots } : {}),
+  };
+  const toolCallId = `tool_${randomUUID()}`;
+  const metadata = { custom: { backend: "direct", mode: "product-pipeline" } };
+  const stream = createUIMessageStream({
+    originalMessages: messages,
+    execute: ({ writer }) => {
+      writer.write({ type: "start", messageMetadata: metadata });
+      writer.write({ type: "start-step" });
+      writer.write({ type: "tool-input-available", toolCallId, toolName: "mono_product_pipeline", input: toolInput });
+      // Lightened for the same reason the REST endpoints lighten it: the job
+      // record carries the resolved share-relative path, which must not travel
+      // to a browser. The card reads its label from the tool input instead.
+      writer.write({ type: "tool-output-available", toolCallId, output: lightenMonoJob(job) });
+      writer.write({ type: "finish-step" });
+      writer.write({ type: "finish", finishReason: "tool-calls", messageMetadata: metadata });
+    },
+    onError: (error) => error instanceof Error ? error.message : "商品套图任务提交失败",
+  });
+  return createUIMessageStreamResponse({ stream });
 }
 
 async function rankInsightsResponse({

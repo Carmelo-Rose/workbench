@@ -1,1 +1,17 @@
-{"version":"hat-62604171-v1","files":{"fixed-02.svg":{"sha256":"aaf820a3aad53a3f2b8ba87ac5197006aff25f450054d48d2eda843096db4634","kind":"fixed-page"},"fixed-09.svg":{"sha256":"c7b19fbdbe9af62a65c2e72a4e9d027fc4819aafc030c5f92f5bc0c35d9165ce","kind":"fixed-page"},"model-01.svg":{"sha256":"6a55b4beda70d6ef39c9b1f06bd346732ca1b60a4cfaae0d6e4c4f738d0bbf7c","kind":"model-reference"},"model-03.svg":{"sha256":"cd9d98c2a8187e147a2d8c94453004685acef6b3738c0451d9e93ee41829e94d","kind":"model-reference"},"model-04.svg":{"sha256":"0a96ec6803da80d835b551a2c39bba0c9f24bcbe4efac2d385a4b15ae3098a31","kind":"model-reference"},"model-05.svg":{"sha256":"f515155c4b840676c2a02ddb1c56260ed18864845fb5069f717f754e445b9c23","kind":"model-reference"},"model-06.svg":{"sha256":"6034043a5d0a4c4f2850ed71fa0e385f3a768ff6fdd0566605ccbeaf0ed1e7c3","kind":"model-reference"},"model-07.svg":{"sha256":"4978ffef28a94cadd6ed2b626e0690a06e412b9026bae6916c9240db905658eb","kind":"model-reference"},"model-08.svg":{"sha256":"5ed6aaaa19c7186bad6013e6b99090310e5ddc0436b9134dbd57da577cc71632","kind":"model-reference"}}}
+{
+  "version": "hat-62604171-v1",
+  "files": {
+    "fixed-02.jpg": {
+      "sha256": "57811b5c7c270cb132216acffb1ac5cb93590a0cc9f1578475ad95d0023b4f85",
+      "kind": "fixed-page"
+    },
+    "fixed-09.jpg": {
+      "sha256": "30e33c3933c22ad49b2b7733c16e0d82047f9440cd3f0066591dfcb2cb2a9cd8",
+      "kind": "fixed-page"
+    },
+    "template.json": {
+      "sha256": "12029ef0b59b0fdcb41509771365851f50450200f5277ae7bc209090216b7ab6",
+      "kind": "template"
+    }
+  }
+}

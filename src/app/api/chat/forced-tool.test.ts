@@ -47,6 +47,24 @@ describe("forcedToolName (Phase 1 baseline)", () => {
     expect(forcedToolName(text, hasImage)).toBe(expected);
   });
 
+  it("leaves 商品套图 requests for the model instead of forcing Image2 generation", () => {
+    // 「生成商品套图」 matches the 生成.*图 trigger word for word, so without the
+    // exclusion every natural phrasing of a pipeline run got answered with an
+    // Image2 picture instead. Nothing is forced in its place: mono_product_pipeline
+    // spends money on seven model images and overwrites a shared folder, so the
+    // model has to settle the folder with the user first.
+    for (const text of [
+      "帮我生成商品套图 1234",
+      "给 1234 生成一套详情套图",
+      "用商品套图跑一下 1234",
+      "商品详情图重新出一版",
+    ]) {
+      expect(forcedToolName(text, false)).toBeUndefined();
+    }
+    // The plain image-generation path is untouched.
+    expect(forcedToolName("帮我生成一张帽子的图", false)).toBe("mono_generate_image");
+  });
+
   it("prioritizes video analysis over image-generation keywords in the same sentence", () => {
     // "反推视频提示词" contains 提示词 (image trigger word) but must not be
     // misrouted to image_to_prompt or mono_generate_image.

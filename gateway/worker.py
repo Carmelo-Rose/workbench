@@ -21,10 +21,18 @@ _PROGRESS_RE = re.compile(r"^PROGRESS\s+(\d{1,3})\s*(.*)$")
 POLL_INTERVAL = 1.0
 
 PRODUCT_CUTOUT_CONCURRENCY = max(
-    # Workbench fairly schedules at most six image cutouts per product folder;
-    # the gateway is the final cross-client guardrail and must never exceed the
-    # agreed twelve total GPU jobs.
-    1, min(12, int(os.environ.get("TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY", "12")))
+    # Workbench fairly schedules at most six image cutouts per product folder and
+    # the gateway is the final cross-client guardrail, but the binding limit is
+    # the card.  The twelve this used to allow was safe only while the capability
+    # ran on a CPU-only torch build; on the 2080 Ti one cutout reserves ~14.8 GiB
+    # of the 22 GiB, two peak at 22.1 GiB, and three abort with a CUDA failure.
+    # Two is therefore the hard ceiling, but one is the default: the second
+    # process buys about 20% (9.9s to 8.0s per image) because a single one
+    # already saturates the GPU, and it costs the card's entire spare margin --
+    # 432 MiB is not enough for any other capability that shares it.
+    # Workbench may still submit more; the surplus waits here, which is what
+    # keeps the card fed between images.
+    1, min(2, int(os.environ.get("TOOLBOX_PRODUCT_CUTOUT_CONCURRENCY", "1")))
 )
 _worker_threads: list[threading.Thread] = []
 
