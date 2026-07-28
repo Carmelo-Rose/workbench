@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { startProductPipelineRun } from "@/lib/product-pipeline-run";
+import { ModelConsistencyDemoDialog } from "@/experiments/product-set-model-consistency/ModelConsistencyDemoDialog";
 
 type Folder = {
   id: string;
@@ -31,7 +32,7 @@ function folderMarks(folder: Folder): { text: string; tone: string }[] {
   marks.push(folder.detailShotCount > 0
     ? { text: `${folder.detailShotCount} 张细节图`, tone: "bg-muted text-muted-foreground" }
     : { text: "缺细节图，11 号页用整体图拼", tone: "bg-amber-500/15 text-amber-700 dark:text-amber-400" });
-  if (folder.hasMasters) marks.push({ text: "主图可复用，跳过抠图", tone: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" });
+  if (folder.hasMasters) marks.push({ text: "已生成过主图", tone: "bg-muted text-muted-foreground" });
   return marks;
 }
 
@@ -50,6 +51,7 @@ export function ProductPipelineLauncher({ open, onOpenChange }: { open: boolean;
   const [selected, setSelected] = useState<string>();
   const [error, setError] = useState<string>();
   const [starting, setStarting] = useState(false);
+  const [experimentOpen, setExperimentOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -89,12 +91,24 @@ export function ProductPipelineLauncher({ open, onOpenChange }: { open: boolean;
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>商品套图</DialogTitle>
-          <DialogDescription>会生成白底主图和 11 张详情套图；详情阶段将调用付费生图服务，任务会在对话里显示进度。</DialogDescription>
+          <DialogDescription>会生成方形白底主图、每色一张的 SKU 图和 11 张详情套图；详情阶段将调用付费生图服务，任务会在对话里显示进度。</DialogDescription>
         </DialogHeader>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            onOpenChange(false);
+            setExperimentOpen(true);
+          }}
+        >
+          模特一致性 Demo
+          <span className="ml-2 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-700 dark:text-amber-400">实验</span>
+        </Button>
         <label className="flex items-center gap-2 text-sm">
           <span className="text-muted-foreground shrink-0">品类模板</span>
           <select
@@ -136,5 +150,7 @@ export function ProductPipelineLauncher({ open, onOpenChange }: { open: boolean;
         </Button>
       </DialogContent>
     </Dialog>
+    <ModelConsistencyDemoDialog open={experimentOpen} onOpenChange={setExperimentOpen} />
+    </>
   );
 }

@@ -5,6 +5,7 @@ import path from "node:path";
 import sharp from "sharp";
 import {
   atomicPublish,
+  composeSquareDeliverable,
   composeWhiteMaster,
   installedWorkflowIds,
   listProductFolders,
@@ -22,6 +23,7 @@ import {
   validateProductPipelineInput,
   verifyDetailOutputs,
 } from "./product-pipeline";
+import type { RelativeBox } from "./product-classify";
 import { productPipelineInputSchema } from "./contracts";
 
 const roots: string[] = [];
@@ -41,10 +43,18 @@ async function waitFor(assertion: () => boolean, message: string): Promise<void>
   }
   throw new Error(message);
 }
+/** An empty temp dir to stand in for the 【详情页】-待审 mirror in tests that don't care about its contents. */
+async function emptyDetailRoot(): Promise<string> {
+  const root = path.join(os.tmpdir(), `product-pipeline-detail-${crypto.randomUUID()}`); roots.push(root);
+  await mkdir(root, { recursive: true });
+  return root;
+}
+
 describe("product pipeline folder isolation", () => {
   it("lists only selectable leaves and never returns an absolute path", async () => {
     const root = await fixture();
-    const folders = await listProductFolders("商品", root);
+    const detailRoot = await emptyDetailRoot();
+    const folders = await listProductFolders("商品", root, detailRoot);
     expect(folders).toEqual([{
       id: expect.any(String),
       name: "A / 商品一",
@@ -69,32 +79,38 @@ describe("product pipeline folder isolation", () => {
 });
 
 describe("folder status markers", () => {
-  /** Writes a shoot folder in one of the states the picker has to describe. */
-  async function shoot(root: string, name: string, contents: {
+  /**
+   * Writes a shoot folder in one of the states the picker has to describe.
+   * 原图 goes under the source root; 主图/images go under a *separate*
+   * detail root at the same relative path, mirroring how the pipeline itself
+   * now reads and writes them from two different trees.
+   */
+  async function shoot(sourceRoot: string, detailRoot: string, name: string, contents: {
     article: string[];
     details?: string[];
     masters?: string[];
     published?: string[];
   }): Promise<void> {
-    const write = async (dir: string, files: string[]) => {
+    const write = async (base: string, dir: string, files: string[]) => {
       if (!files.length) return;
-      await mkdir(path.join(root, name, dir), { recursive: true });
-      await Promise.all(files.map((file) => writeFile(path.join(root, name, dir, file), "x")));
+      await mkdir(path.join(base, name, dir), { recursive: true });
+      await Promise.all(files.map((file) => writeFile(path.join(base, name, dir, file), "x")));
     };
-    await write("原图", [...contents.article, ...(contents.details ?? [])]);
-    await write("主图", contents.masters ?? []);
-    await write("images", contents.published ?? []);
+    await write(sourceRoot, "原图", [...contents.article, ...(contents.details ?? [])]);
+    await write(detailRoot, "主图", contents.masters ?? []);
+    await write(detailRoot, "images", contents.published ?? []);
   }
 
   async function statuses(): Promise<Record<string, Awaited<ReturnType<typeof listProductFolders>>[number]>> {
-    const root = path.join(os.tmpdir(), `product-pipeline-${crypto.randomUUID()}`); roots.push(root);
-    await shoot(root, "全新", { article: ["a.jpg", "b.jpg"] });
-    await shoot(root, "有细节图", { article: ["a.jpg"], details: ["x_1.jpg", "x_2.jpg"] });
-    await shoot(root, "主图齐全", { article: ["a.jpg", "b.jpg"], masters: ["a.jpg", "b.jpg"] });
-    await shoot(root, "主图缺一张", { article: ["a.jpg", "b.jpg"], masters: ["a.jpg"] });
-    await shoot(root, "已发布", { article: ["a.jpg"], published: ["已发布_01.jpg", "已发布_11.jpg"] });
-    await shoot(root, "空images", { article: ["a.jpg"], published: [] });
-    return Object.fromEntries((await listProductFolders("", root)).map((folder) => [folder.name, folder]));
+    const sourceRoot = path.join(os.tmpdir(), `product-pipeline-${crypto.randomUUID()}`); roots.push(sourceRoot);
+    const detailRoot = path.join(os.tmpdir(), `product-pipeline-detail-${crypto.randomUUID()}`); roots.push(detailRoot);
+    await shoot(sourceRoot, detailRoot, "全新", { article: ["a.jpg", "b.jpg"] });
+    await shoot(sourceRoot, detailRoot, "有细节图", { article: ["a.jpg"], details: ["x_1.jpg", "x_2.jpg"] });
+    await shoot(sourceRoot, detailRoot, "主图齐全", { article: ["a.jpg", "b.jpg"], masters: ["a.jpg", "b.jpg"] });
+    await shoot(sourceRoot, detailRoot, "主图缺一张", { article: ["a.jpg", "b.jpg"], masters: ["a.jpg"] });
+    await shoot(sourceRoot, detailRoot, "已发布", { article: ["a.jpg"], published: ["已发布_01.jpg", "已发布_11.jpg"] });
+    await shoot(sourceRoot, detailRoot, "空images", { article: ["a.jpg"], published: [] });
+    return Object.fromEntries((await listProductFolders("", sourceRoot, detailRoot)).map((folder) => [folder.name, folder]));
   }
 
   it("counts x_ crops as detail shots and keeps them out of the article count comparison", async () => {
@@ -312,6 +328,51 @@ describe("white master composition", () => {
     await sharp({ create: { width: 6, height: 4, channels: 3, background: "#ffffff" } }).png().toFile(source);
     await sharp({ create: { width: 5, height: 4, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } }).png().toFile(cutout);
     await expect(composeWhiteMaster(source, await readFile(cutout), path.join(root, "output.jpg"))).rejects.toThrow("尺寸与原图不一致");
+  });
+});
+
+describe("square deliverable composition", () => {
+  /** A 40x30 RGBA canvas with a 20x16 opaque red block at (10,7). */
+  async function foreground(): Promise<Buffer> {
+    const opaque = await sharp({ create: { width: 20, height: 16, channels: 4, background: { r: 200, g: 30, b: 30, alpha: 1 } } }).png().toBuffer();
+    return sharp({ create: { width: 40, height: 30, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: opaque, left: 10, top: 7 }])
+      .png()
+      .toBuffer();
+  }
+  const box: RelativeBox = { left: 10 / 40, top: 7 / 30, width: 20 / 40, height: 16 / 30 };
+
+  it("centres the product on an 800x800 white canvas", async () => {
+    const root = await fixture();
+    const output = path.join(root, "square.png");
+    await composeSquareDeliverable(await foreground(), box, output, { shadow: false });
+    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
+    expect(info).toMatchObject({ width: 800, height: 800, channels: 3 });
+    const pixel = (x: number, y: number) => Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x + 1) * info.channels));
+    expect(pixel(0, 0)).toEqual([255, 255, 255]);
+    expect(pixel(799, 799)).toEqual([255, 255, 255]);
+    // Centre of the canvas sits inside the product: red channel dominant, not white.
+    const centre = pixel(400, 400);
+    expect(centre[0]).toBeGreaterThan(centre[2]);
+    expect(centre).not.toEqual([255, 255, 255]);
+  });
+
+  it("darkens the area just below the product only when a shadow is requested", async () => {
+    const root = await fixture();
+    const plain = path.join(root, "plain.png");
+    const shadowed = path.join(root, "shadowed.png");
+    await composeSquareDeliverable(await foreground(), box, plain, { shadow: false });
+    await composeSquareDeliverable(await foreground(), box, shadowed, { shadow: true });
+    const read = async (file: string) => sharp(file).raw().toBuffer({ resolveWithObject: true });
+    const [plainPixels, shadowedPixels] = await Promise.all([read(plain), read(shadowed)]);
+    // Below the product's lower edge, inside the shadow's blurred falloff:
+    // white on the plain render, visibly dimmed on the shadowed one.
+    const y = 650; const x = 400;
+    const offset = (data: Buffer, info: { width: number; channels: number }) => (y * info.width + x) * info.channels;
+    const plainPixel = plainPixels.data[offset(plainPixels.data, plainPixels.info)];
+    const shadowedPixel = shadowedPixels.data[offset(shadowedPixels.data, shadowedPixels.info)];
+    expect(plainPixel).toBe(255);
+    expect(shadowedPixel).toBeLessThan(plainPixel);
   });
 });
 
