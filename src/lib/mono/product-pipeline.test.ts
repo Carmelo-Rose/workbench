@@ -7,6 +7,7 @@ import {
   atomicPublish,
   composeSquareDeliverable,
   composeWhiteMaster,
+  detailPageSources,
   installedWorkflowIds,
   listProductFolders,
   listProductWorkflows,
@@ -112,6 +113,18 @@ describe("folder status markers", () => {
     await shoot(sourceRoot, detailRoot, "空images", { article: ["a.jpg"], published: [] });
     return Object.fromEntries((await listProductFolders("", sourceRoot, detailRoot)).map((folder) => [folder.name, folder]));
   }
+
+  /**
+   * Regression, twice over: a shoot that stages `x_5` had it promoted to the
+   * hero band, so the top of the page became a shot framed for nothing in
+   * particular while the fabric caption sat over it.
+   */
+  it("builds the detail page from four crops and cuts the hero out of the fourth", () => {
+    const five = ["x_1", "x_2", "x_3", "x_4", "x_5"];
+    expect(detailPageSources(five)).toEqual({ hero: "x_4", grid: ["x_1", "x_2", "x_3", "x_4"] });
+    // A short shoot still fills every block it can, from whatever it staged.
+    expect(detailPageSources(["x_1", "x_2"])).toEqual({ hero: "x_2", grid: ["x_1", "x_2"] });
+  });
 
   it("counts x_ crops as detail shots and keeps them out of the article count comparison", async () => {
     const rows = await statuses();

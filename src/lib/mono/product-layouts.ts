@@ -132,10 +132,55 @@ export function tileRects(
  */
 const TILE_CROP_PADDING = 0.012;
 
-/** Macro crops are already tightly framed, so they fill the tile edge to edge. */
-async function placeCovered(file: string, rect: Rect): Promise<sharp.OverlayOptions> {
+/**
+ * How much closer than a plain cover-fit each block of the detail page frames
+ * its crop.
+ *
+ * Measured off the hand-built reference page: its grid cells hold the middle
+ * 44% of the frame's width and its hero band 60%, which is a 2.2x and a 1.65x
+ * zoom on what covering the whole frame would show. The staged `x_` shots are
+ * studio frames of the entire article, so cover-fitting them puts the cap in
+ * the cell at arm's length and the page reads as four ordinary snapshots —
+ * losing the one thing slot 11 exists to show, which is the article up close.
+ */
+const DETAIL_ZOOM = { hero: 1.65, cell: 2.2 } as const;
+
+/**
+ * Where the hero band is taken from vertically, as a fraction of the frame.
+ *
+ * The reference page pulls its band from below the middle, which is what keeps
+ * the fabric caption over plain cloth rather than over the crown button — the
+ * same shot supplies the last grid cell, and two crops of one button stacked on
+ * one page is the most obviously repetitive thing this layout can do.
+ */
+const HERO_ANCHOR_Y = 0.74;
+
+/**
+ * Centre `file` in `rect`, framed `zoom` times closer than a cover-fit would.
+ *
+ * `anchorY` slides the window up or down the frame; it is clamped so the window
+ * never runs off the edge, which would otherwise letterbox the block.
+ */
+async function placeZoomed(
+  file: string,
+  rect: Rect,
+  zoom: number,
+  anchorY = 0.5,
+): Promise<sharp.OverlayOptions> {
+  // Read once: a sharp instance cannot be reused after `metadata()` consumes it.
+  const input = await readFile(file);
+  const { width, height } = await sharp(input).metadata();
+  if (!width || !height) throw new Error(`无法读取图片尺寸：${file}`);
+  const aspect = rect.width / rect.height;
+  // The largest rect-shaped window the frame holds, then closed in by `zoom`.
+  const cover = Math.min(width, height * aspect);
+  const cropWidth = Math.max(8, Math.min(width, Math.round(cover / zoom)));
+  const cropHeight = Math.max(8, Math.min(height, Math.round(cropWidth / aspect)));
+  const left = Math.round((width - cropWidth) / 2);
+  const top = Math.min(Math.max(Math.round(height * anchorY - cropHeight / 2), 0), height - cropHeight);
   return {
-    input: await sharp(file)
+    input: await sharp(input)
+      .extract({ left, top, width: cropWidth, height: cropHeight })
       .resize(rect.width, rect.height, { fit: "cover", position: "centre" })
       .toBuffer(),
     left: rect.left,
@@ -225,22 +270,42 @@ export async function applyBrandMark(file: string, mark: BrandMark, assetRoot: s
 const HERO_SCRIM_HEIGHT = 168;
 
 /**
+ * Mean luma at which the caption needs no help, and the one at which it needs
+ * the full scrim. A navy cap reads around 70 and a studio sweep around 250.
+ */
+const SCRIM_DARK_ENOUGH = 120;
+const SCRIM_FULL_STRENGTH = 210;
+
+/** Strength of the scrim the caption needs over `crop`, from 0 to 1. */
+async function scrimStrength(crop: Buffer, rect: Rect): Promise<number> {
+  const band = await sharp(crop)
+    .extract({ left: 0, top: 0, width: rect.width, height: Math.min(HERO_SCRIM_HEIGHT, rect.height) })
+    .greyscale()
+    .stats();
+  const luma = band.channels[0].mean;
+  const span = SCRIM_FULL_STRENGTH - SCRIM_DARK_ENOUGH;
+  return Math.min(Math.max((luma - SCRIM_DARK_ENOUGH) / span, 0), 1);
+}
+
+/**
  * Caption block laid over the hero crop of the detail page.
  *
  * The caption is white, but the crop behind it is whatever the shoot happened
  * to frame — a macro of a pale cap, or a dark one sitting on a blown-out studio
  * sweep. Without the scrim the text silently vanishes into any light region,
  * which is invisible to every automated check in the pipeline and only shows up
- * once a human looks at the published page.
+ * once a human looks at the published page. It is scaled by how light the crop
+ * actually is rather than always applied: over dark cloth a fixed scrim is a
+ * grey wash across the top of the page that the reference set does not have.
  */
-function heroCaptionSvg(rect: Rect, caption: HeroCaption): Buffer {
+function heroCaptionSvg(rect: Rect, caption: HeroCaption, scrim: number): Buffer {
   const padding = 34;
   const inner = rect.width - padding * 2;
   return Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${rect.width}" height="${rect.height}">` +
       `<defs><linearGradient id="scrim" x1="0" y1="0" x2="0" y2="1">` +
-        `<stop offset="0%" stop-color="#000000" stop-opacity="0.62"/>` +
-        `<stop offset="70%" stop-color="#000000" stop-opacity="0.34"/>` +
+        `<stop offset="0%" stop-color="#000000" stop-opacity="${(0.62 * scrim).toFixed(3)}"/>` +
+        `<stop offset="70%" stop-color="#000000" stop-opacity="${(0.34 * scrim).toFixed(3)}"/>` +
         `<stop offset="100%" stop-color="#000000" stop-opacity="0"/>` +
       `</linearGradient></defs>` +
       `<rect x="0" y="0" width="${rect.width}" height="${HERO_SCRIM_HEIGHT}" fill="url(#scrim)"/>` +
@@ -254,8 +319,9 @@ function heroCaptionSvg(rect: Rect, caption: HeroCaption): Buffer {
 
 /**
  * Slot 11 — a wide hero band carrying the fabric caption, over a grid of the
- * macro crops. Both are placed full-bleed because the shots are already framed
- * tightly on the article; the hero's own band is cropped out of `hero` centred.
+ * macro crops. Every block is filled edge to edge with a window cropped out of
+ * its shot at `DETAIL_ZOOM`, so the article reads at the same distance here as
+ * it does on the hand-built reference page.
  */
 export async function renderDetailPresentation(
   hero: string,
@@ -285,13 +351,15 @@ export async function renderDetailPresentation(
     grid.gapX,
     grid.gapY,
   );
-  const layers = await Promise.all(gridSources.slice(0, 4).map((file, index) => placeCovered(file, gridRects[index])));
-  const heroLayer = await placeCovered(hero, heroRect);
+  const layers = await Promise.all(gridSources.slice(0, 4)
+    .map((file, index) => placeZoomed(file, gridRects[index], DETAIL_ZOOM.cell)));
+  const heroLayer = await placeZoomed(hero, heroRect, DETAIL_ZOOM.hero, HERO_ANCHOR_Y);
+  const scrim = await scrimStrength(heroLayer.input as Buffer, heroRect);
   await sharp({ create: { width, height, channels: 3, background: "#ffffff" } })
     .composite([
       { input: titleSvg(width, title), left: 0, top: 0 },
       heroLayer,
-      { input: heroCaptionSvg(heroRect, caption), left: heroRect.left, top: heroRect.top },
+      { input: heroCaptionSvg(heroRect, caption, scrim), left: heroRect.left, top: heroRect.top },
       ...layers,
     ])
     .jpeg({ quality: 95, chromaSubsampling: "4:4:4" })
