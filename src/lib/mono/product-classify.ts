@@ -34,13 +34,22 @@ export const COLOR_MERGE_DELTA_E = 12;
  *
  * A white master whose cutout failed is a blank white canvas; left in, it would
  * cluster as a phantom white colourway and could even win a model slot. Real
- * frames in a reference shoot ran 6.4% at the very lowest (a cream cap on a
- * white sweep), so this sits an order of magnitude below anything genuine.
+ * frames in a reference shoot run around 21-25% whatever the colourway, so this
+ * sits orders of magnitude below anything genuine.
  */
 export const MIN_PRODUCT_COVERAGE = 0.005;
 
-/** Background is a near-white studio sweep; anything darker or coloured is product. */
-const BACKGROUND_MAX_CHANNEL = 225;
+/**
+ * Background is the white master's sweep; anything darker or coloured is product.
+ *
+ * The cutoff has to clear the brightest article we ship, not just the sweep. A
+ * cream cap on white peaks around 244, so at the old 225 only its shadowed
+ * creases counted as product: the measured box stopped short of the crown and
+ * the tiled page published a cap with its back sliced off. Across the reference
+ * shoot the box stops moving once the cutoff passes 242, while JPEG ringing
+ * along the cutout edge only starts leaking in at 254.
+ */
+const BACKGROUND_MAX_CHANNEL = 246;
 const BACKGROUND_MAX_CHROMA = 22;
 
 export type Lab = readonly [L: number, a: number, b: number];
@@ -69,6 +78,15 @@ export type ColorGroup = {
   members: MeasuredSource[];
   /** The shoot's lead angle for this colourway — its first frame. */
   representative: MeasuredSource;
+};
+
+export type ClassifyOptions = {
+  /**
+   * Set when the folder ships `x_`-named macro crops. Those never reach the
+   * master set, so the classifier would otherwise report the detail page as
+   * falling back to whole-article angles when it is not.
+   */
+  hasNamedDetailShots?: boolean;
 };
 
 export type SourceClassification = {
@@ -254,7 +272,10 @@ export function allocateModelSlots(colorCount: number, slotCount: number): numbe
  * a near-black colour that does not exist as a colourway, and would otherwise
  * either invent a fourth group or drag the black centroid off its true value.
  */
-export function classifySources(measured: readonly MeasuredSource[]): SourceClassification {
+export function classifySources(
+  measured: readonly MeasuredSource[],
+  options: ClassifyOptions = {},
+): SourceClassification {
   const warnings: string[] = [];
   const blank = measured.filter((item) => item.metric.coverage < MIN_PRODUCT_COVERAGE);
   if (blank.length) {
@@ -289,8 +310,13 @@ export function classifySources(measured: readonly MeasuredSource[]): SourceClas
     .sort((a, b) => b.votes - a.votes || b.indices.length - a.indices.length || a.lab[0] - b.lab[0]);
   const rankByClusterIndex = new Map(ranked.map((cluster, rank) => [cluster.index, rank] as const));
 
-  if (!details.length) {
+  // The caller may already hold detail crops the classifier never saw — the
+  // `x_` shots are kept out of the master set on purpose — so only warn about a
+  // fallback that is actually going to happen.
+  if (!details.length && !options.hasNamedDetailShots) {
     warnings.push("原图里没有细节特写，主推色改用出图数量最多的颜色；细节展示图将改用整体图拼版");
+  } else if (!details.length) {
+    warnings.push("主推色改用出图数量最多的颜色（细节图由 x_ 命名的特写提供，不参与颜色识别）");
   }
   const sizes = new Set(ranked.map((cluster) => cluster.indices.length));
   if (sizes.size > 1) {
@@ -316,9 +342,12 @@ export function classifySources(measured: readonly MeasuredSource[]): SourceClas
 }
 
 /** Measure and classify a folder's white-master set. */
-export async function classifyProductSources(masters: readonly string[]): Promise<SourceClassification> {
+export async function classifyProductSources(
+  masters: readonly string[],
+  options: ClassifyOptions = {},
+): Promise<SourceClassification> {
   const measured = await Promise.all(
     masters.map(async (file) => ({ path: file, metric: await measureProductImage(file) })),
   );
-  return classifySources(measured);
+  return classifySources(measured, options);
 }

@@ -62,35 +62,63 @@ function titleSvg(width: number, title: PageTitle): Buffer {
   );
 }
 
+/** Fallback shape of a tile's contents, used when no crop has been measured. */
+const DEFAULT_TILE_ASPECT = 4 / 3;
+
+function median(values: readonly number[]): number {
+  const sorted = [...values].sort((first, second) => first - second);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
 /**
  * Cell rectangles for `count` items inside `area`.
  *
- * Three items get the reference set's 2-over-1 arrangement with the last one
- * centred; every other count falls back to a balanced grid.
+ * The arrangement is derived rather than tabulated, because a lineup runs from
+ * two colourways to seven or more and no fixed grid serves that whole range: a
+ * grid shaped for three strands a lone tile on the last row once a shoot has
+ * seven. Rows are chosen to make each tile as large as `area` allows for
+ * contents of `aspect`, then the items are spread evenly so no row ends up
+ * shorter than another by more than one. Short rows are centred, which is what
+ * makes the reference three-colourway page read as a deliberate 2-over-1.
  */
-export function tileRects(count: number, area: Rect, gapX = 18, gapY = gapX): Rect[] {
+export function tileRects(
+  count: number,
+  area: Rect,
+  gapX = 18,
+  gapY = gapX,
+  aspect = DEFAULT_TILE_ASPECT,
+): Rect[] {
   if (count <= 0) return [];
   if (count === 1) return [area];
-  const columns = count === 2 ? 2 : count === 3 ? 2 : count === 4 ? 2 : 3;
-  const rows = Math.ceil(count / columns);
-  const width = Math.floor((area.width - gapX * (columns - 1)) / columns);
-  const height = Math.floor((area.height - gapY * (rows - 1)) / rows);
+  let best: { rows: number; width: number; height: number; area: number } | null = null;
+  for (let rows = 1; rows <= count; rows += 1) {
+    const columns = Math.ceil(count / rows);
+    const width = Math.floor((area.width - gapX * (columns - 1)) / columns);
+    const height = Math.floor((area.height - gapY * (rows - 1)) / rows);
+    if (width <= 0 || height <= 0) continue;
+    // Score on the tile's *rendered* size, not the cell's: a tall cell holding a
+    // wide crop is mostly whitespace and does not make the article any bigger.
+    const rendered = Math.min(width, height * aspect);
+    const score = rendered * (rendered / aspect);
+    if (!best || score > best.area) best = { rows, width, height, area: score };
+  }
+  if (!best) return [];
   const rects: Rect[] = [];
-  for (let index = 0; index < count; index += 1) {
-    const row = Math.floor(index / columns);
-    const itemsInRow = Math.min(columns, count - row * columns);
-    // Centre a short final row so a 2-over-1 layout reads as intentional. The
-    // reference page has this row nudged slightly off-centre by hand; centring
-    // it is what makes the block land identically for every product.
-    const rowWidth = itemsInRow * width + (itemsInRow - 1) * gapX;
+  let remaining = count;
+  for (let row = 0; row < best.rows; row += 1) {
+    const itemsInRow = Math.ceil(remaining / (best.rows - row));
+    const rowWidth = itemsInRow * best.width + (itemsInRow - 1) * gapX;
     const offset = area.left + Math.floor((area.width - rowWidth) / 2);
-    const column = index - row * columns;
-    rects.push({
-      left: offset + column * (width + gapX),
-      top: area.top + row * (height + gapY),
-      width,
-      height,
-    });
+    for (let column = 0; column < itemsInRow; column += 1) {
+      rects.push({
+        left: offset + column * (best.width + gapX),
+        top: area.top + row * (best.height + gapY),
+        width: best.width,
+        height: best.height,
+      });
+    }
+    remaining -= itemsInRow;
   }
   return rects;
 }
@@ -104,21 +132,10 @@ export function tileRects(count: number, area: Rect, gapX = 18, gapY = gapX): Re
  */
 const TILE_CROP_PADDING = 0.012;
 
-async function placeContained(source: MeasuredSource, rect: Rect): Promise<sharp.OverlayOptions> {
-  const cropped = await cropToProduct(source.path, source.metric.box, TILE_CROP_PADDING);
-  return {
-    input: await sharp(cropped)
-      .resize(rect.width, rect.height, { fit: "contain", background: "#ffffff" })
-      .toBuffer(),
-    left: rect.left,
-    top: rect.top,
-  };
-}
-
 /** Macro crops are already tightly framed, so they fill the tile edge to edge. */
-async function placeCovered(source: MeasuredSource, rect: Rect): Promise<sharp.OverlayOptions> {
+async function placeCovered(file: string, rect: Rect): Promise<sharp.OverlayOptions> {
   return {
-    input: await sharp(source.path)
+    input: await sharp(file)
       .resize(rect.width, rect.height, { fit: "cover", position: "centre" })
       .toBuffer(),
     left: rect.left,
@@ -145,8 +162,22 @@ export async function renderTiledDisplay(
     width: Math.min(right, width) - left,
     height: Math.min(bottom, height) - top,
   };
-  const rects = tileRects(representatives.length, area, gapX, gapY);
-  const layers = await Promise.all(representatives.map((source, index) => placeContained(source, rects[index])));
+  // Crop first, then let the crops' own shape pick the grid. A cap lineup is
+  // wide, and a grid laid out for upright product would letterbox every tile.
+  const crops = await Promise.all(representatives.map((source) =>
+    cropToProduct(source.path, source.metric.box, TILE_CROP_PADDING)));
+  const shapes = await Promise.all(crops.map(async (crop) => {
+    const shape = await sharp(crop).metadata();
+    return shape.width && shape.height ? shape.width / shape.height : DEFAULT_TILE_ASPECT;
+  }));
+  const rects = tileRects(crops.length, area, gapX, gapY, median(shapes));
+  const layers = await Promise.all(crops.map(async (crop, index) => ({
+    input: await sharp(crop)
+      .resize(rects[index].width, rects[index].height, { fit: "contain", background: "#ffffff" })
+      .toBuffer(),
+    left: rects[index].left,
+    top: rects[index].top,
+  })));
   await sharp({ create: { width, height, channels: 3, background: "#ffffff" } })
     .composite([{ input: titleSvg(width, title), left: 0, top: 0 }, ...layers])
     .jpeg({ quality: 95, chromaSubsampling: "4:4:4" })
@@ -222,20 +253,20 @@ function heroCaptionSvg(rect: Rect, caption: HeroCaption): Buffer {
 }
 
 /**
- * Slot 11 — the macro crops, hero first with the fabric caption over it and the
- * remainder in a grid. Crops are placed full-bleed because they are already
- * tightly framed on the article.
+ * Slot 11 — a wide hero band carrying the fabric caption, over a grid of the
+ * macro crops. Both are placed full-bleed because the shots are already framed
+ * tightly on the article; the hero's own band is cropped out of `hero` centred.
  */
 export async function renderDetailPresentation(
-  crops: readonly MeasuredSource[],
+  hero: string,
+  gridSources: readonly string[],
   output: string,
   width: number,
   height: number,
   title: PageTitle,
   caption: HeroCaption,
 ): Promise<void> {
-  if (!crops.length) throw new Error("细节展示图没有可用的细节图");
-  const [heroSource, ...rest] = crops;
+  if (!hero || !gridSources.length) throw new Error("细节展示图没有可用的细节图");
   const { hero: heroGeometry, grid } = PAGE.detail;
   const heroRect: Rect = {
     left: MARGIN,
@@ -244,7 +275,7 @@ export async function renderDetailPresentation(
     height: heroGeometry.height,
   };
   const gridRects = tileRects(
-    Math.min(rest.length, 4),
+    Math.min(gridSources.length, 4),
     {
       left: MARGIN,
       top: grid.top,
@@ -254,12 +285,12 @@ export async function renderDetailPresentation(
     grid.gapX,
     grid.gapY,
   );
-  const layers = await Promise.all(rest.slice(0, 4).map((source, index) => placeCovered(source, gridRects[index])));
-  const hero = await placeCovered(heroSource, heroRect);
+  const layers = await Promise.all(gridSources.slice(0, 4).map((file, index) => placeCovered(file, gridRects[index])));
+  const heroLayer = await placeCovered(hero, heroRect);
   await sharp({ create: { width, height, channels: 3, background: "#ffffff" } })
     .composite([
       { input: titleSvg(width, title), left: 0, top: 0 },
-      hero,
+      heroLayer,
       { input: heroCaptionSvg(heroRect, caption), left: heroRect.left, top: heroRect.top },
       ...layers,
     ])

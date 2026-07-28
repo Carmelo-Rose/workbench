@@ -50,6 +50,10 @@ export const productTemplateSchema = z.object({
 
 export type ProductTemplate = z.infer<typeof productTemplateSchema>;
 
+/** Shared camera/lens language appended to every generated slot, regardless of category. */
+const CAMERA_STYLE =
+  "哈苏 X2D 100C 拍摄，中画幅摄影，80mm f2.8 镜头，哈苏原生色彩配置文件，自然低饱和色彩，专业商业人像 / 静物摄影";
+
 export async function loadProductTemplate(root: string): Promise<ProductTemplate> {
   const parsed = productTemplateSchema.safeParse(
     JSON.parse(await readFile(path.join(root, "template.json"), "utf8")),
@@ -76,10 +80,14 @@ export function buildModelPrompt(
   const slot = template.modelSlots[slotId];
   if (!slot) throw new Error(`模板缺少槽位 ${slotId} 的构图描述`);
   const look = template.looks[colorRank % template.looks.length];
-  return [
-    `【商品还原 · 最高优先级】\n${template.productLock}`,
-    `【画面风格】\n${look.text}`,
-    `【构图】\n${template.framingRule}${slot.framing}成图比例 ${width}:${height}。`,
-    `【禁止出现】\n${template.negative}`,
-  ].join("\n\n");
+  // TEST: 去掉商品还原/构图/禁止项三段规则，只留画风文案 + 摄影质感两段，
+  // 配合参考图原图直接试效果。测试完记得视情况改回来。
+  return [look.text, CAMERA_STYLE].join("\n\n");
+  // return [
+  //   `【商品还原 · 最高优先级】\n${template.productLock}`,
+  //   `【画面风格】\n${look.text}`,
+  //   `【构图】\n${template.framingRule}${slot.framing}成图比例 ${width}:${height}。`,
+  //   `【禁止出现】\n${template.negative}`,
+  //   `【摄影质感】\n${CAMERA_STYLE}`,
+  // ].join("\n\n");
 }

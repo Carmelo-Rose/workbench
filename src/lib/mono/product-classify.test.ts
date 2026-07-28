@@ -196,19 +196,16 @@ describe("detail page caption", () => {
   it("stays legible over a hero crop that is entirely white", async () => {
     const dir = await mkdtemp(nodePath.join(os.tmpdir(), "detailpage-"));
     dirs.push(dir);
-    const crops: MeasuredSource[] = [];
+    const crops: string[] = [];
     for (let index = 0; index < 5; index += 1) {
       const file = nodePath.join(dir, `crop-${index}.jpg`);
       await sharp({ create: { width: 900, height: 600, channels: 3, background: "#ffffff" } })
         .jpeg().toFile(file);
-      crops.push({
-        path: file,
-        metric: { lab: [100, 0, 0], coverage: 0.6, edgeRatio: 0.4, box: { left: 0, top: 0, width: 1, height: 1 } },
-      });
+      crops.push(file);
     }
     const output = nodePath.join(dir, "slot-11.jpg");
 
-    await renderDetailPresentation(crops, output, 790, 1026,
+    await renderDetailPresentation(crops[4], crops.slice(0, 4), output, 790, 1026,
       { chinese: "细节展示", english: "DETAIL PRESENTATION" },
       { headline: "升级面料", english: "Upgraded fabric", sub: "立体刺绣工艺" });
 

@@ -17,6 +17,7 @@ import {
 import { BACKENDS, isBackendId, type BackendId } from "@/lib/backends";
 import { cn } from "@/lib/utils";
 import { getCurrentImage2ChatConfig } from "@/lib/image2-mode";
+import { getCurrentProductPipelineConfig } from "@/lib/product-pipeline-run";
 
 const DOT_CLASS: Record<ConnState, string> = {
   ok: "bg-emerald-500",
@@ -78,7 +79,14 @@ export const BackendModelContext: FC = () => {
       getModelContext: () => {
         const backend = useBackendChoice.getState().backend;
         const image2 = getCurrentImage2ChatConfig();
-        return { config: { modelName: backend, ...(image2 ? { image2 } : {}) } };
+        const productPipeline = getCurrentProductPipelineConfig();
+        return {
+          config: {
+            modelName: backend,
+            ...(image2 ? { image2 } : {}),
+            ...(productPipeline ? { productPipeline } : {}),
+          },
+        };
       },
     });
   }, [api]);

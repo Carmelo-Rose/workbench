@@ -35,6 +35,7 @@ import {
   MonoGenerateImageToolUI,
   MonoGetJobToolUI,
   MonoMattingToolUI,
+  MonoProductPipelineToolUI,
 } from "@/components/workbench/MonoToolUI";
 import {
   CollectorBatchesToolUI,
@@ -132,6 +133,7 @@ export const Assistant = () => {
       <MonoGetJobToolUI />
       <MonoCancelJobToolUI />
       <MonoMattingToolUI />
+      <MonoProductPipelineToolUI />
       <LuopanRoundsToolUI />
       <LuopanSnapshotToolUI />
       <LuopanTrendToolUI />

@@ -257,6 +257,7 @@ export function createProductPipelineJob(actor: MonoActor, input: ProductPipelin
   const job = createProductPipelineMonoJob(actor, {
     folderId: input.folderId,
     workflowId: input.workflowId,
+    onlySlots: input.onlySlots ?? null,
     // The resolved relative path is retained only in the private job record;
     // API responses redact it before leaving the server.
     folderRelativePath: resolved.relativePath,

@@ -1,30 +1,56 @@
 "use client";
 
+import { useAui } from "@assistant-ui/react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { startProductPipelineRun } from "@/lib/product-pipeline-run";
 
-type Folder = { id: string; name: string; imageCount: number };
-type PipelineJob = { id: string; status: "queued" | "running" | "succeeded" | "failed" | "cancelled"; error?: string | null; result?: { stage?: string; progress?: number; resumed?: boolean } | null };
-
-const stageLabel: Record<string, string> = {
-  main_published: "主图已完成，正在准备详情套图",
-  classifying: "正在识别商品颜色和角度",
-  generating_models: "正在生成模特图（将调用付费生图服务）",
-  compositing: "正在制作产品拼图",
-  qa: "正在进行视觉与尺寸质检",
-  publishing_images: "正在原子发布详情套图",
-  completed: "详情套图已完成",
+type Folder = {
+  id: string;
+  name: string;
+  imageCount: number;
+  detailShotCount: number;
+  hasMasters: boolean;
+  hasImages: boolean;
 };
+type Workflow = { id: string; label: string };
 
+/**
+ * What pressing 开始生成 will actually do to this folder.
+ *
+ * Ordered by how much the user would regret not knowing: overwriting an
+ * existing published set first, then the detail page quietly degrading because
+ * nobody staged `x_` macro crops, then the merely useful news that the cutout
+ * step gets skipped.
+ */
+function folderMarks(folder: Folder): { text: string; tone: string }[] {
+  const marks: { text: string; tone: string }[] = [];
+  if (folder.hasImages) marks.push({ text: "已生成过，将覆盖", tone: "bg-destructive/10 text-destructive" });
+  marks.push(folder.detailShotCount > 0
+    ? { text: `${folder.detailShotCount} 张细节图`, tone: "bg-muted text-muted-foreground" }
+    : { text: "缺细节图，11 号页用整体图拼", tone: "bg-amber-500/15 text-amber-700 dark:text-amber-400" });
+  if (folder.hasMasters) marks.push({ text: "主图可复用，跳过抠图", tone: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" });
+  return marks;
+}
+
+/**
+ * Folder selection only. Everything past "start" — progress, gallery,
+ * partial-failure retry — lives in the ProductPipelineCard that appears in
+ * the conversation once the job is created; this dialog never polls a job
+ * or shows one.
+ */
 export function ProductPipelineLauncher({ open, onOpenChange }: { open: boolean; onOpenChange(open: boolean): void }) {
+  const aui = useAui();
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [workflows, setWorkflows] = useState<Workflow[]>([]);
+  const [workflowId, setWorkflowId] = useState<string>();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string>();
   const [error, setError] = useState<string>();
   const [starting, setStarting] = useState(false);
-  const [job, setJob] = useState<PipelineJob>();
+
   useEffect(() => {
     if (!open) return;
     const timer = setTimeout(() => {
@@ -32,30 +58,83 @@ export function ProductPipelineLauncher({ open, onOpenChange }: { open: boolean;
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error);
         setFolders(payload.folders ?? []);
+        const installed: Workflow[] = payload.workflows ?? [];
+        setWorkflows(installed);
+        // Only one bundle is installed today, so there is nothing to choose;
+        // the row exists so a second category needs no change here.
+        setWorkflowId((current) => current && installed.some((item) => item.id === current) ? current : installed[0]?.id);
       }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取商品文件夹"));
     }, 150);
     return () => clearTimeout(timer);
   }, [open, query]);
-  useEffect(() => {
-    if (!open || !job || ["succeeded", "failed", "cancelled"].includes(job.status)) return;
-    const timer = setInterval(() => {
-      void fetch(`/api/workbench/mono/jobs/${encodeURIComponent(job.id)}`).then(async (response) => {
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error);
-        setJob(payload.job);
-      }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法查询任务状态"));
-    }, 1_500);
-    return () => clearInterval(timer);
-  }, [open, job]);
-  const start = async () => {
-    if (!selected) return;
-    setStarting(true); setError(undefined);
+
+  const start = () => {
+    const folder = folders.find((item) => item.id === selected);
+    if (!folder || !workflowId) return;
+    setStarting(true);
+    setError(undefined);
     try {
-      const response = await fetch("/api/workbench/mono/product-pipeline/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ folderId: selected, workflowId: "hat-62604171-v1" }) });
-      const payload = await response.json(); if (!response.ok) throw new Error(payload.error); setJob(payload.job);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "启动失败"); } finally { setStarting(false); }
+      startProductPipelineRun(
+        aui,
+        { folderId: folder.id, workflowId, folderName: folder.name },
+        `生成商品套图：${folder.name}`,
+      );
+      setSelected(undefined);
+      onOpenChange(false);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "启动失败");
+    } finally {
+      setStarting(false);
+    }
   };
-  const terminal = job && ["succeeded", "failed", "cancelled"].includes(job.status);
-  const mainCompleted = Boolean(job?.result?.stage === "main_published" || job?.result?.stage === "generating_models" || job?.result?.stage === "compositing" || job?.result?.stage === "qa" || job?.result?.stage === "publishing_images" || job?.result?.stage === "completed");
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>商品套图</DialogTitle><DialogDescription>会生成白底主图和 11 张详情套图；详情阶段将调用付费生图服务。</DialogDescription></DialogHeader><Input disabled={Boolean(job)} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索商品文件夹" /><div className="max-h-64 space-y-1 overflow-y-auto">{folders.map((folder) => <button disabled={Boolean(job)} type="button" className={`w-full rounded px-3 py-2 text-left text-sm ${selected === folder.id ? "bg-accent" : "hover:bg-muted"}`} onClick={() => setSelected(folder.id)} key={folder.id}>{folder.name}<span className="ml-2 text-muted-foreground">{folder.imageCount} 张原图</span></button>)}</div>{job ? <p className={job.status === "failed" ? "text-sm text-destructive" : "text-sm text-muted-foreground"}>{job.status === "queued" ? "任务已创建，正在排队…" : job.status === "running" ? `${stageLabel[job.result?.stage ?? ""] ?? "正在处理"}${job.result?.progress !== undefined ? `（${job.result.progress}%）` : ""}` : job.status === "succeeded" ? "任务已完成" : mainCompleted ? `主图已完成，可继续生成详情套图：${job.error ?? "详情阶段未完成"}` : job.error ?? "任务已取消"}</p> : null}{error ? <p className="text-sm text-destructive">{error}</p> : null}{job ? <Button onClick={() => { setJob(undefined); setError(undefined); }}>{terminal ? (mainCompleted ? "继续生成详情套图（付费）" : "再处理一个商品") : "后台继续处理"}</Button> : <Button disabled={!selected || starting} onClick={() => void start()}>{starting ? "正在创建任务…" : "开始生成（详情阶段付费）"}</Button>}</DialogContent></Dialog>;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>商品套图</DialogTitle>
+          <DialogDescription>会生成白底主图和 11 张详情套图；详情阶段将调用付费生图服务，任务会在对话里显示进度。</DialogDescription>
+        </DialogHeader>
+        <label className="flex items-center gap-2 text-sm">
+          <span className="text-muted-foreground shrink-0">品类模板</span>
+          <select
+            value={workflowId ?? ""}
+            disabled={workflows.length < 2}
+            onChange={(event) => setWorkflowId(event.target.value)}
+            className="border-input bg-background disabled:text-muted-foreground min-w-0 flex-1 rounded-md border px-2 py-1.5 text-sm disabled:cursor-not-allowed"
+          >
+            {workflows.length
+              ? workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.label}</option>)
+              : <option value="">未安装模板</option>}
+          </select>
+        </label>
+        <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索商品文件夹" />
+        <div className="max-h-64 space-y-1 overflow-y-auto">
+          {folders.map((folder) => (
+            <button
+              type="button"
+              key={folder.id}
+              className={`w-full rounded px-3 py-2 text-left text-sm ${selected === folder.id ? "bg-accent" : "hover:bg-muted"}`}
+              onClick={() => setSelected(folder.id)}
+            >
+              <span className="flex items-baseline gap-2">
+                {folder.name}
+                <span className="text-muted-foreground text-xs">{folder.imageCount} 张原图</span>
+              </span>
+              <span className="mt-1 flex flex-wrap gap-1">
+                {folderMarks(folder).map((mark) => (
+                  <span key={mark.text} className={`rounded-full px-2 py-0.5 text-[11px] ${mark.tone}`}>{mark.text}</span>
+                ))}
+              </span>
+            </button>
+          ))}
+          {folders.length === 0 ? <p className="text-muted-foreground px-3 py-2 text-sm">没有匹配的商品文件夹</p> : null}
+        </div>
+        {error ? <p className="text-destructive text-sm">{error}</p> : null}
+        <Button disabled={!selected || !workflowId || starting} onClick={start}>
+          {starting ? "正在创建任务…" : "开始生成（详情阶段付费）"}
+        </Button>
+      </DialogContent>
+    </Dialog>
+  );
 }

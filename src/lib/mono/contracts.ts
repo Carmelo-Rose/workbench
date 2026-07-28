@@ -119,7 +119,15 @@ export const productPipelineInputSchema = z.object({
   // Base64url IDs for short folder names (for example `123`) can be four
   // characters long. Security comes from server-side containment validation.
   folderId: z.string().min(1).max(2_000),
-  workflowId: z.literal(productPipelineWorkflowId),
+  // One template bundle used to be the only option, so this was a z.literal.
+  // Now any installed bundle can be picked; membership is re-checked at
+  // runtime against installedWorkflowIds() (product-pipeline.ts), since the
+  // installed set isn't knowable from this schema alone.
+  workflowId: z.string().min(1).max(160),
+  // Retry-only-the-failures entry point. Membership in the model-kind slot set
+  // is re-checked server-side (product-pipeline.ts) since that set isn't
+  // knowable from this schema alone.
+  onlySlots: z.array(z.string().regex(/^\d{2}$/u, "槽位编号必须是两位数字")).min(1).max(11).optional(),
 });
 
 export const monoImageGenerationSlotSchema = z.object({

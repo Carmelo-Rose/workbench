@@ -13,6 +13,7 @@ import {
   createAsset,
   createImageGenerationJob,
   createMattingJob,
+  createProductPipelineJob,
   createSubject,
   createVideoAnalysisJob,
   getJob,
@@ -22,6 +23,7 @@ import {
   deleteSubject,
   updateSubject,
 } from "@/lib/mono/service";
+import { resolveProductFolderByName, WORKFLOW_ID } from "@/lib/mono/product-pipeline";
 import { z } from "zod";
 import { runCapabilityCommand } from "@/lib/workbench/capability-bus";
 import { getCapability, isCapabilityBusEnabled } from "@/lib/workbench/capability-registry";
@@ -150,8 +152,29 @@ export function createMonoTools(context: MonoToolContext = {}) {
         () => createImageGenerationJob(actor, input),
       )),
     }),
+    mono_product_pipeline: tool({
+      description:
+        "为一个商品文件夹生成白底主图和 11 张详情套图（帽子品类）。" +
+        "**会调用付费生图服务**：一次完整运行要生成 7 张模特图，每张都花钱，并且会把成品写进共享盘覆盖同名文件。" +
+        "用户明确要求「跑某个货号 / 生成商品套图」时才调用，不要为了查看结果或确认状态而调用——查状态用 mono_get_job。" +
+        "folderName 传用户说的货号即可（如「1234」）；名字对不上或匹配到多个时工具会报错并列出候选，把候选转达给用户确认，不要自己挑一个。" +
+        "onlySlots 只在用户要求重跑指定的失败槽位时传，取值是模特槽位号（01、03–08）。",
+      inputSchema: z.object({
+        folderName: z.string().min(1).describe("商品文件夹名，通常就是货号，例如 1234"),
+        onlySlots: z.array(z.string().regex(/^\d{2}$/u)).min(1).max(7).optional()
+          .describe("只重跑这些模特槽位，例如 [\"04\",\"08\"]。不传则完整跑一遍"),
+      }),
+      execute: async ({ folderName, onlySlots }) => {
+        const folder = await resolveProductFolderByName(folderName);
+        return lightenMonoJob(createProductPipelineJob(actor, {
+          folderId: folder.id,
+          workflowId: WORKFLOW_ID,
+          onlySlots,
+        }));
+      },
+    }),
     mono_get_job: tool({
-      description: "查询 Mono 视频分析或图片生成任务的进度和结果。",
+      description: "查询 Mono 任务（视频分析、图片生成、抠像、商品套图）的进度和结果。查状态一律用这个，不要重新发起任务。",
       inputSchema: z.object({ jobId: z.string().min(1) }),
       execute: ({ jobId }) => {
         const job = getJob(actor, jobId);
