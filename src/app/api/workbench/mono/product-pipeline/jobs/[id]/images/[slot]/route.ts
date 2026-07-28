@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import sharp from "sharp";
 import { actorFromWorkbenchRequest, MonoHttpError, monoErrorResponse } from "@/lib/mono/http";
 import { getJob } from "@/lib/mono/service";
-import { productPipelineStagingRoot, resolveProductFolder } from "@/lib/mono/product-pipeline";
+import { productPipelineStagingRoot, resolveDetailPageFolder, resolveProductFolder } from "@/lib/mono/product-pipeline";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string; slot: string }> };
@@ -19,7 +19,7 @@ export async function GET(request: Request, context: Context) {
     const job = getJob(actor, id);
     if (!job || job.kind !== "product_pipeline") throw new MonoHttpError(404, "任务不存在或无权访问");
     const folder = resolveProductFolder(String(job.input.folderId ?? ""));
-    const imagesDir = path.resolve(folder.absolutePath, "images");
+    const imagesDir = path.resolve(resolveDetailPageFolder(folder.relativePath), "images");
     const baseName = path.basename(folder.absolutePath);
     const fileName = `${baseName}_${slot}.jpg`;
     const target = path.resolve(imagesDir, fileName);

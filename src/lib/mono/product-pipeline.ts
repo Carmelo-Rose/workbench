@@ -10,6 +10,7 @@ import {
   allocateModelSlots,
   classifyProductSources,
   measureColorPresence,
+  type RelativeBox,
   type SourceClassification,
 } from "./product-classify";
 import { applyBrandMark, renderDetailPresentation, renderTiledDisplay } from "./product-layouts";
@@ -58,7 +59,7 @@ export async function listProductWorkflows(): Promise<ProductWorkflow[]> {
     } catch { return { id, label: id }; }
   }));
 }
-const MODEL_CONCURRENCY = 6;
+const MODEL_CONCURRENCY = 8;
 const DETAIL_SLOTS = [
   ["01", 790, 1243, "model"], ["02", 790, 681, "fixed"], ["03", 790, 1021, "model"],
   ["04", 790, 1008, "model"], ["05", 790, 1005, "model"], ["06", 790, 1004, "model"],
@@ -93,9 +94,9 @@ export type ProductFolder = {
   imageCount: number;
   /** `x_` 开头的细节特写张数；为 0 时 11 号页要退化成用整体图拼版。 */
   detailShotCount: number;
-  /** `主图/` 里每张整体图都有对应白底图，这一轮可以跳过抠图。 */
+  /** 详情页目录的 `主图/` 里已经有本文件夹的产物，再跑一次会覆盖（抠图本身不会跳过）。 */
   hasMasters: boolean;
-  /** `images/` 里已经有本文件夹的成品，再跑一次会覆盖。 */
+  /** 详情页目录的 `images/` 里已经有本文件夹的成品，再跑一次会覆盖。 */
   hasImages: boolean;
 };
 type SourceImage = { path: string; name: string; stem: string; size: number; mtimeMs: number; hash: string };
@@ -302,6 +303,17 @@ export function productSourceRoot(): string {
   return process.env.PRODUCT_PIPELINE_SOURCE_ROOT ?? "\\\\192.168.1.99\\picture\\型麦-得物-品牌\\【原图】-待制作";
 }
 
+/**
+ * Where the pipeline's output lives: 主图/SKU/images, mirrored under the
+ * product's own name. This is deliberately a different tree from
+ * `productSourceRoot()` — 【原图】-待制作 is raw material handed to the
+ * pipeline, 【详情页】-待审 is what a person reviews afterward, and the two
+ * must not be conflated even though a folder shares its name across both.
+ */
+export function productDetailPageRoot(): string {
+  return process.env.PRODUCT_PIPELINE_DETAIL_ROOT ?? "\\\\192.168.1.99\\picture\\型麦-得物-品牌\\【详情页】-待审";
+}
+
 function normalizeRoot(root = productSourceRoot()): string { return path.resolve(root); }
 function contained(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
@@ -319,6 +331,14 @@ export function resolveProductFolder(id: string, root = productSourceRoot()): { 
   const absolutePath = path.resolve(resolvedRoot, relativePath);
   if (!contained(resolvedRoot, absolutePath)) throw new Error("商品文件夹超出允许目录");
   return { absolutePath, relativePath: path.relative(resolvedRoot, absolutePath) };
+}
+
+/** The 【详情页】-待审 mirror of a resolved source folder's `relativePath`. */
+export function resolveDetailPageFolder(relativePath: string, root = productDetailPageRoot()): string {
+  const resolvedRoot = normalizeRoot(root);
+  const absolutePath = path.resolve(resolvedRoot, relativePath);
+  if (!contained(resolvedRoot, absolutePath)) throw new Error("详情页目录超出允许目录");
+  return absolutePath;
 }
 
 /** A server-only, opaque identity for a shared product folder. */
@@ -345,23 +365,22 @@ async function imageStems(dir: string): Promise<string[]> {
  * Deliberately shallow: no cutout, no colour classification, no image decode.
  * This runs for every folder on a network share each time the picker opens, and
  * its only job is to tell the user what pressing "开始生成" will actually do —
- * skip the cutout, publish over an existing set, or fall back on the detail
- * page because nobody staged any macro crops.
+ * publish over an existing set, or fall back on the detail page because nobody
+ * staged any macro crops. `sourceDir` and `detailDir` are two different trees
+ * (原图 stays under 【原图】-待制作, 主图/images are read from the
+ * 【详情页】-待审 mirror), so both are needed here.
  */
-async function folderStatus(dir: string, folderName: string): Promise<Omit<ProductFolder, "id" | "name">> {
+async function folderStatus(sourceDir: string, detailDir: string, folderName: string): Promise<Omit<ProductFolder, "id" | "name">> {
   const [originals, masters, published] = await Promise.all([
-    imageStems(path.join(dir, "原图")),
-    imageStems(path.join(dir, "主图")),
-    imageStems(path.join(dir, "images")),
+    imageStems(path.join(sourceDir, "原图")),
+    imageStems(path.join(detailDir, "主图")),
+    imageStems(path.join(detailDir, "images")),
   ]);
   const article = originals.filter((stem) => !DETAIL_SHOT_PATTERN.test(stem));
   const masterStems = new Set(masters);
   return {
     imageCount: originals.length,
     detailShotCount: originals.length - article.length,
-    // The runner additionally opens each master to confirm it decodes; matching
-    // the names is the most this listing can honestly claim, and a master that
-    // is present but corrupt simply costs one cutout it thought it could skip.
     hasMasters: article.length > 0 && article.every((stem) => masterStems.has(stem)),
     hasImages: published.some((stem) => new RegExp(`^${escapeRegExp(folderName)}_\\d{2}$`, "u").test(stem)),
   };
@@ -372,8 +391,13 @@ function escapeRegExp(value: string): string {
 }
 
 /** Only direct children and grandchildren that themselves contain 原图 are selectable. */
-export async function listProductFolders(query = "", root = productSourceRoot()): Promise<ProductFolder[]> {
+export async function listProductFolders(
+  query = "",
+  root = productSourceRoot(),
+  detailRoot = productDetailPageRoot(),
+): Promise<ProductFolder[]> {
   const resolvedRoot = normalizeRoot(root);
+  const resolvedDetailRoot = normalizeRoot(detailRoot);
   const rows: ProductFolder[] = [];
   const visit = async (dir: string, depth: number): Promise<void> => {
     let entries;
@@ -385,7 +409,8 @@ export async function listProductFolders(query = "", root = productSourceRoot())
       const label = relative.replaceAll(path.sep, " / ");
       // Only folders that survive the query pay for the extra listings.
       if (!query || label.toLocaleLowerCase().includes(query.toLocaleLowerCase())) {
-        rows.push({ id: folderId(relative), name: label, ...await folderStatus(dir, path.basename(dir)) });
+        const detailDir = path.join(resolvedDetailRoot, relative);
+        rows.push({ id: folderId(relative), name: label, ...await folderStatus(dir, detailDir, path.basename(dir)) });
       }
       return;
     }
@@ -559,7 +584,17 @@ async function requestCutout(source: SourceImage, folderKey: string, signal: Abo
   }, signal);
 }
 
-export async function composeWhiteMaster(sourcePath: string, cutout: Buffer, output: string): Promise<void> {
+/**
+ * Flattens onto white at the source's own framing and returns the RGBA
+ * foreground (source pixels, cutout alpha) alongside it. The flattened file is
+ * the classification-safe "master" — full frame, natural studio margin —
+ * used for colour clustering and as the gpt-image-2 reference set. The
+ * returned buffer carries the real segmentation alpha forward for
+ * `composeSquareDeliverable`, which needs it once a product's crop box is
+ * known and must not have to re-derive a silhouette by thresholding a
+ * flattened JPEG.
+ */
+export async function composeWhiteMaster(sourcePath: string, cutout: Buffer, output: string): Promise<Buffer> {
   const [sourceMeta, cutoutMeta] = await Promise.all([sharp(sourcePath).metadata(), sharp(cutout).metadata()]);
   if (!sourceMeta.width || !sourceMeta.height) throw new Error("无法读取原图尺寸");
   if (cutoutMeta.width !== sourceMeta.width || cutoutMeta.height !== sourceMeta.height) {
@@ -582,10 +617,65 @@ export async function composeWhiteMaster(sourcePath: string, cutout: Buffer, out
     .composite([{ input: foreground, left: 0, top: 0 }])
     .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
     .toFile(output);
+  return foreground;
 }
 
-async function makeWhiteMaster(source: SourceImage, output: string, folderKey: string, signal: AbortSignal): Promise<void> {
-  await composeWhiteMaster(source.path, await requestCutout(source, folderKey, signal), output);
+async function makeWhiteMaster(source: SourceImage, output: string, folderKey: string, signal: AbortSignal): Promise<Buffer> {
+  return composeWhiteMaster(source.path, await requestCutout(source, folderKey, signal), output);
+}
+
+/** Square 1:1 deliverable side, matching the hand-built reference set on the share. */
+const SQUARE_CANVAS_SIZE = 800;
+/** Breathing room kept around the product when cropping to its measured box. */
+const SQUARE_CROP_PADDING = 0.04;
+/** Product's longer side as a fraction of the canvas; the rest is white margin. */
+const SQUARE_FILL_RATIO = 0.86;
+
+/** Crops an RGBA buffer to a relative box plus padding, in pixel space. */
+async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number): Promise<Buffer> {
+  const { width, height } = await sharp(buffer).metadata();
+  if (!width || !height) throw new Error("无法读取白底图尺寸");
+  const left = Math.max(0, Math.round((box.left - padding) * width));
+  const top = Math.max(0, Math.round((box.top - padding) * height));
+  const right = Math.min(width, Math.round((box.left + box.width + padding) * width));
+  const bottom = Math.min(height, Math.round((box.top + box.height + padding) * height));
+  return sharp(buffer)
+    .extract({ left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) })
+    .png()
+    .toBuffer();
+}
+
+/**
+ * Renders the published 1:1 deliverable: the product cropped to its measured
+ * box, centred on a white square. Whatever the cutout's alpha carries at the
+ * product's edge — including a natural contact shadow the shoot itself cast
+ * onto the backdrop — is kept as-is; nothing synthetic is added on top.
+ *
+ * `box` must come from measuring the *same* foreground this was cut from
+ * (`classification`'s per-shot box) — a mismatched box would crop the wrong
+ * region of a differently-framed photo.
+ */
+export async function composeSquareDeliverable(
+  foreground: Buffer,
+  box: RelativeBox,
+  output: string,
+): Promise<void> {
+  const cropped = await cropBufferToBox(foreground, box, SQUARE_CROP_PADDING);
+  const target = Math.round(SQUARE_CANVAS_SIZE * SQUARE_FILL_RATIO);
+  const { data: resized, info } = await sharp(cropped)
+    .resize(target, target, { fit: "inside" })
+    .png()
+    .toBuffer({ resolveWithObject: true });
+  const left = Math.round((SQUARE_CANVAS_SIZE - info.width) / 2);
+  const top = Math.round((SQUARE_CANVAS_SIZE - info.height) / 2);
+  await sharp({ create: { width: SQUARE_CANVAS_SIZE, height: SQUARE_CANVAS_SIZE, channels: 3, background: "#ffffff" } })
+    .composite([{ input: resized, left, top }])
+    // sharp applies flatten() in a fixed internal stage that runs before
+    // composite(), so it cannot strip the alpha composite() just introduced —
+    // removeAlpha() has no such ordering quirk.
+    .removeAlpha()
+    .png()
+    .toFile(output);
 }
 
 /** Runs a bounded number of independent source-image jobs without allowing a
@@ -705,35 +795,38 @@ function progress(job: MonoJob, stage: string, percent: number, result: Record<s
 export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
   const folderId = String(job.input.folderId ?? "");
   const { absolutePath, relativePath } = resolveProductFolder(folderId);
+  const detailFolder = resolveDetailPageFolder(relativePath);
   const folderKey = productPipelineFolderKey(folderId);
   const sources = await sourceImages(path.join(absolutePath, "原图"));
   const { article: articleSources, details: detailShots } = partitionSources(sources);
   if (!articleSources.length) throw new Error("原图目录只有 x_ 开头的细节图，缺少商品整体图");
   const stagingRoot = productPipelineStagingRoot(job.id);
-  const masterStage = path.join(stagingRoot, "主图");
-  const masterDestination = path.join(absolutePath, "主图");
-  const reusable = await findReusableMasters(masterDestination, articleSources);
-  let masters: string[];
-  if (reusable) {
-    progress(job, "main_published", 20, { sourceCount: articleSources.length, resumed: true, masterHashes: reusable.map((item) => item.hash) });
-    masters = reusable.map((item) => item.path);
-  } else {
-    await mkdir(masterStage, { recursive: true });
-    progress(job, "正在生成白底主图", 5, { sourceCount: articleSources.length, outputs: [] });
-    const outputs: ({ name: string; sha256: string } | undefined)[] = Array.from({ length: articleSources.length });
-    await runWithConcurrency(articleSources, PRODUCT_CUTOUT_CONCURRENCY, async (source, index) => {
-      if (signal.aborted) throw new Error("任务已取消");
-      await assertSourcesUnchanged(sources);
-      const name = `${source.stem}.jpg`; const output = path.join(masterStage, name);
-      await makeWhiteMaster(source, output, folderKey, signal);
-      outputs[index] = { name, sha256: sha256(await readFile(output)) };
-      progress(job, "正在生成白底主图", Math.round(5 + (outputs.filter(Boolean).length / articleSources.length) * 70), { sourceCount: articleSources.length, outputs: outputs.filter(Boolean) });
-    });
+  // Full-frame, unstyled — an intermediate used only for colour clustering and
+  // as the gpt-image-2 reference set. Never published: the deliverable a
+  // person sees under 【详情页】-待审/主图 is the square+shadow render below,
+  // built once each shot's crop box is known from classification.
+  const masterStage = path.join(stagingRoot, "主图-原始");
+  const masterDestination = path.join(detailFolder, "主图");
+  const skuDestination = path.join(detailFolder, "SKU");
+  await mkdir(masterStage, { recursive: true });
+  progress(job, "正在生成白底主图", 5, { sourceCount: articleSources.length, outputs: [] });
+  const outputs: ({ name: string; sha256: string } | undefined)[] = Array.from({ length: articleSources.length });
+  // Keyed by masterStage path so the classifier's per-shot box (computed
+  // against that exact file) can be matched back to the RGBA layer it came
+  // from when rendering the square deliverable.
+  const foregroundByPath = new Map<string, Buffer>();
+  await runWithConcurrency(articleSources, PRODUCT_CUTOUT_CONCURRENCY, async (source, index) => {
+    if (signal.aborted) throw new Error("任务已取消");
     await assertSourcesUnchanged(sources);
-    await atomicPublish(masterStage, masterDestination);
-    masters = articleSources.map((source) => path.join(masterDestination, `${source.stem}.jpg`));
-    progress(job, "main_published", 25, { resumed: false, masterHashes: await Promise.all(masters.map(fileHash)) });
-  }
+    const name = `${source.stem}.jpg`; const output = path.join(masterStage, name);
+    const foreground = await makeWhiteMaster(source, output, folderKey, signal);
+    foregroundByPath.set(output, foreground);
+    outputs[index] = { name, sha256: sha256(await readFile(output)) };
+    progress(job, "正在生成白底主图", Math.round(5 + (outputs.filter(Boolean).length / articleSources.length) * 70), { sourceCount: articleSources.length, outputs: outputs.filter(Boolean) });
+  });
+  await assertSourcesUnchanged(sources);
+  const masters = articleSources.map((source) => path.join(masterStage, `${source.stem}.jpg`));
+  progress(job, "main_published", 25, { resumed: false, masterHashes: await Promise.all(masters.map(fileHash)) });
   // The bundle the job asked for, not a hardcoded one — otherwise dropping a
   // second category into config/product-pipeline would still render every
   // product with the hat template.
@@ -750,6 +843,33 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   // the folder labels them, and no human edits the set between steps.
   const classification = await classifyProductSources(masters, { hasNamedDetailShots: detailShots.length > 0 });
   if (!classification.colors.length) throw new Error("无法识别可用商品颜色；未调用付费生图服务");
+
+  // 主图（方形+阴影，每张原图一份）和 SKU（每个颜色一张代表图，无阴影）都是
+  // 本地渲染，不占抠图或付费生图的名额。放在分类之后，是因为方形裁切要用
+  // classifyProductSources 已经量出来的 box —— 这张图里商品到底在哪。
+  progress(job, "正在渲染方形主图与 SKU 图", 32, { colors: classification.colors.length });
+  const masterSquareStage = path.join(stagingRoot, "主图"); await mkdir(masterSquareStage, { recursive: true });
+  const skuStage = path.join(stagingRoot, "SKU"); await mkdir(skuStage, { recursive: true });
+  const allMasterShots = classification.colors.flatMap((color) => color.members);
+  await runWithConcurrency(allMasterShots, PRODUCT_CUTOUT_CONCURRENCY, async (member) => {
+    if (signal.aborted) throw new Error("任务已取消");
+    const foreground = foregroundByPath.get(member.path);
+    if (!foreground) throw new Error(`缺少白底图中间产物：${member.path}`);
+    const stem = path.parse(member.path).name;
+    await composeSquareDeliverable(foreground, member.metric.box, path.join(masterSquareStage, `${stem}.png`));
+  });
+  await runWithConcurrency(classification.colors, PRODUCT_CUTOUT_CONCURRENCY, async (color) => {
+    if (signal.aborted) throw new Error("任务已取消");
+    const foreground = foregroundByPath.get(color.representative.path);
+    if (!foreground) throw new Error(`缺少 SKU 代表图的中间产物：${color.representative.path}`);
+    // representative is today's best-effort stand-in for "the ~45° side shot":
+    // the shoot's first frame in that colourway, not an angle-verified pick —
+    // spot-check the published SKU images against the real angle convention.
+    await composeSquareDeliverable(foreground, color.representative.metric.box, path.join(skuStage, `SKU${color.rank + 1}.png`));
+  });
+  await atomicPublish(masterSquareStage, masterDestination);
+  await atomicPublish(skuStage, skuDestination);
+
   const slotColorRank = modelSlotColorRanks(classification.colors.length);
   const rawOnlySlots = job.input.onlySlots;
   const onlySlots = Array.isArray(rawOnlySlots) && rawOnlySlots.length ? rawOnlySlots.map(String) : null;
@@ -814,7 +934,11 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   await verifyDetailOutputs(detailStage, baseName, sources, producedSlotIds);
   await assertSourcesUnchanged(sources);
   progress(job, "publishing_images", 93, { colors, detailShots: detailShotCount, slots: records, failedSlots, warnings });
-  await publishImages(detailStage, path.join(absolutePath, "images"), baseName, producedSlotIds);
+  await publishImages(detailStage, path.join(detailFolder, "images"), baseName, producedSlotIds);
+  // The only staging directory not already removed by an atomicPublish call:
+  // it fed classification and the gpt-image-2 references but was never itself
+  // a publish target.
+  await rm(masterStage, { recursive: true, force: true });
   return {
     stage: "completed",
     progress: 100,
@@ -824,7 +948,9 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     detailShots: detailShotCount,
     slots: records,
     warnings,
-    resumed: Boolean(reusable),
+    // Cutout is no longer skipped across runs (see masterStage above), so this
+    // is always false. Kept for API/UI compatibility with `result.resumed`.
+    resumed: false,
     incomplete: failedSlots.length > 0,
     failedSlots,
   };
@@ -878,9 +1004,6 @@ async function renderCompositedSlot(
 
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 async function fileHash(file: string): Promise<string> { return sha256(await readFile(file)); }
-async function findReusableMasters(destination: string, sources: SourceImage[]): Promise<{ path: string; hash: string }[] | null> {
-  try { const results = await Promise.all(sources.map(async (source) => { const file = path.join(destination, `${source.stem}.jpg`); await sharp(file).metadata(); return { path: file, hash: await fileHash(file) }; })); return results; } catch { return null; }
-}
 async function validateTemplateBundle(root: string, workflowId: string): Promise<TemplateManifest> {
   const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8")) as TemplateManifest;
   if (manifest.version !== workflowId) throw new Error("商品套图模板版本不匹配");
