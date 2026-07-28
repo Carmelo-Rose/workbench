@@ -345,7 +345,7 @@ describe("square deliverable composition", () => {
   it("centres the product on an 800x800 white canvas", async () => {
     const root = await fixture();
     const output = path.join(root, "square.png");
-    await composeSquareDeliverable(await foreground(), box, output, { shadow: false });
+    await composeSquareDeliverable(await foreground(), box, output);
     const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
     expect(info).toMatchObject({ width: 800, height: 800, channels: 3 });
     const pixel = (x: number, y: number) => Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x + 1) * info.channels));
@@ -355,24 +355,6 @@ describe("square deliverable composition", () => {
     const centre = pixel(400, 400);
     expect(centre[0]).toBeGreaterThan(centre[2]);
     expect(centre).not.toEqual([255, 255, 255]);
-  });
-
-  it("darkens the area just below the product only when a shadow is requested", async () => {
-    const root = await fixture();
-    const plain = path.join(root, "plain.png");
-    const shadowed = path.join(root, "shadowed.png");
-    await composeSquareDeliverable(await foreground(), box, plain, { shadow: false });
-    await composeSquareDeliverable(await foreground(), box, shadowed, { shadow: true });
-    const read = async (file: string) => sharp(file).raw().toBuffer({ resolveWithObject: true });
-    const [plainPixels, shadowedPixels] = await Promise.all([read(plain), read(shadowed)]);
-    // Below the product's lower edge, inside the shadow's blurred falloff:
-    // white on the plain render, visibly dimmed on the shadowed one.
-    const y = 650; const x = 400;
-    const offset = (data: Buffer, info: { width: number; channels: number }) => (y * info.width + x) * info.channels;
-    const plainPixel = plainPixels.data[offset(plainPixels.data, plainPixels.info)];
-    const shadowedPixel = shadowedPixels.data[offset(shadowedPixels.data, shadowedPixels.info)];
-    expect(plainPixel).toBe(255);
-    expect(shadowedPixel).toBeLessThan(plainPixel);
   });
 });
 

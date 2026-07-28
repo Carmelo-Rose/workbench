@@ -59,7 +59,7 @@ export async function listProductWorkflows(): Promise<ProductWorkflow[]> {
     } catch { return { id, label: id }; }
   }));
 }
-const MODEL_CONCURRENCY = 6;
+const MODEL_CONCURRENCY = 8;
 const DETAIL_SLOTS = [
   ["01", 790, 1243, "model"], ["02", 790, 681, "fixed"], ["03", 790, 1021, "model"],
   ["04", 790, 1008, "model"], ["05", 790, 1005, "model"], ["06", 790, 1004, "model"],
@@ -630,9 +630,6 @@ const SQUARE_CANVAS_SIZE = 800;
 const SQUARE_CROP_PADDING = 0.04;
 /** Product's longer side as a fraction of the canvas; the rest is white margin. */
 const SQUARE_FILL_RATIO = 0.86;
-const SHADOW_BLUR_SIGMA = 14;
-const SHADOW_OPACITY = 0.35;
-const SHADOW_OFFSET_RATIO = 0.02;
 
 /** Crops an RGBA buffer to a relative box plus padding, in pixel space. */
 async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number): Promise<Buffer> {
@@ -650,7 +647,9 @@ async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number
 
 /**
  * Renders the published 1:1 deliverable: the product cropped to its measured
- * box, centred on a white square, with an optional soft contact shadow.
+ * box, centred on a white square. Whatever the cutout's alpha carries at the
+ * product's edge — including a natural contact shadow the shoot itself cast
+ * onto the backdrop — is kept as-is; nothing synthetic is added on top.
  *
  * `box` must come from measuring the *same* foreground this was cut from
  * (`classification`'s per-shot box) — a mismatched box would crop the wrong
@@ -660,7 +659,6 @@ export async function composeSquareDeliverable(
   foreground: Buffer,
   box: RelativeBox,
   output: string,
-  options: { shadow: boolean },
 ): Promise<void> {
   const cropped = await cropBufferToBox(foreground, box, SQUARE_CROP_PADDING);
   const target = Math.round(SQUARE_CANVAS_SIZE * SQUARE_FILL_RATIO);
@@ -670,19 +668,8 @@ export async function composeSquareDeliverable(
     .toBuffer({ resolveWithObject: true });
   const left = Math.round((SQUARE_CANVAS_SIZE - info.width) / 2);
   const top = Math.round((SQUARE_CANVAS_SIZE - info.height) / 2);
-  const layers: { input: Buffer; left: number; top: number }[] = [];
-  if (options.shadow) {
-    // A blurred, dimmed copy of the product's own alpha silhouette, offset
-    // down slightly — a cheap but convincing contact shadow that needs no
-    // extra segmentation pass since the alpha channel is already exact.
-    const shadowAlpha = await sharp(resized).extractChannel("alpha").blur(SHADOW_BLUR_SIGMA).linear(SHADOW_OPACITY, 0).toBuffer();
-    const shadowRgb = await sharp({ create: { width: info.width, height: info.height, channels: 3, background: { r: 20, g: 20, b: 20 } } }).png().toBuffer();
-    const shadowLayer = await sharp(shadowRgb).joinChannel(shadowAlpha).png().toBuffer();
-    layers.push({ input: shadowLayer, left, top: top + Math.round(SQUARE_CANVAS_SIZE * SHADOW_OFFSET_RATIO) });
-  }
-  layers.push({ input: resized, left, top });
   await sharp({ create: { width: SQUARE_CANVAS_SIZE, height: SQUARE_CANVAS_SIZE, channels: 3, background: "#ffffff" } })
-    .composite(layers)
+    .composite([{ input: resized, left, top }])
     // sharp applies flatten() in a fixed internal stage that runs before
     // composite(), so it cannot strip the alpha composite() just introduced —
     // removeAlpha() has no such ordering quirk.
@@ -869,7 +856,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     const foreground = foregroundByPath.get(member.path);
     if (!foreground) throw new Error(`缺少白底图中间产物：${member.path}`);
     const stem = path.parse(member.path).name;
-    await composeSquareDeliverable(foreground, member.metric.box, path.join(masterSquareStage, `${stem}.png`), { shadow: true });
+    await composeSquareDeliverable(foreground, member.metric.box, path.join(masterSquareStage, `${stem}.png`));
   });
   await runWithConcurrency(classification.colors, PRODUCT_CUTOUT_CONCURRENCY, async (color) => {
     if (signal.aborted) throw new Error("任务已取消");
@@ -878,7 +865,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     // representative is today's best-effort stand-in for "the ~45° side shot":
     // the shoot's first frame in that colourway, not an angle-verified pick —
     // spot-check the published SKU images against the real angle convention.
-    await composeSquareDeliverable(foreground, color.representative.metric.box, path.join(skuStage, `SKU${color.rank + 1}.png`), { shadow: false });
+    await composeSquareDeliverable(foreground, color.representative.metric.box, path.join(skuStage, `SKU${color.rank + 1}.png`));
   });
   await atomicPublish(masterSquareStage, masterDestination);
   await atomicPublish(skuStage, skuDestination);
