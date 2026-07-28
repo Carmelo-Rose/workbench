@@ -527,6 +527,20 @@ export function productPipelineStagingRoot(jobId: string): string {
 
 const DETAIL_SHOT_PATTERN = /^x_(\d+)$/iu;
 
+/**
+ * The four crops slot 11 publishes, and the shot its hero band is cut out of.
+ *
+ * Anything past the fourth is deliberately ignored. A shoot that stages a fifth
+ * macro briefly had it promoted to the hero, which put across the top of the
+ * page a shot nobody had framed for the fabric caption — the hand-built
+ * reference page cuts its band out of the fourth crop instead, and a shoot with
+ * fewer than four falls back to whichever is last for the same reason.
+ */
+export function detailPageSources(crops: readonly string[]): { hero: string; grid: string[] } {
+  const grid = crops.slice(0, 4);
+  return { hero: grid[grid.length - 1], grid };
+}
+
 function partitionSources(sources: SourceImage[]): { article: SourceImage[]; details: SourceImage[] } {
   const article: SourceImage[] = [];
   const details: { order: number; source: SourceImage }[] = [];
@@ -992,13 +1006,9 @@ async function renderCompositedSlot(
     ? detailShots.map((shot) => shot.path)
     : (classification.details.length ? classification.details : classification.colors[0].members)
         .map((item) => item.path);
-  // The grid takes the first four crops. The hero band is its own shot when the
-  // shoot supplies a fifth; otherwise it is a wide centre crop of the last one,
-  // which is how the hand-built reference page was put together.
-  const grid = crops.slice(0, 4);
+  const { hero, grid } = detailPageSources(crops);
   await renderDetailPresentation(
-    crops[4] ?? grid[grid.length - 1], grid,
-    output, width, height, template.pages["11"].title, template.pages["11"].caption,
+    hero, grid, output, width, height, template.pages["11"].title, template.pages["11"].caption,
   );
 }
 

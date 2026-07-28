@@ -182,6 +182,30 @@ describe("brand wordmark", () => {
   });
 });
 
+/** `count` plain frames of one colour, standing in for a shoot's macro crops. */
+async function plainCrops(dir: string, count: number, color: string): Promise<string[]> {
+  const files: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const file = nodePath.join(dir, `crop-${index}.jpg`);
+    await sharp({ create: { width: 900, height: 600, channels: 3, background: color } }).jpeg().toFile(file);
+    files.push(file);
+  }
+  return files;
+}
+
+/** Mean luma over a rectangle of a rendered page. */
+async function meanLuma(
+  file: string,
+  rect: { left: number; top: number; width: number; height: number },
+): Promise<number> {
+  const { data, info } = await sharp(file).extract(rect).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  let total = 0;
+  for (let offset = 0; offset < data.length; offset += info.channels) {
+    total += 0.2126 * data[offset] + 0.7152 * data[offset + 1] + 0.0722 * data[offset + 2];
+  }
+  return total / (info.width * info.height);
+}
+
 describe("detail page caption", () => {
   const dirs: string[] = [];
   afterEach(async () => {
@@ -221,6 +245,67 @@ describe("detail page caption", () => {
       }
     }
     expect(darkened / total).toBeGreaterThan(0.5);
+  });
+
+  /**
+   * Regression: the scrim used to be applied at full strength whatever the crop
+   * was under it, which laid a grey wash across the top of every page whose
+   * hero landed on dark cloth — the reference set has none.
+   */
+  it("leaves the caption band alone over a hero crop that is already dark", async () => {
+    const dir = await mkdtemp(nodePath.join(os.tmpdir(), "detailpage-"));
+    dirs.push(dir);
+    const crops = await plainCrops(dir, 4, "#2b3350");
+    const output = nodePath.join(dir, "slot-11.jpg");
+
+    await renderDetailPresentation(crops[3], crops.slice(0, 4), output, 790, 1026,
+      { chinese: "细节展示", english: "DETAIL PRESENTATION" },
+      { headline: "升级面料", english: "Upgraded fabric", sub: "立体刺绣工艺" });
+
+    // Sampled to the right of the English caption, so only the scrim can have
+    // touched these pixels. #2b3350 reads about 51; a full scrim halves that.
+    expect(await meanLuma(output, { left: 730, top: 115, width: 22, height: 35 })).toBeGreaterThan(40);
+  });
+});
+
+describe("detail page framing", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  /**
+   * Regression: the crops were cover-fitted, which on a studio frame of the
+   * whole article put the cap in the cell at arm's length. The reference page
+   * frames each block roughly twice that close, and the difference between the
+   * two is the whole of what slot 11 is for.
+   */
+  it("frames a block closer than a cover-fit of the whole frame would", async () => {
+    const dir = await mkdtemp(nodePath.join(os.tmpdir(), "detailframe-"));
+    dirs.push(dir);
+    // White frames carrying a navy patch across the middle half. A cover-fit
+    // shows the white surround; the reference zoom lands wholly inside it.
+    const crops: string[] = [];
+    for (let index = 0; index < 4; index += 1) {
+      const file = nodePath.join(dir, `crop-${index}.jpg`);
+      await sharp({ create: { width: 900, height: 600, channels: 3, background: "#ffffff" } })
+        .composite([{
+          input: { create: { width: 450, height: 300, channels: 3, background: "#2b3350" } },
+          left: 225,
+          top: 150,
+        }])
+        .jpeg().toFile(file);
+      crops.push(file);
+    }
+    const output = nodePath.join(dir, "slot-11.jpg");
+
+    await renderDetailPresentation(crops[3], crops.slice(0, 4), output, 790, 1026,
+      { chinese: "细节展示", english: "DETAIL PRESENTATION" },
+      { headline: "升级面料", english: "Upgraded fabric", sub: "立体刺绣工艺" });
+
+    // The top-left cell of the grid, inset so JPEG ringing on the block edge
+    // cannot decide the result.
+    expect(await meanLuma(output, { left: 40, top: 466, width: 329, height: 228 })).toBeLessThan(80);
   });
 });
 
