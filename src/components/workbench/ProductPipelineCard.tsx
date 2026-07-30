@@ -149,6 +149,7 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
         {
           folderId,
           workflowId: stringValue(job.input.workflowId) ?? "hat-62604171-v1",
+          modelPairId: stringValue(job.input.modelPairId),
           folderName,
           onlySlots: failedIds,
         },

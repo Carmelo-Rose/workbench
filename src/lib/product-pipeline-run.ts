@@ -5,6 +5,8 @@ import type { useAui } from "@assistant-ui/react";
 export type ProductPipelineRunConfig = {
   folderId: string;
   workflowId: string;
+  /** Every newly created 商品套图 carries this; kept optional so legacy job cards can render. */
+  modelPairId?: string;
   /** Display label only — echoed straight back to the card, never stored on the job. */
   folderName?: string;
   onlySlots?: string[];

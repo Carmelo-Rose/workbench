@@ -43,7 +43,7 @@ export async function DELETE(request: Request, context: Context) {
     const actor = actorFromWorkbenchRequest(request);
     const { id } = await context.params;
     if (new URL(request.url).searchParams.get("purge") === "true") {
-      if (!purgeJob(actor, id)) throw new MonoHttpError(409, "只有已结束的任务可以从历史中删除");
+      if (!await purgeJob(actor, id)) throw new MonoHttpError(409, "只有已结束的任务可以从历史中删除");
       return new Response(null, { status: 204 });
     }
     const job = cancelJob(actor, id);

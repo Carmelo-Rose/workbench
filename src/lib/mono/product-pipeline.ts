@@ -3,7 +3,8 @@ import { cp, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
-import { updateMonoJobResult } from "./store";
+import { createMonoAsset, linkMonoJobAsset, updateMonoJobResult } from "./store";
+import { saveObjectBuffer } from "@/lib/storage";
 import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
 import { getConfigValue } from "@/lib/server/api-config";
 import {
@@ -14,8 +15,18 @@ import {
   type SourceClassification,
 } from "./product-classify";
 import { applyBrandMark, renderDetailPresentation, renderTiledDisplay } from "./product-layouts";
-import { buildModelPrompt, loadProductTemplate, type ProductTemplate } from "./product-template";
+import {
+  buildModelPrompt,
+  identityGroupForLook,
+  loadProductTemplate,
+  type ModelIdentityGroup,
+  type ProductTemplate,
+} from "./product-template";
+import { resolveProductModelPair, type ResolvedProductModelPair } from "./product-model-pairs";
+import { productDetailPageRoot, productSourceRoot } from "./product-roots";
 import type { MonoJob, ProductPipelineInput } from "./contracts";
+
+export { productDetailPageRoot, productSourceRoot } from "./product-roots";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
 /** Default when a caller does not name one; not the only one that is accepted. */
@@ -298,22 +309,6 @@ const PRODUCT_PIPELINE_SCHEDULING = productPipelineSchedulingSettings();
 const PRODUCT_CUTOUT_CONCURRENCY = PRODUCT_PIPELINE_SCHEDULING.perFolderCutouts;
 const productCutoutScheduler = new ProductCutoutScheduler(PRODUCT_PIPELINE_SCHEDULING);
 
-/** Kept server-side. Do not send this value or an absolute path to a browser. */
-export function productSourceRoot(): string {
-  return process.env.PRODUCT_PIPELINE_SOURCE_ROOT ?? "\\\\192.168.1.99\\picture\\型麦-得物-品牌\\【原图】-待制作";
-}
-
-/**
- * Where the pipeline's output lives: 主图/SKU/images, mirrored under the
- * product's own name. This is deliberately a different tree from
- * `productSourceRoot()` — 【原图】-待制作 is raw material handed to the
- * pipeline, 【详情页】-待审 is what a person reviews afterward, and the two
- * must not be conflated even though a folder shares its name across both.
- */
-export function productDetailPageRoot(): string {
-  return process.env.PRODUCT_PIPELINE_DETAIL_ROOT ?? "\\\\192.168.1.99\\picture\\型麦-得物-品牌\\【详情页】-待审";
-}
-
 function normalizeRoot(root = productSourceRoot()): string { return path.resolve(root); }
 function contained(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
@@ -550,6 +545,15 @@ function partitionSources(sources: SourceImage[]): { article: SourceImage[]; det
     else article.push(source);
   }
   details.sort((first, second) => first.order - second.order);
+  // `readdir` order is whatever the filesystem/SMB share happens to return, not
+  // the camera's frame sequence — on a shoot where a colourway spans two
+  // sessions (a reshoot merged back in by colour), an unsorted `article` array
+  // can hand the SKU/tiled representative pick (`members[0]` in
+  // classifyProductSources) a mid-sequence frame instead of the shoot's actual
+  // lead angle, publishing a cap that faces the wrong way next to its siblings.
+  // Camera filenames increment per frame within a session, so a plain name sort
+  // restores shoot order.
+  article.sort((first, second) => first.name.localeCompare(second.name, "en", { numeric: true }));
   return { article, details: details.map((item) => item.source) };
 }
 
@@ -634,36 +638,387 @@ export async function composeWhiteMaster(sourcePath: string, cutout: Buffer, out
   return foreground;
 }
 
-async function makeWhiteMaster(source: SourceImage, output: string, folderKey: string, signal: AbortSignal): Promise<Buffer> {
-  return composeWhiteMaster(source.path, await requestCutout(source, folderKey, signal), output);
+const DELIVERABLE_ALPHA_FLOOR = 96;
+const DELIVERABLE_ALPHA_CEILING = 224;
+// SKU images deliberately use a hard high-confidence silhouette. The soft
+// alpha halo from a cutout can include cast-shadow fragments, which read as
+// grey dirt once flattened onto SKU's required pure-white background.
+const SKU_ALPHA_THRESHOLD = 224;
+const SHADOW_ANALYSIS_MAX_SIDE = 1200;
+const SHADOW_BACKGROUND_QUANTILE = 0.82;
+const SHADOW_CONTRAST_START = 7;
+const SHADOW_CONTRAST_FULL = 42;
+
+/**
+ * The segmentation matte sometimes assigns a little alpha to the cast shadow.
+ * That fragment is not a usable shadow layer: it is normally clipped and much
+ * darker than the surrounding penumbra. Tighten the matte for the opaque
+ * product layer; the complete photographed shadow is recovered separately
+ * below.
+ */
+export async function refineProductForeground(foreground: Buffer): Promise<Buffer> {
+  const metadata = await sharp(foreground).metadata();
+  if (!metadata.hasAlpha) return sharp(foreground).ensureAlpha().png().toBuffer();
+  const [rgb, originalAlpha] = await Promise.all([
+    sharp(foreground).removeAlpha().png().toBuffer(),
+    sharp(foreground).extractChannel("alpha").png().toBuffer(),
+  ]);
+  // `linear()` runs before `extractChannel()` in libvips' fixed operation
+  // order. Decode the extracted channel as a separate image so the level
+  // adjustment is applied to the matte rather than discarded with RGB.
+  const alpha = await sharp(originalAlpha)
+    .linear(
+      255 / (DELIVERABLE_ALPHA_CEILING - DELIVERABLE_ALPHA_FLOOR),
+      (-DELIVERABLE_ALPHA_FLOOR * 255) /
+        (DELIVERABLE_ALPHA_CEILING - DELIVERABLE_ALPHA_FLOOR),
+    )
+    .png()
+    .toBuffer();
+  return sharp(rgb).joinChannel(alpha).png().toBuffer();
+}
+
+/**
+ * SKU is a clean catalogue cutout, not a studio presentation. Keep only the
+ * high-confidence product matte; the final resize supplies a narrow antialias
+ * at the silhouette without carrying a photographed shadow into the white
+ * square.
+ */
+export async function refineSkuForeground(foreground: Buffer): Promise<Buffer> {
+  const metadata = await sharp(foreground).metadata();
+  if (!metadata.hasAlpha) return sharp(foreground).ensureAlpha().png().toBuffer();
+  const [rgb, originalAlpha] = await Promise.all([
+    sharp(foreground).removeAlpha().png().toBuffer(),
+    sharp(foreground).extractChannel("alpha").png().toBuffer(),
+  ]);
+  const alpha = await sharp(originalAlpha)
+    .threshold(SKU_ALPHA_THRESHOLD)
+    .png()
+    .toBuffer();
+  return sharp(rgb).joinChannel(alpha).png().toBuffer();
+}
+
+function histogramQuantile(histogram: Uint32Array, count: number, quantile: number): number {
+  if (count < 1) return 255;
+  const target = Math.max(1, Math.ceil(count * quantile));
+  let seen = 0;
+  for (let value = 0; value < histogram.length; value += 1) {
+    seen += histogram[value];
+    if (seen >= target) return value;
+  }
+  return 255;
+}
+
+function smoothProfile(profile: Float32Array, radius: number): Float32Array {
+  if (radius < 1) return profile;
+  const prefix = new Float64Array(profile.length + 1);
+  for (let index = 0; index < profile.length; index += 1) {
+    prefix[index + 1] = prefix[index] + profile[index];
+  }
+  const smoothed = new Float32Array(profile.length);
+  for (let index = 0; index < profile.length; index += 1) {
+    const first = Math.max(0, index - radius);
+    const last = Math.min(profile.length, index + radius + 1);
+    smoothed[index] = (prefix[last] - prefix[first]) / (last - first);
+  }
+  return smoothed;
+}
+
+function smoothStep(value: number, first: number, last: number): number {
+  const normalized = Math.max(0, Math.min(1, (value - first) / (last - first)));
+  return normalized * normalized * (3 - 2 * normalized);
+}
+
+/**
+ * Recovers the real studio shadow from a light sweep without treating the
+ * sweep itself as foreground.
+ *
+ * BiRefNet already leaves a low-confidence halo over most real cast shadows;
+ * that semantic seed is strengthened non-linearly instead of discarded. Some
+ * deep concavities (under a curved brim, for example) have zero matte despite
+ * containing a real contact shadow, so a second, tightly bounded pass recovers
+ * darkness immediately below each product column. The clean sweep for that
+ * pass is estimated from the bright quantile of every row and column.
+ *
+ * Using the model halo for the broad penumbra and luminance only for contact
+ * gaps retains the photographed shape while rejecting distant paper seams and
+ * backdrop gradients.
+ *
+ * The result is an opaque RGB backdrop (mostly pure white), deliberately kept
+ * separate from the product alpha. It can therefore be enabled for 主图 and
+ * omitted for SKU without inventing a synthetic drop shadow.
+ */
+export async function composeNaturalShadowBackdrop(sourcePath: string, cutout: Buffer): Promise<Buffer> {
+  const [sourceMeta, cutoutMeta] = await Promise.all([sharp(sourcePath).metadata(), sharp(cutout).metadata()]);
+  if (!sourceMeta.width || !sourceMeta.height) throw new Error("无法读取原图尺寸");
+  if (cutoutMeta.width !== sourceMeta.width || cutoutMeta.height !== sourceMeta.height) {
+    throw new Error("抠图产物尺寸与原图不一致，无法恢复自然阴影");
+  }
+
+  const scale = Math.min(1, SHADOW_ANALYSIS_MAX_SIDE / Math.max(sourceMeta.width, sourceMeta.height));
+  const width = Math.max(1, Math.round(sourceMeta.width * scale));
+  const height = Math.max(1, Math.round(sourceMeta.height * scale));
+  const mattePipeline = cutoutMeta.hasAlpha
+    ? sharp(cutout).extractChannel("alpha")
+    : sharp(cutout).toColorspace("b-w");
+  const [{ data: source, info: sourceInfo }, { data: matte }] = await Promise.all([
+    sharp(sourcePath)
+      .removeAlpha()
+      .toColorspace("srgb")
+      .resize(width, height, { fit: "fill" })
+      .raw()
+      .toBuffer({ resolveWithObject: true }),
+    mattePipeline
+      .resize(width, height, { fit: "fill" })
+      .raw()
+      .toBuffer({ resolveWithObject: true }),
+  ]);
+
+  const pixels = width * height;
+  const luminance = new Uint8Array(pixels);
+  const bottomByColumn = new Int32Array(width);
+  bottomByColumn.fill(-1);
+  const globalHistogram = new Uint32Array(256);
+  const rowHistograms = new Uint32Array(height * 256);
+  const columnHistograms = new Uint32Array(width * 256);
+  const rowCounts = new Uint32Array(height);
+  const columnCounts = new Uint32Array(width);
+  let backgroundCount = 0;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x;
+      const offset = index * sourceInfo.channels;
+      const value = Math.round(
+        0.2126 * source[offset]
+        + 0.7152 * source[offset + 1]
+        + 0.0722 * source[offset + 2],
+      );
+      luminance[index] = value;
+      if (matte[index] >= 160) {
+        bottomByColumn[x] = y;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+      // High-confidence product pixels cannot describe the backdrop. Softer
+      // matte values are left in: a high quantile ignores their dark tail and
+      // still has enough samples on rows mostly occupied by the article.
+      if (matte[index] < 192) {
+        globalHistogram[value] += 1;
+        rowHistograms[y * 256 + value] += 1;
+        columnHistograms[x * 256 + value] += 1;
+        rowCounts[y] += 1;
+        columnCounts[x] += 1;
+        backgroundCount += 1;
+      }
+    }
+  }
+
+  const white = Buffer.alloc(pixels * 3, 255);
+  if (maxX < 0 || backgroundCount < 1) {
+    return sharp(white, { raw: { width, height, channels: 3 } }).png().toBuffer();
+  }
+
+  const background = histogramQuantile(globalHistogram, backgroundCount, SHADOW_BACKGROUND_QUANTILE);
+  // A dark/non-studio source has no trustworthy "white sweep" to recover a
+  // shadow from. Publishing a clean cutout is safer than leaking its scene.
+  if (background < 190) {
+    return sharp(white, { raw: { width, height, channels: 3 } }).png().toBuffer();
+  }
+
+  const rows = new Float32Array(height);
+  const columns = new Float32Array(width);
+  for (let y = 0; y < height; y += 1) {
+    rows[y] = rowCounts[y]
+      ? histogramQuantile(
+        rowHistograms.subarray(y * 256, (y + 1) * 256),
+        rowCounts[y],
+        SHADOW_BACKGROUND_QUANTILE,
+      )
+      : background;
+  }
+  for (let x = 0; x < width; x += 1) {
+    columns[x] = columnCounts[x]
+      ? histogramQuantile(
+        columnHistograms.subarray(x * 256, (x + 1) * 256),
+        columnCounts[x],
+        SHADOW_BACKGROUND_QUANTILE,
+      )
+      : background;
+  }
+  const smoothRows = smoothProfile(rows, Math.max(1, Math.round(height * 0.025)));
+  const smoothColumns = smoothProfile(columns, Math.max(1, Math.round(width * 0.025)));
+
+  const marginX = Math.round(width * 0.065);
+  const marginY = Math.round(height * 0.12);
+  const envelopeLeft = Math.max(0, minX - marginX);
+  const envelopeTop = Math.max(0, minY - marginY);
+  const envelopeRight = Math.min(width - 1, maxX + marginX);
+  const envelopeBottom = Math.min(height - 1, maxY + marginY);
+
+  for (let y = envelopeTop; y <= envelopeBottom; y += 1) {
+    for (let x = envelopeLeft; x <= envelopeRight; x += 1) {
+      const index = y * width + x;
+      if (matte[index] >= 192) continue;
+      const sourceOffset = index * sourceInfo.channels;
+      const outputOffset = index * 3;
+
+      // The low-confidence portion of the model matte is a useful semantic
+      // shadow detector. A square-root curve lifts its faint halo while values
+      // close to zero remain visually negligible on white.
+      if (matte[index] > 0) {
+        const semanticWeight = Math.sqrt(matte[index] / 255);
+        for (let channel = 0; channel < 3; channel += 1) {
+          white[outputOffset + channel] = Math.round(
+            255 - (255 - source[sourceOffset + channel]) * semanticWeight,
+          );
+        }
+      }
+
+      const bottom = bottomByColumn[x];
+      if (bottom < 0) continue;
+      const contactWeight = y <= bottom
+        ? (y >= minY ? 1 : 0)
+        : 1 - smoothStep(y - bottom, marginY * 0.4, marginY);
+      if (contactWeight <= 0) continue;
+
+      const estimatedBackground = Math.max(
+        190,
+        Math.min(255, smoothRows[y] + smoothColumns[x] - background),
+      );
+      const contrast = estimatedBackground - luminance[index];
+      if (contrast <= SHADOW_CONTRAST_START) continue;
+      const weight = contactWeight * smoothStep(
+        contrast,
+        SHADOW_CONTRAST_START,
+        SHADOW_CONTRAST_FULL,
+      );
+      const lift = 255 - estimatedBackground;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const corrected = Math.max(0, Math.min(255, source[sourceOffset + channel] + lift));
+        const contact = Math.round(255 - (255 - corrected) * weight);
+        white[outputOffset + channel] = Math.min(white[outputOffset + channel], contact);
+      }
+    }
+  }
+
+  return sharp(white, { raw: { width, height, channels: 3 } })
+    .blur(Math.max(0.3, Math.max(width, height) * 0.0025))
+    .png()
+    .toBuffer();
+}
+
+type MasterRenderLayers = {
+  foreground: Buffer;
+  skuForeground: Buffer;
+  naturalShadow: Buffer;
+};
+
+async function makeWhiteMaster(
+  source: SourceImage,
+  output: string,
+  folderKey: string,
+  signal: AbortSignal,
+): Promise<MasterRenderLayers> {
+  const cutout = await requestCutout(source, folderKey, signal);
+  const rawForeground = await composeWhiteMaster(source.path, cutout, output);
+  const [foreground, skuForeground, naturalShadow] = await Promise.all([
+    refineProductForeground(rawForeground),
+    refineSkuForeground(rawForeground),
+    composeNaturalShadowBackdrop(source.path, cutout),
+  ]);
+  return { foreground, skuForeground, naturalShadow };
 }
 
 /** Square 1:1 deliverable side, matching the hand-built reference set on the share. */
 const SQUARE_CANVAS_SIZE = 800;
-/** Breathing room kept around the product when cropping to its measured box. */
-const SQUARE_CROP_PADDING = 0.04;
-/** Product's longer side as a fraction of the canvas; the rest is white margin. */
-const SQUARE_FILL_RATIO = 0.86;
+/** Existing SKU framing: more white margin and no recovered shadow. */
+const SQUARE_SKU_CROP_PADDING = 0.04;
+const SQUARE_SKU_FILL_RATIO = 0.86;
+/** Tighter 主图 framing measured from the supplied before/after references. */
+const SQUARE_MAIN_CROP_PADDING = 0.02;
+/** A cast shadow needs more source context than the opaque product crop. */
+const SQUARE_SHADOW_CROP_PADDING = 0.12;
+/** Front views need more breathing room than a low, wide side view. */
+const SQUARE_COMPACT_FILL_RATIO = 0.87;
+const SQUARE_LANDSCAPE_FILL_RATIO = 0.96;
 
-/** Crops an RGBA buffer to a relative box plus padding, in pixel space. */
-async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number): Promise<Buffer> {
+async function squareFillRatio(foreground: Buffer, box: RelativeBox): Promise<number> {
+  const { width, height } = await sharp(foreground).metadata();
+  if (!width || !height) throw new Error("无法读取白底图尺寸");
+  const productAspect = (box.width * width) / Math.max(1, box.height * height);
+  const landscapeWeight = smoothStep(productAspect, 1, 1.35);
+  return SQUARE_COMPACT_FILL_RATIO
+    + (SQUARE_LANDSCAPE_FILL_RATIO - SQUARE_COMPACT_FILL_RATIO) * landscapeWeight;
+}
+
+type CroppedRaster = {
+  buffer: Buffer;
+  relativeLeft: number;
+  relativeTop: number;
+  relativeRight: number;
+  relativeBottom: number;
+};
+
+/** Crops a raster buffer to a relative box plus padding, in pixel space. */
+async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number): Promise<CroppedRaster> {
   const { width, height } = await sharp(buffer).metadata();
   if (!width || !height) throw new Error("无法读取白底图尺寸");
   const left = Math.max(0, Math.round((box.left - padding) * width));
   const top = Math.max(0, Math.round((box.top - padding) * height));
   const right = Math.min(width, Math.round((box.left + box.width + padding) * width));
   const bottom = Math.min(height, Math.round((box.top + box.height + padding) * height));
-  return sharp(buffer)
+  const cropped = await sharp(buffer)
     .extract({ left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) })
     .png()
     .toBuffer();
+  return {
+    buffer: cropped,
+    relativeLeft: left / width,
+    relativeTop: top / height,
+    relativeRight: right / width,
+    relativeBottom: bottom / height,
+  };
+}
+
+async function clipLayerToSquare(
+  buffer: Buffer,
+  width: number,
+  height: number,
+  left: number,
+  top: number,
+): Promise<{ input: Buffer; left: number; top: number } | null> {
+  const sourceLeft = Math.max(0, -left);
+  const sourceTop = Math.max(0, -top);
+  const targetLeft = Math.max(0, left);
+  const targetTop = Math.max(0, top);
+  const visibleWidth = Math.min(width - sourceLeft, SQUARE_CANVAS_SIZE - targetLeft);
+  const visibleHeight = Math.min(height - sourceTop, SQUARE_CANVAS_SIZE - targetTop);
+  if (visibleWidth < 1 || visibleHeight < 1) return null;
+  const input = sourceLeft || sourceTop || visibleWidth !== width || visibleHeight !== height
+    ? await sharp(buffer)
+      .extract({
+        left: sourceLeft,
+        top: sourceTop,
+        width: visibleWidth,
+        height: visibleHeight,
+      })
+      .png()
+      .toBuffer()
+    : buffer;
+  return { input, left: targetLeft, top: targetTop };
 }
 
 /**
  * Renders the published 1:1 deliverable: the product cropped to its measured
- * box, centred on a white square. Whatever the cutout's alpha carries at the
- * product's edge — including a natural contact shadow the shoot itself cast
- * onto the backdrop — is kept as-is; nothing synthetic is added on top.
+ * box and centred on a white square. For 主图, `naturalShadow` is the separately
+ * recovered light-sweep backdrop; for SKU it is omitted. Nothing synthetic is
+ * generated from the product silhouette.
  *
  * `box` must come from measuring the *same* foreground this was cut from
  * (`classification`'s per-shot box) — a mismatched box would crop the wrong
@@ -673,17 +1028,65 @@ export async function composeSquareDeliverable(
   foreground: Buffer,
   box: RelativeBox,
   output: string,
+  options: { naturalShadow?: Buffer } = {},
 ): Promise<void> {
-  const cropped = await cropBufferToBox(foreground, box, SQUARE_CROP_PADDING);
-  const target = Math.round(SQUARE_CANVAS_SIZE * SQUARE_FILL_RATIO);
-  const { data: resized, info } = await sharp(cropped)
+  const isMainImage = Boolean(options.naturalShadow);
+  const cropped = await cropBufferToBox(
+    foreground,
+    box,
+    isMainImage ? SQUARE_MAIN_CROP_PADDING : SQUARE_SKU_CROP_PADDING,
+  );
+  const fillRatio = isMainImage
+    ? await squareFillRatio(foreground, box)
+    : SQUARE_SKU_FILL_RATIO;
+  const target = Math.round(SQUARE_CANVAS_SIZE * fillRatio);
+  const { data: resized, info } = await sharp(cropped.buffer)
     .resize(target, target, { fit: "inside" })
     .png()
     .toBuffer({ resolveWithObject: true });
   const left = Math.round((SQUARE_CANVAS_SIZE - info.width) / 2);
   const top = Math.round((SQUARE_CANVAS_SIZE - info.height) / 2);
+  const layers: { input: Buffer; left: number; top: number }[] = [];
+  if (options.naturalShadow) {
+    const croppedShadow = await cropBufferToBox(
+      options.naturalShadow,
+      box,
+      SQUARE_SHADOW_CROP_PADDING,
+    );
+    const productRelativeWidth = cropped.relativeRight - cropped.relativeLeft;
+    const productRelativeHeight = cropped.relativeBottom - cropped.relativeTop;
+    const horizontalScale = info.width / productRelativeWidth;
+    const verticalScale = info.height / productRelativeHeight;
+    const shadowWidth = Math.max(
+      1,
+      Math.round((croppedShadow.relativeRight - croppedShadow.relativeLeft) * horizontalScale),
+    );
+    const shadowHeight = Math.max(
+      1,
+      Math.round((croppedShadow.relativeBottom - croppedShadow.relativeTop) * verticalScale),
+    );
+    const resizedShadow = await sharp(croppedShadow.buffer)
+      .resize(shadowWidth, shadowHeight, { fit: "fill" })
+      .png()
+      .toBuffer();
+    const shadowLeft = Math.round(
+      left + (croppedShadow.relativeLeft - cropped.relativeLeft) * horizontalScale,
+    );
+    const shadowTop = Math.round(
+      top + (croppedShadow.relativeTop - cropped.relativeTop) * verticalScale,
+    );
+    const clippedShadow = await clipLayerToSquare(
+      resizedShadow,
+      shadowWidth,
+      shadowHeight,
+      shadowLeft,
+      shadowTop,
+    );
+    if (clippedShadow) layers.push(clippedShadow);
+  }
+  layers.push({ input: resized, left, top });
   await sharp({ create: { width: SQUARE_CANVAS_SIZE, height: SQUARE_CANVAS_SIZE, channels: 3, background: "#ffffff" } })
-    .composite([{ input: resized, left, top }])
+    .composite(layers)
     // sharp applies flatten() in a fixed internal stage that runs before
     // composite(), so it cannot strip the alpha composite() just introduced —
     // removeAlpha() has no such ordering quirk.
@@ -808,6 +1211,12 @@ function progress(job: MonoJob, stage: string, percent: number, result: Record<s
  */
 export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
   const folderId = String(job.input.folderId ?? "");
+  const modelPairId = typeof job.input.modelPairId === "string" ? job.input.modelPairId : "";
+  // Resolve before any local cutout work or paid request. The current adapter
+  // only reads already-saved experiment assets; it never creates castings.
+  const modelPair = modelPairId
+    ? await resolveProductModelPair(job.workspaceId, modelPairId)
+    : undefined;
   const { absolutePath, relativePath } = resolveProductFolder(folderId);
   const detailFolder = resolveDetailPageFolder(relativePath);
   const folderKey = productPipelineFolderKey(folderId);
@@ -826,15 +1235,15 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   progress(job, "正在生成白底主图", 5, { sourceCount: articleSources.length, outputs: [] });
   const outputs: ({ name: string; sha256: string } | undefined)[] = Array.from({ length: articleSources.length });
   // Keyed by masterStage path so the classifier's per-shot box (computed
-  // against that exact file) can be matched back to the RGBA layer it came
-  // from when rendering the square deliverable.
-  const foregroundByPath = new Map<string, Buffer>();
+  // against that exact file) can be matched back to the product and natural
+  // shadow layers from the same source frame.
+  const layersByPath = new Map<string, MasterRenderLayers>();
   await runWithConcurrency(articleSources, PRODUCT_CUTOUT_CONCURRENCY, async (source, index) => {
     if (signal.aborted) throw new Error("任务已取消");
     await assertSourcesUnchanged(sources);
     const name = `${source.stem}.jpg`; const output = path.join(masterStage, name);
-    const foreground = await makeWhiteMaster(source, output, folderKey, signal);
-    foregroundByPath.set(output, foreground);
+    const layers = await makeWhiteMaster(source, output, folderKey, signal);
+    layersByPath.set(output, layers);
     outputs[index] = { name, sha256: sha256(await readFile(output)) };
     progress(job, "正在生成白底主图", Math.round(5 + (outputs.filter(Boolean).length / articleSources.length) * 70), { sourceCount: articleSources.length, outputs: outputs.filter(Boolean) });
   });
@@ -864,25 +1273,36 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   progress(job, "正在渲染方形主图与 SKU 图", 32, { colors: classification.colors.length });
   const masterSquareStage = path.join(stagingRoot, "主图"); await mkdir(masterSquareStage, { recursive: true });
   const skuStage = path.join(stagingRoot, "SKU"); await mkdir(skuStage, { recursive: true });
+  const tiledForegrounds: Buffer[] = Array.from({ length: classification.colors.length });
   const allMasterShots = classification.colors.flatMap((color) => color.members);
   await runWithConcurrency(allMasterShots, PRODUCT_CUTOUT_CONCURRENCY, async (member) => {
     if (signal.aborted) throw new Error("任务已取消");
-    const foreground = foregroundByPath.get(member.path);
-    if (!foreground) throw new Error(`缺少白底图中间产物：${member.path}`);
+    const layers = layersByPath.get(member.path);
+    if (!layers) throw new Error(`缺少白底图中间产物：${member.path}`);
     const stem = path.parse(member.path).name;
-    await composeSquareDeliverable(foreground, member.metric.box, path.join(masterSquareStage, `${stem}.png`));
+    await composeSquareDeliverable(
+      layers.foreground,
+      member.metric.box,
+      path.join(masterSquareStage, `${stem}.png`),
+      { naturalShadow: layers.naturalShadow },
+    );
   });
   await runWithConcurrency(classification.colors, PRODUCT_CUTOUT_CONCURRENCY, async (color) => {
     if (signal.aborted) throw new Error("任务已取消");
-    const foreground = foregroundByPath.get(color.representative.path);
-    if (!foreground) throw new Error(`缺少 SKU 代表图的中间产物：${color.representative.path}`);
+    const layers = layersByPath.get(color.representative.path);
+    if (!layers) throw new Error(`缺少 SKU 代表图的中间产物：${color.representative.path}`);
     // representative is today's best-effort stand-in for "the ~45° side shot":
-    // the shoot's first frame in that colourway, not an angle-verified pick —
-    // spot-check the published SKU images against the real angle convention.
-    await composeSquareDeliverable(foreground, color.representative.metric.box, path.join(skuStage, `SKU${color.rank + 1}.png`));
+    // the standard shoot's third frame, matching the approved clean catalogue
+    // angle and avoiding the broad underside shadow exposed by frame one.
+    tiledForegrounds[color.rank] = layers.skuForeground;
+    await composeSquareDeliverable(layers.skuForeground, color.representative.metric.box, path.join(skuStage, `SKU${color.rank + 1}.png`));
   });
   await atomicPublish(masterSquareStage, masterDestination);
   await atomicPublish(skuStage, skuDestination);
+  const deliverables: ProductPipelineDeliverable[] = [
+    ...(await persistProductDirectory(job, masterDestination, "product-main")),
+    ...(await persistProductDirectory(job, skuDestination, "product-sku")),
+  ];
 
   const slotColorRank = modelSlotColorRanks(classification.colors.length);
   const rawOnlySlots = job.input.onlySlots;
@@ -903,6 +1323,8 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     colors,
     detailShots: detailShotCount,
     slotColorRanks: Object.fromEntries(slotColorRank),
+    modelPairId: modelPair?.id,
+    modelPairName: modelPair?.displayName,
     onlySlots,
     warnings,
   });
@@ -917,7 +1339,16 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     async (slot) => {
       const color = classification.colors[slotColorRank.get(slot[0])!];
       const output = path.join(detailStage, `${baseName}_${slot[0]}.jpg`);
-      const record = await generateModelSlot(template, templateRoot, color, output, slot, signal, job.workspaceId);
+      const record = await generateModelSlot(
+        template,
+        templateRoot,
+        color,
+        output,
+        slot,
+        signal,
+        job.workspaceId,
+        modelPair,
+      );
       if (record.warning) warnings.push(`${slot[0]}: ${record.warning}`);
       return { slot: slot[0], colorRank: color.rank, ...record };
     },
@@ -937,7 +1368,15 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   progress(job, "compositing", 75, { colors, detailShots: detailShotCount, slots: records, failedSlots, warnings });
   for (const slot of DETAIL_SLOTS.filter((item) => item[3] !== "model")) {
     const output = path.join(detailStage, `${baseName}_${slot[0]}.jpg`);
-    await renderCompositedSlot(template, templateRoot, classification, detailShots, slot, output);
+    await renderCompositedSlot(
+      template,
+      templateRoot,
+      classification,
+      detailShots,
+      slot,
+      output,
+      tiledForegrounds,
+    );
     records.push({ slot: slot[0], attempts: 0, qa: "not-required", sha256: await fileHash(output) });
   }
   progress(job, "qa", 87, { colors, detailShots: detailShotCount, slots: records, failedSlots, warnings });
@@ -949,6 +1388,17 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   await assertSourcesUnchanged(sources);
   progress(job, "publishing_images", 93, { colors, detailShots: detailShotCount, slots: records, failedSlots, warnings });
   await publishImages(detailStage, path.join(detailFolder, "images"), baseName, producedSlotIds);
+  const detailDeliverables = await persistProductDetailDirectory(
+    job,
+    path.join(detailFolder, "images"),
+    baseName,
+  );
+  deliverables.push(...detailDeliverables);
+  for (const slotId of producedSlotIds) {
+    const asset = detailDeliverables.find((item) => item.slotKey === slotId);
+    const record = records.find((item) => item.slot === slotId);
+    if (record && asset) record.assetId = asset.assetId;
+  }
   // The only staging directory not already removed by an atomicPublish call:
   // it fed classification and the gpt-image-2 references but was never itself
   // a publish target.
@@ -958,9 +1408,12 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     progress: 100,
     relativePath,
     templateVersion: manifest.version,
+    modelPairId: modelPair?.id,
+    modelPairName: modelPair?.displayName,
     colors,
     detailShots: detailShotCount,
     slots: records,
+    deliverables,
     warnings,
     // Cutout is no longer skipped across runs (see masterStage above), so this
     // is always false. Kept for API/UI compatibility with `result.resumed`.
@@ -968,6 +1421,68 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     incomplete: failedSlots.length > 0,
     failedSlots,
   };
+}
+
+type ProductPipelineDeliverable = {
+  assetId: string;
+  role: "product-main" | "product-sku" | "product-detail";
+  slotKey: string;
+  name: string;
+  sha256: string;
+};
+
+async function persistProductFile(
+  job: MonoJob,
+  file: string,
+  role: ProductPipelineDeliverable["role"],
+  slotKey: string,
+): Promise<ProductPipelineDeliverable> {
+  const bytes = await readFile(file);
+  const name = path.basename(file);
+  const mimeType = path.extname(file).toLowerCase() === ".png" ? "image/png" : "image/jpeg";
+  const stored = await saveObjectBuffer(bytes, name);
+  const actor = {
+    userId: job.userId,
+    workspaceId: job.workspaceId,
+    traceId: job.traceId,
+  };
+  const asset = createMonoAsset(actor, {
+    sourceUrl: `storage:${stored.key}`,
+    storageKey: stored.key,
+    location: "local-storage",
+    mimeType,
+    name,
+  });
+  linkMonoJobAsset(actor, job.id, asset.id, role, slotKey);
+  return { assetId: asset.id, role, slotKey, name, sha256: sha256(bytes) };
+}
+
+async function persistProductDirectory(
+  job: MonoJob,
+  directory: string,
+  role: "product-main" | "product-sku",
+): Promise<ProductPipelineDeliverable[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = entries.filter(
+    (entry) => entry.isFile() && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()),
+  );
+  return Promise.all(files.map((entry) =>
+    persistProductFile(job, path.join(directory, entry.name), role, entry.name)));
+}
+
+async function persistProductDetailDirectory(
+  job: MonoJob,
+  directory: string,
+  baseName: string,
+): Promise<ProductPipelineDeliverable[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const pattern = new RegExp(`^${escapeRegExp(baseName)}_(\\d{2})\\.(?:jpe?g|png|webp)$`, "iu");
+  return Promise.all(entries.flatMap((entry) => {
+    if (!entry.isFile()) return [];
+    const match = entry.name.match(pattern);
+    if (!match) return [];
+    return [persistProductFile(job, path.join(directory, entry.name), "product-detail", match[1])];
+  }));
 }
 
 /**
@@ -981,6 +1496,7 @@ async function renderCompositedSlot(
   detailShots: SourceImage[],
   slot: DetailSlot,
   output: string,
+  tiledForegrounds: readonly Buffer[],
 ): Promise<void> {
   const [id, width, height, kind] = slot;
   if (kind === "fixed") {
@@ -995,6 +1511,7 @@ async function renderCompositedSlot(
     await renderTiledDisplay(
       classification.colors.map((color) => color.representative),
       output, width, height, template.pages["10"].title,
+      tiledForegrounds,
     );
     return;
   }
@@ -1031,11 +1548,30 @@ async function generateModelSlot(
   slot: DetailSlot,
   signal: AbortSignal,
   workspaceId: string,
+  modelPair?: ResolvedProductModelPair,
 ): Promise<Record<string, unknown>> {
-  const prompt = buildModelPrompt(template, slot[0], color.rank, slot[1], slot[2]);
+  const look = template.looks[color.rank % template.looks.length];
+  const identityGroupId: ModelIdentityGroup | undefined = modelPair
+    ? identityGroupForLook(look.id)
+    : undefined;
+  const identityProfile = identityGroupId ? modelPair?.profiles[identityGroupId] : undefined;
+  const prompt = buildModelPrompt(
+    template,
+    slot[0],
+    color.rank,
+    slot[1],
+    slot[2],
+    identityGroupId,
+    Boolean(identityProfile?.bodyBytes),
+  );
   // Several angles of the same colourway make it much harder for the model to
   // invent a plain version of an article whose graphic sits on one face only.
-  const references = color.members.slice(0, PRODUCT_REFERENCE_COUNT).map((member) => member.path);
+  const productReferences = color.members.slice(0, PRODUCT_REFERENCE_COUNT).map((member) => member.path);
+  const references = modelImageReferences(
+    productReferences,
+    identityProfile?.faceBytes,
+    identityProfile?.bodyBytes,
+  );
   let best: Buffer | null = null;
   let warning: string | undefined;
   let attempts = 0;
@@ -1080,6 +1616,10 @@ async function generateModelSlot(
   }
   return {
     attempts,
+    ...(identityGroupId ? {
+      identityGroupId,
+      modelProfileId: identityProfile?.id,
+    } : {}),
     qa: warning ? "warning" : "passed",
     warning,
     colorPresence: Math.round(presence * 1000) / 1000,
@@ -1087,8 +1627,19 @@ async function generateModelSlot(
   };
 }
 
+export function modelImageReferences(
+  productReferences: readonly string[],
+  faceReference?: string | Buffer,
+  bodyReference?: string | Buffer,
+): (string | Buffer)[] {
+  if (productReferences.length < 1) throw new Error("商品套图缺少商品参考图");
+  return faceReference
+    ? [faceReference, ...(bodyReference ? [bodyReference] : []), ...productReferences]
+    : [...productReferences];
+}
+
 async function requestModelImage(
-  references: readonly string[],
+  references: readonly (string | Buffer)[],
   prompt: string,
   slot: DetailSlot,
   signal: AbortSignal,
@@ -1097,7 +1648,8 @@ async function requestModelImage(
   const base = getConfigValue("MONO_IMAGE_BASE_URL", workspaceId); const key = getConfigValue("MONO_IMAGE_API_KEY", workspaceId);
   if (!base || !key) throw new Error("详情套图需要配置 MONO_IMAGE_BASE_URL 和 MONO_IMAGE_API_KEY（将调用付费 gpt-image-2）");
   const endpoint = process.env.MONO_IMAGE_GENERATE_URL ?? new URL("/v1/api/generate", base).toString();
-  const bytes = await Promise.all(references.map((file) => readFile(file)));
+  const bytes = await Promise.all(references.map((reference) =>
+    Buffer.isBuffer(reference) ? reference : readFile(reference)));
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },

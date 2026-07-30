@@ -26,7 +26,8 @@ type HistoryJobInput = {
   aspectRatio?: string;
   variants?: number;
   referenceImageCount?: number;
-  subjectSnapshots?: { id: string; name: string; sourceUrl: string }[];
+  subjectSnapshots?: { id: string; name: string; assetId?: string; sourceUrl: string }[];
+  referenceAssetIds?: string[];
 };
 
 function jobInput(job: MonoJob): HistoryJobInput {
@@ -136,7 +137,15 @@ export function Image2HistorySheet({ open, onOpenChange }: {
       }
       aui.composer().setText(restoredPrompt);
       await aui.composer().clearAttachments();
-      const references = Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls : [];
+      const subjectAssetIds = new Set(
+        (input.subjectSnapshots ?? []).filter((subject) => visibleIds.has(subject.id)).map((subject) => subject.assetId),
+      );
+      const durableReferences = (input.referenceAssetIds ?? [])
+        .filter((assetId) => !subjectAssetIds.has(assetId))
+        .map((assetId) => `/api/workbench/mono/assets/${encodeURIComponent(assetId)}/content`);
+      const references = durableReferences.length
+        ? durableReferences
+        : Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls : [];
       const subjectSources = new Set((input.subjectSnapshots ?? []).filter((subject) => visibleIds.has(subject.id)).map((subject) => subject.sourceUrl));
       await Promise.all(references.filter((url) => !subjectSources.has(url)).slice(0, 6).map(async (url, index) => {
         try {
@@ -231,7 +240,7 @@ function HistoryItem({ job, reusing, onToggleFavorite, onReuse, onDelete }: {
   const input = jobInput(job);
   const template = getMonoImage2Template(input.templateId);
   const images = jobSlots(job)
-    .filter((slot) => slot.status === "succeeded" && slot.imageUrl)
+    .filter((slot) => slot.status === "succeeded" && (slot.assetId || slot.imageUrl))
     .slice(0, 4);
   const failed = job.status === "failed" || job.status === "cancelled";
   const time = new Date(job.createdAt).toLocaleString("zh-CN", {
@@ -260,8 +269,7 @@ function HistoryItem({ job, reusing, onToggleFavorite, onReuse, onDelete }: {
       {images.length > 0 ? (
         <div className="mt-2 flex gap-1.5">
           {images.map((slot) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={slot.index} src={slot.imageUrl} alt="" className="size-14 rounded-lg border object-cover" />
+            <HistoryThumbnail key={slot.index} jobId={job.id} index={slot.index} />
           ))}
         </div>
       ) : (
@@ -292,6 +300,28 @@ function HistoryItem({ job, reusing, onToggleFavorite, onReuse, onDelete }: {
         ) : null}
       </div>
     </div>
+  );
+}
+
+function HistoryThumbnail({ jobId, index }: { jobId: string; index: number }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <span className="text-muted-foreground flex size-14 items-center justify-center rounded-lg border p-1 text-center text-[10px] leading-tight">
+        历史图片已失效
+      </span>
+    );
+  }
+  return (
+    <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={`/api/workbench/mono/jobs/${encodeURIComponent(jobId)}/image/${index}`}
+        alt=""
+        className="size-14 rounded-lg border object-cover"
+        onError={() => setFailed(true)}
+      />
+    </>
   );
 }
 

@@ -21,16 +21,20 @@ import {
   castingForWorkspace,
   continueCasting,
   createCasting,
+  createModelPair,
   createProfiles,
+  modelPairForWorkspace,
 } from "./service";
 import {
   castingDir,
   ensureExperimentRoot,
   getCasting,
+  newProfileId,
   newCastingId,
   saveCasting,
+  saveProfile,
 } from "./storage";
-import type { CastingRecord } from "./types";
+import type { CastingRecord, ModelProfile } from "./types";
 
 let temporaryRoot = "";
 
@@ -136,5 +140,27 @@ describe("casting recovery", () => {
     });
     expect(profiles.map((profile) => profile.groupId).sort()).toEqual(["female", "male"]);
     expect((await getCasting(id)).candidates.filter((candidate) => candidate.status === "succeeded")).toHaveLength(2);
+  });
+
+  it("saves a free named model pair from two existing anchor profiles", async () => {
+    const female: ModelProfile = {
+      id: newProfileId(), workspaceId: "workspace-a", displayName: "Female 01", groupId: "female",
+      anchorImageName: "anchor.jpg", sourceCastingId: newCastingId(), sourceCandidateId: "female-1",
+      prompt: "female", provider: "mono-image", model: "gpt-image-2", createdAt: Date.now(),
+    };
+    const male: ModelProfile = {
+      id: newProfileId(), workspaceId: "workspace-a", displayName: "Male 01", groupId: "male",
+      anchorImageName: "anchor.jpg", sourceCastingId: newCastingId(), sourceCandidateId: "male-1",
+      prompt: "male", provider: "mono-image", model: "gpt-image-2", createdAt: Date.now(),
+    };
+    await Promise.all([saveProfile(female), saveProfile(male)]);
+
+    const pair = await createModelPair("workspace-a", {
+      displayName: "Y2K 01",
+      profileIds: { female: female.id, male: male.id },
+    });
+    expect(pair.displayName).toBe("Y2K 01");
+    expect(pair.profileIds).toEqual({ female: female.id, male: male.id });
+    await expect(modelPairForWorkspace("workspace-a", pair.id)).resolves.toMatchObject({ id: pair.id });
   });
 });

@@ -71,6 +71,8 @@ export const monoAspectRatios = ["1:1", "3:4", "9:16", "4:3", "16:9"] as const;
 export const monoImageVariants = [1, 2, 4, 6] as const;
 export const monoImageSlotStatuses = ["generating", "retrying", "succeeded", "failed"] as const;
 export const monoSubjectVisibilities = ["private", "workspace"] as const;
+/** Subject-library classification; product-model cards are still ordinary subjects. */
+export const monoSubjectKinds = ["generic", "product-model"] as const;
 
 const monoSubjectNameSchema = z.string().trim().min(1).max(40).refine(
   (value) => !/[\n\r\[\]{}@]/u.test(value),
@@ -81,6 +83,7 @@ export const monoSubjectInputSchema = z.object({
   name: monoSubjectNameSchema,
   assetId: z.string().min(1),
   visibility: z.enum(monoSubjectVisibilities).default("private"),
+  kind: z.enum(monoSubjectKinds).default("generic"),
 });
 
 export const monoSubjectPatchSchema = z.object({
@@ -124,6 +127,10 @@ export const productPipelineInputSchema = z.object({
   // runtime against installedWorkflowIds() (product-pipeline.ts), since the
   // installed set isn't knowable from this schema alone.
   workflowId: z.string().min(1).max(160),
+  // Optional for compatibility with older jobs and the language-model tool.
+  // The formal folder picker requires it and the runner validates workspace
+  // ownership before doing any work.
+  modelPairId: z.string().regex(/^pair_[0-9a-f-]{36}$/u).optional(),
   // Retry-only-the-failures entry point. Membership in the model-kind slot set
   // is re-checked server-side (product-pipeline.ts) since that set isn't
   // knowable from this schema alone.
@@ -134,6 +141,8 @@ export const monoImageGenerationSlotSchema = z.object({
   index: z.number().int().min(0),
   status: z.enum(monoImageSlotStatuses),
   attempt: z.number().int().min(0),
+  assetId: z.string().regex(/^asset_[0-9a-f-]{36}$/u).optional(),
+  /** Legacy provider URL. New successful slots are addressed by assetId. */
   imageUrl: z.string().optional(),
   error: z.string().optional(),
 });
@@ -155,9 +164,11 @@ export type MonoImageGenerationInput = z.infer<typeof monoImageGenerationSchema>
 export type ProductPipelineInput = z.infer<typeof productPipelineInputSchema>;
 export type MonoImageGenerationSlot = z.infer<typeof monoImageGenerationSlotSchema>;
 export type MonoImageGenerationResult = z.infer<typeof monoImageGenerationResultSchema>;
-export type MonoSubjectInput = z.infer<typeof monoSubjectInputSchema>;
+/** Input remains backward-compatible: omitted kind/visibility use their schema defaults. */
+export type MonoSubjectInput = z.input<typeof monoSubjectInputSchema>;
 export type MonoSubjectPatch = z.infer<typeof monoSubjectPatchSchema>;
 export type MonoSubjectVisibility = (typeof monoSubjectVisibilities)[number];
+export type MonoSubjectKind = (typeof monoSubjectKinds)[number];
 export type MonoJobKind = (typeof monoJobKinds)[number];
 export type MonoJobStatus = (typeof monoJobStatuses)[number];
 
@@ -171,12 +182,22 @@ export type MonoAsset = MonoAssetInput & {
   createdAt: number;
 };
 
+export type MonoJobAsset = {
+  jobId: string;
+  workspaceId: string;
+  assetId: string;
+  role: string;
+  slotKey: string;
+  createdAt: number;
+};
+
 export type MonoSubject = {
   id: string;
   workspaceId: string;
   ownerUserId: string;
   name: string;
   assetId: string;
+  kind: MonoSubjectKind;
   visibility: MonoSubjectVisibility;
   createdAt: number;
   updatedAt: number;

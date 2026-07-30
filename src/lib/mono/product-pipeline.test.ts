@@ -5,6 +5,7 @@ import path from "node:path";
 import sharp from "sharp";
 import {
   atomicPublish,
+  composeNaturalShadowBackdrop,
   composeSquareDeliverable,
   composeWhiteMaster,
   detailPageSources,
@@ -12,10 +13,13 @@ import {
   listProductFolders,
   listProductWorkflows,
   MODEL_SLOTS,
+  modelImageReferences,
   modelSlotColorRanks,
   ProductCutoutScheduler,
   productPipelineSchedulingSettings,
   publishImages,
+  refineProductForeground,
+  refineSkuForeground,
   resolveProductFolder,
   resolveProductFolderByName,
   runModelGenerationPhase,
@@ -26,6 +30,7 @@ import {
 } from "./product-pipeline";
 import type { RelativeBox } from "./product-classify";
 import { productPipelineInputSchema } from "./contracts";
+import { buildModelPrompt, identityGroupForLook, loadProductTemplate } from "./product-template";
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -75,7 +80,51 @@ describe("product pipeline folder isolation", () => {
     expect(productPipelineInputSchema.safeParse({
       folderId: Buffer.from("123").toString("base64url"),
       workflowId: "hat-62604171-v1",
+      modelPairId: "pair_30ebdd20-b35e-4e89-b6ae-7515f8256d28",
     }).success).toBe(true);
+    expect(productPipelineInputSchema.safeParse({
+      folderId: Buffer.from("123").toString("base64url"),
+      workflowId: "hat-62604171-v1",
+    }).success).toBe(true);
+  });
+});
+
+describe("production model-pair conditioning", () => {
+  it("maps A/C to the selected woman and B to the selected man", () => {
+    expect(identityGroupForLook("A")).toBe("female");
+    expect(identityGroupForLook("B")).toBe("male");
+    expect(identityGroupForLook("C")).toBe("female");
+  });
+
+  it("puts the identity anchor before all product references", () => {
+    expect(modelImageReferences(["front.jpg", "side.jpg"]))
+      .toEqual(["front.jpg", "side.jpg"]);
+    expect(modelImageReferences(
+      ["front.jpg", "side.jpg", "back.jpg"],
+      "anchor.jpg",
+    )).toEqual(["anchor.jpg", "front.jpg", "side.jpg", "back.jpg"]);
+    expect(modelImageReferences(
+      ["front.jpg", "side.jpg"],
+      "face.jpg",
+      "body.jpg",
+    )).toEqual(["face.jpg", "body.jpg", "front.jpg", "side.jpg"]);
+  });
+
+  it("keeps product rules without identity and dynamically numbers face/body references", async () => {
+    const template = await loadProductTemplate(
+      path.resolve("config/product-pipeline/hat-62604171-v1"),
+    );
+    const withIdentity = buildModelPrompt(template, "01", 0, 790, 1243, "female");
+    expect(withIdentity).toContain("参考图1");
+    expect(withIdentity).toContain("参考图2");
+    expect(withIdentity).toContain("人物身份");
+    const withBody = buildModelPrompt(template, "01", 0, 790, 1243, "female", true);
+    expect(withBody).toContain("参考图2只用于参考人物的大致身高感");
+    expect(withBody).toContain("参考图3及其后的图片是同一件商品");
+    const automatic = buildModelPrompt(template, "01", 0, 790, 1243);
+    expect(automatic).not.toContain("人物身份");
+    expect(automatic).toContain("参考图1及其后的图片是同一件商品");
+    expect(automatic).toContain("【禁止出现】");
   });
 });
 
@@ -344,6 +393,93 @@ describe("white master composition", () => {
   });
 });
 
+describe("natural studio shadow recovery", () => {
+  it("keeps a nearby photographed shadow while removing distant backdrop marks", async () => {
+    const root = await fixture();
+    const source = path.join(root, "source.png");
+    const mask = path.join(root, "mask.png");
+    const width = 120;
+    const height = 80;
+    const pixels = Buffer.alloc(width * height * 3);
+    const matte = Buffer.alloc(width * height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = y * width + x;
+        const offset = index * 3;
+        const background = [232, 236, 242];
+        pixels[offset] = background[0];
+        pixels[offset + 1] = background[1];
+        pixels[offset + 2] = background[2];
+
+        // A soft photographed contact shadow immediately below the product.
+        const distance = ((x - 60) / 38) ** 2 + ((y - 61) / 9) ** 2;
+        if (distance < 1) {
+          const shade = Math.round(75 * (1 - distance) ** 2);
+          pixels[offset] -= shade;
+          pixels[offset + 1] -= shade;
+          pixels[offset + 2] -= shade;
+        }
+        // A paper seam far away from the product must not leak into the result.
+        if (x === 5 && y >= 48) {
+          pixels[offset] -= 70;
+          pixels[offset + 1] -= 70;
+          pixels[offset + 2] -= 70;
+        }
+        if (x >= 47 && x <= 73 && y >= 20 && y <= 57) {
+          matte[index] = 255;
+          pixels[offset] = 35;
+          pixels[offset + 1] = 35;
+          pixels[offset + 2] = 35;
+        }
+      }
+    }
+    await sharp(pixels, { raw: { width, height, channels: 3 } }).png().toFile(source);
+    await sharp(matte, { raw: { width, height, channels: 1 } }).png().toFile(mask);
+
+    const backdrop = await composeNaturalShadowBackdrop(source, await readFile(mask));
+    const { data, info } = await sharp(backdrop).raw().toBuffer({ resolveWithObject: true });
+    const pixel = (x: number, y: number) =>
+      Array.from(data.subarray((y * width + x) * info.channels, (y * width + x + 1) * info.channels));
+
+    expect(info).toMatchObject({ width, height, channels: 3 });
+    expect(pixel(0, 0)).toEqual([255, 255, 255]);
+    expect(pixel(5, 60)).toEqual([255, 255, 255]);
+    expect(pixel(60, 30)).toEqual([255, 255, 255]);
+    expect(Math.max(...pixel(60, 60))).toBeLessThan(235);
+  });
+
+  it("removes low-confidence shadow fragments from the opaque product layer", async () => {
+    const foreground = await sharp(Buffer.from([
+      30, 30, 30, 32,
+      30, 30, 30, 160,
+      30, 30, 30, 255,
+    ]), { raw: { width: 3, height: 1, channels: 4 } }).png().toBuffer();
+
+    const alpha = await sharp(await refineProductForeground(foreground))
+      .extractChannel("alpha")
+      .raw()
+      .toBuffer();
+
+    expect(Array.from(alpha)).toEqual([0, 127, 255]);
+  });
+
+  it("uses only the high-confidence silhouette for SKU", async () => {
+    const foreground = await sharp(Buffer.from([
+      30, 30, 30, 96,
+      30, 30, 30, 200,
+      30, 30, 30, 223,
+      30, 30, 30, 255,
+    ]), { raw: { width: 4, height: 1, channels: 4 } }).png().toBuffer();
+
+    const alpha = await sharp(await refineSkuForeground(foreground))
+      .extractChannel("alpha")
+      .raw()
+      .toBuffer();
+
+    expect(Array.from(alpha)).toEqual([0, 0, 0, 255]);
+  });
+});
+
 describe("square deliverable composition", () => {
   /** A 40x30 RGBA canvas with a 20x16 opaque red block at (10,7). */
   async function foreground(): Promise<Buffer> {
@@ -368,6 +504,26 @@ describe("square deliverable composition", () => {
     const centre = pixel(400, 400);
     expect(centre[0]).toBeGreaterThan(centre[2]);
     expect(centre).not.toEqual([255, 255, 255]);
+  });
+
+  it("places a supplied natural-shadow backdrop under the product", async () => {
+    const root = await fixture();
+    const output = path.join(root, "square-with-shadow.png");
+    const shadow = Buffer.alloc(40 * 30 * 3, 255);
+    for (let x = 8; x < 32; x += 1) {
+      const offset = (23 * 40 + x) * 3;
+      shadow[offset] = 170;
+      shadow[offset + 1] = 175;
+      shadow[offset + 2] = 185;
+    }
+    const naturalShadow = await sharp(shadow, { raw: { width: 40, height: 30, channels: 3 } }).png().toBuffer();
+    await composeSquareDeliverable(await foreground(), box, output, { naturalShadow });
+
+    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
+    const pixel = (x: number, y: number) =>
+      Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x + 1) * info.channels));
+    expect(Math.max(...pixel(400, 630))).toBeLessThan(230);
+    expect(pixel(0, 0)).toEqual([255, 255, 255]);
   });
 });
 

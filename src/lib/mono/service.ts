@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { generateText } from "ai";
+import sharp from "sharp";
 import { visionModel } from "@/lib/models";
 import { getConfigValue } from "@/lib/server/api-config";
 import {
@@ -35,7 +36,7 @@ import {
   runComfyWorkflow,
   uploadComfyInput,
 } from "./comfyui";
-import { readObjectBuffer, saveObjectBuffer } from "@/lib/storage";
+import { deleteObject, readObjectBuffer, saveObjectBuffer } from "@/lib/storage";
 import { compileSubjectPrompt, subjectIdsFromPrompt } from "./subject-compiler";
 import { uploadVideoToTosAndGetUrl } from "./tos";
 import {
@@ -49,21 +50,26 @@ import {
   createProductPipelineMonoJob,
   createMonoSubject,
   deleteMonoSubject,
+  deleteMonoAssetIfUnreferenced,
   failOrRetryMonoJob,
   getMonoAsset,
   getMonoJob,
   getMonoSubject,
   INLINE_WORKER_ID,
   listMonoJobs,
+  listGeneratedMonoAssets,
+  listMonoJobAssets,
+  linkMonoJobAsset,
+  listPurgeableMonoJobIds,
   listMonoSubjects,
   listMonoWorkers,
   monoJobQueueStats,
   purgeMonoJob,
-  purgeUnfavoriteMonoJobs,
   reclaimExpiredLeases,
   requeueInterruptedMonoJobs,
   renewMonoJobLease,
   setMonoJobFavorite,
+  updateMonoJobInput,
   updateMonoJobResult,
   updateMonoSubject,
   upsertMonoWorkerHeartbeat,
@@ -172,7 +178,10 @@ export function createStoredAsset(
 }
 
 export function createSubject(actor: MonoActor, input: MonoSubjectInput): MonoSubject {
-  const subject = createMonoSubject(actor, input);
+  if (input.kind && input.kind !== "generic") {
+    throw new MonoHttpError(400, "模特卡请通过主体库的模特卡接口创建");
+  }
+  const subject = createMonoSubject(actor, { ...input, kind: "generic" });
   if (!subject) throw new MonoHttpError(400, "主体图片素材不存在，或不属于当前工作区");
   return subject;
 }
@@ -186,10 +195,18 @@ export function getSubject(actor: MonoActor, subjectId: string): MonoSubject | n
 }
 
 export function updateSubject(actor: MonoActor, subjectId: string, patch: MonoSubjectPatch): MonoSubject | null {
+  const subject = getMonoSubject(actor, subjectId);
+  if (subject?.kind === "product-model") {
+    throw new MonoHttpError(409, "商品套图模特卡请通过主体库的模特卡接口管理");
+  }
   return updateMonoSubject(actor, subjectId, patch);
 }
 
 export function deleteSubject(actor: MonoActor, subjectId: string): boolean {
+  const subject = getMonoSubject(actor, subjectId);
+  if (subject?.kind === "product-model") {
+    throw new MonoHttpError(409, "商品套图模特卡请通过主体库的模特卡接口管理");
+  }
   return deleteMonoSubject(actor, subjectId);
 }
 
@@ -257,6 +274,7 @@ export function createProductPipelineJob(actor: MonoActor, input: ProductPipelin
   const job = createProductPipelineMonoJob(actor, {
     folderId: input.folderId,
     workflowId: input.workflowId,
+    modelPairId: input.modelPairId ?? null,
     onlySlots: input.onlySlots ?? null,
     // The resolved relative path is retained only in the private job record;
     // API responses redact it before leaving the server.
@@ -279,7 +297,7 @@ export function createImageGenerationJob(actor: MonoActor, input: MonoImageGener
     if (!subject) throw new MonoHttpError(403, "主体不存在，或当前用户无权使用");
     const asset = getMonoAsset(actor, subject.assetId);
     if (!asset) throw new MonoHttpError(400, `主体“${subject.name}”的图片素材不存在`);
-    return { id: subject.id, name: subject.name, assetId: subject.assetId, sourceUrl: asset.sourceUrl };
+    return { id: subject.id, name: subject.name, assetId: subject.assetId, sourceUrl: getAssetSource(actor, asset.id) };
   });
 
   let referenceImageUrls: string[];
@@ -354,16 +372,51 @@ export function listJobs(
   return listMonoJobs(actor, options);
 }
 
+export function listGeneratedAssets(
+  actor: MonoActor,
+  limit = 24,
+): Array<{
+  assetId: string;
+  jobId: string;
+  role: string;
+  slotKey: string;
+  name?: string;
+  mimeType?: string;
+  createdAt: number;
+  previewUrl: string;
+}> {
+  return listGeneratedMonoAssets(actor, limit).map((item) => ({
+    assetId: item.assetId,
+    jobId: item.jobId,
+    role: item.role,
+    slotKey: item.slotKey,
+    name: item.name,
+    mimeType: item.mimeType,
+    createdAt: item.createdAt,
+    previewUrl: `/api/workbench/mono/assets/${encodeURIComponent(item.assetId)}/content`,
+  }));
+}
+
 export function setJobFavorite(actor: MonoActor, jobId: string, favorite: boolean): MonoJob | null {
   return setMonoJobFavorite(actor, jobId, favorite);
 }
 
-export function purgeJob(actor: MonoActor, jobId: string): boolean {
-  return purgeMonoJob(actor, jobId);
+export async function purgeJob(actor: MonoActor, jobId: string): Promise<boolean> {
+  const links = listMonoJobAssets(actor, jobId);
+  if (!purgeMonoJob(actor, jobId)) return false;
+  await Promise.all(links.map(async (link) => {
+    const deleted = deleteMonoAssetIfUnreferenced(actor, link.assetId);
+    if (deleted.storageKey) await deleteObject(deleted.storageKey);
+  }));
+  return true;
 }
 
-export function purgeUnfavoriteJobs(actor: MonoActor, kind: MonoJobKind): number {
-  return purgeUnfavoriteMonoJobs(actor, kind);
+export async function purgeUnfavoriteJobs(actor: MonoActor, kind: MonoJobKind): Promise<number> {
+  let deleted = 0;
+  for (const jobId of listPurgeableMonoJobIds(actor, kind)) {
+    if (await purgeJob(actor, jobId)) deleted += 1;
+  }
+  return deleted;
 }
 
 /**
@@ -372,6 +425,7 @@ export function purgeUnfavoriteJobs(actor: MonoActor, kind: MonoJobKind): number
  */
 export function lightenMonoJob(job: MonoJob): MonoJob & { input: { referenceImageCount: number } } {
   const references = Array.isArray(job.input.referenceImageUrls) ? job.input.referenceImageUrls : [];
+  const referenceAssetIds = Array.isArray(job.input.referenceAssetIds) ? job.input.referenceAssetIds : [];
   const input = { ...job.input };
   delete input.referenceImageUrls;
   delete input.compiledPrompt;
@@ -386,7 +440,7 @@ export function lightenMonoJob(job: MonoJob): MonoJob & { input: { referenceImag
       return light;
     });
   }
-  return { ...job, input: { ...input, referenceImageCount: references.length } };
+  return { ...job, input: { ...input, referenceImageCount: Math.max(references.length, referenceAssetIds.length) } };
 }
 
 export function cancelJob(actor: MonoActor, jobId: string): MonoJob | null {
@@ -580,7 +634,7 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
       } else if (job.kind === "product_pipeline") {
         completeMonoJob(job.id, await runProductPipeline(job, controller.signal));
       } else {
-        const result = await runImageGenerationBatch(job.id, job.input, controller.signal);
+        const result = await runImageGenerationBatch(job, controller.signal);
         const stopped = stopRequested.has(job.id);
         completeMonoJob(
           job.id,
@@ -810,6 +864,7 @@ async function runMatting(job: MonoJob, signal: AbortSignal): Promise<Record<str
     mimeType: mimeFromFilename(primary.filename),
     name: primary.filename,
   });
+  linkMonoJobAsset(actor, job.id, resultAsset.id, "matting", "primary");
   return {
     assetId: resultAsset.id,
     url: `/api/workbench/mono/assets/${encodeURIComponent(resultAsset.id)}/content`,
@@ -821,10 +876,29 @@ async function runMatting(job: MonoJob, signal: AbortSignal): Promise<Record<str
 }
 
 async function runImageGenerationBatch(
-  jobId: string,
-  input: Record<string, unknown>,
+  job: MonoJob,
   signal: AbortSignal,
 ): Promise<MonoImageGenerationResult> {
+  const jobId = job.id;
+  const input = { ...job.input };
+  const actor = newMonoActor({
+    userId: job.userId,
+    workspaceId: job.workspaceId,
+    traceId: job.traceId,
+  });
+  const referenceImageUrls = Array.isArray(input.referenceImageUrls)
+    ? input.referenceImageUrls.filter((value): value is string => typeof value === "string")
+    : [];
+  const persistedReferences = await persistImageGenerationReferences(
+    actor,
+    jobId,
+    referenceImageUrls,
+    signal,
+  );
+  input.referenceImageUrls = persistedReferences.urls;
+  input.referenceAssetIds = persistedReferences.assetIds;
+  const durableInput = { ...input, referenceImageUrls: [] };
+  updateMonoJobInput(jobId, durableInput);
   const variants = [1, 2, 4, 6].includes(Number(input.variants)) ? Number(input.variants) : 1;
   const model = typeof input.model === "string" ? input.model : "gpt-image-2";
   const slots: MonoImageGenerationSlot[] = Array.from({ length: variants }, (_, index) => ({
@@ -843,6 +917,7 @@ async function runImageGenerationBatch(
 
   await Promise.all(slots.map(async (slot) => {
     let lastError = "图片生成失败";
+    let providerUrl: string | undefined;
     for (let attempt = 1; attempt <= MAX_IMAGE_ATTEMPTS; attempt += 1) {
       if (signal.aborted) return;
       // 只在「即将发起下一次尝试」这个时间点检查软停止——已经在飞的那次调用
@@ -855,19 +930,111 @@ async function runImageGenerationBatch(
       Object.assign(slot, { status: attempt === 1 ? "generating" : "retrying", attempt, error: undefined });
       updateMonoJobResult(jobId, snapshot());
       try {
-        slot.imageUrl = await runSingleImageGeneration(input, signal);
-        slot.status = "succeeded";
-        updateMonoJobResult(jobId, snapshot());
-        return;
+        providerUrl = await runSingleImageGeneration(input, signal);
+        break;
       } catch (error) {
         if (signal.aborted) return;
         lastError = error instanceof Error ? error.message : lastError;
       }
     }
-    Object.assign(slot, { status: "failed", error: lastError });
+    if (!providerUrl) {
+      Object.assign(slot, { status: "failed", error: lastError });
+      updateMonoJobResult(jobId, snapshot());
+      return;
+    }
+
+    // The provider call may already be billable. Persistence has its own retry
+    // loop so a transient disk/download failure never triggers another image.
+    for (let persistAttempt = 1; persistAttempt <= 3; persistAttempt += 1) {
+      try {
+        const assetId = await persistGeneratedImage(actor, jobId, slot.index, providerUrl, signal);
+        Object.assign(slot, {
+          status: "succeeded",
+          assetId,
+          imageUrl: undefined,
+          error: undefined,
+        });
+        updateMonoJobResult(jobId, snapshot());
+        return;
+      } catch (error) {
+        if (signal.aborted) return;
+        lastError = error instanceof Error ? error.message : "图片持久化失败";
+      }
+    }
+    Object.assign(slot, { status: "failed", error: `生成成功，但持久化失败：${lastError}` });
     updateMonoJobResult(jobId, snapshot());
   }));
   return snapshot();
+}
+
+async function persistImageGenerationReferences(
+  actor: MonoActor,
+  jobId: string,
+  sourceUrls: string[],
+  signal: AbortSignal,
+): Promise<{ assetIds: string[]; urls: string[] }> {
+  const assetIds: string[] = [];
+  const stableUrls: string[] = [];
+  for (const [index, sourceUrl] of sourceUrls.entries()) {
+    const existingAssetId = assetIdFromContentUrl(sourceUrl);
+    const existingAsset = existingAssetId ? getMonoAsset(actor, existingAssetId) : null;
+    if (existingAsset?.storageKey) {
+      linkMonoJobAsset(actor, jobId, existingAsset.id, "image-reference", String(index));
+      assetIds.push(existingAsset.id);
+      stableUrls.push(publicAssetUrl(existingAsset.id));
+      continue;
+    }
+    const source = await resolveSourceBytes(actor, null, sourceUrl, signal);
+    const metadata = await sharp(source.buffer).metadata();
+    if (!metadata.width || !metadata.height) throw new Error(`参考图 ${index + 1} 不是有效图片`);
+    const mimeType = source.mimeType?.split(";")[0]
+      || (metadata.format ? `image/${metadata.format === "jpg" ? "jpeg" : metadata.format}` : "image/png");
+    const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/")[1] || "png";
+    const filename = `image2-reference-${jobId}-${index + 1}.${extension}`;
+    const stored = await saveObjectBuffer(source.buffer, filename);
+    const asset = createStoredAsset(actor, {
+      storageKey: stored.key,
+      mimeType,
+      name: filename,
+    });
+    linkMonoJobAsset(actor, jobId, asset.id, "image-reference", String(index));
+    assetIds.push(asset.id);
+    stableUrls.push(publicAssetUrl(asset.id));
+  }
+  return { assetIds, urls: stableUrls };
+}
+
+function assetIdFromContentUrl(sourceUrl: string): string | null {
+  try {
+    const pathname = new URL(sourceUrl, "http://127.0.0.1").pathname;
+    const match = pathname.match(/\/api\/workbench\/mono\/assets\/([^/]+)\/content$/u);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function persistGeneratedImage(
+  actor: MonoActor,
+  jobId: string,
+  index: number,
+  sourceUrl: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const source = await resolveSourceBytes(actor, null, sourceUrl, signal);
+  const metadata = await sharp(source.buffer).metadata();
+  if (!metadata.width || !metadata.height) throw new Error("生成结果不是有效图片");
+  const mimeType = source.mimeType?.split(";")[0] || "image/png";
+  const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/")[1] || "png";
+  const filename = `image2-${jobId}-${index + 1}.${extension}`;
+  const stored = await saveObjectBuffer(source.buffer, filename);
+  const asset = createStoredAsset(actor, {
+    storageKey: stored.key,
+    mimeType,
+    name: filename,
+  });
+  linkMonoJobAsset(actor, jobId, asset.id, "image-generation", String(index));
+  return asset.id;
 }
 
 async function runSingleImageGeneration(input: Record<string, unknown>, signal: AbortSignal): Promise<string> {

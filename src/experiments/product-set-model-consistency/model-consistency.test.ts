@@ -12,6 +12,7 @@ import {
   ensureExperimentRoot,
   experimentRoot,
   listProducts,
+  selectedMasterImages,
 } from "./storage";
 
 let temporaryRoot = "";
@@ -54,7 +55,7 @@ describe("model consistency experiment", () => {
     const prompt = buildConsistencyPrompt({
       template,
       slot: MODEL_SLOTS[0],
-      colorRank: 0,
+      lookId: "A",
       identityGroupId: "female",
     });
     expect(prompt).toContain("参考图1");
@@ -72,6 +73,23 @@ describe("model consistency experiment", () => {
     expect(products.map((item) => item.name)).toEqual(["nested", "SKU-001"]);
     expect(products.find((item) => item.name === "nested")?.ready).toBe(false);
     expect(products.some((item) => item.name === "SKU-ignored")).toBe(false);
+    const sku = products.find((item) => item.name === "SKU-001")!;
+    expect(sku.masterImageNames).toEqual(["front.jpg"]);
     expect(() => assertExperimentPath(path.resolve(experimentRoot(), "..", "outside.jpg"))).toThrow();
+  });
+
+  it("accepts only three distinct master-image basenames as the experiment reference set", async () => {
+    const product = path.join(experimentRoot(), "SKU-002", "主图");
+    await mkdir(product, { recursive: true });
+    for (const name of ["front.jpg", "side.jpg", "back.jpg"]) {
+      await writeFile(path.join(product, name), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    }
+    const id = Buffer.from("SKU-002").toString("base64url");
+    await expect(selectedMasterImages(id, ["front.jpg", "side.jpg", "back.jpg"]))
+      .resolves.toHaveLength(3);
+    await expect(selectedMasterImages(id, ["front.jpg", "front.jpg", "back.jpg"]))
+      .rejects.toThrow("三张不同");
+    await expect(selectedMasterImages(id, ["front.jpg", "side.jpg", "..\\outside.jpg"]))
+      .rejects.toThrow("无效");
   });
 });

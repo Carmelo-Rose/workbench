@@ -9,14 +9,17 @@ import {
   copyCandidateToProfile,
   ensureExperimentRoot,
   getCasting,
+  getModelPair,
   getProfile,
   getRun,
-  masterImages,
+  selectedMasterImages,
   newCastingId,
+  newPairId,
   newProfileId,
   newRunId,
   runDir,
   saveCasting,
+  saveModelPair,
   saveProfile,
   saveReview,
   saveRun,
@@ -36,6 +39,7 @@ import {
   type ConsistencyRun,
   type ExperimentSlotId,
   type IdentityGroupId,
+  type ModelPair,
   type ModelProfile,
 } from "./types";
 
@@ -63,6 +67,12 @@ export const createProfilesSchema = z.object({
 export const createRunSchema = z.object({
   productId: z.string().min(1).max(1_000),
   workflowId: z.string().min(1).max(160),
+  modelPairId: z.string().regex(/^pair_[0-9a-f-]{36}$/u),
+  productReferenceNames: z.array(z.string().min(1).max(255)).length(3),
+});
+
+export const createModelPairSchema = z.object({
+  displayName: z.string().trim().min(1).max(40),
   profileIds: z.object({
     female: z.string().regex(/^profile_[0-9a-f-]{36}$/u),
     male: z.string().regex(/^profile_[0-9a-f-]{36}$/u),
@@ -75,11 +85,11 @@ export const reviewRunSchema = z.object({
     identity: z.enum(["pending", "passed", "failed"]),
     product: z.enum(["pending", "passed", "failed"]),
     note: z.string().trim().max(500).optional(),
-  })).min(1).max(7),
+  })).min(1).max(2),
 });
 
 export const retryRunSchema = z.object({
-  slots: z.array(z.enum(experimentSlotIds)).min(1).max(7),
+  slots: z.array(z.enum(experimentSlotIds)).min(1).max(2),
 });
 
 export async function catalog(workspaceId: string) {
@@ -223,15 +233,45 @@ export async function createProfiles(
   return profiles;
 }
 
+/** Saving a pair is free: it only names two existing anchor images. */
+export async function createModelPair(
+  workspaceId: string,
+  input: z.infer<typeof createModelPairSchema>,
+): Promise<ModelPair> {
+  const [female, male] = await Promise.all([
+    getProfile(input.profileIds.female),
+    getProfile(input.profileIds.male),
+  ]);
+  assertProfile(female, workspaceId, "female");
+  assertProfile(male, workspaceId, "male");
+  const pair: ModelPair = {
+    id: newPairId(),
+    workspaceId,
+    displayName: input.displayName,
+    profileIds: input.profileIds,
+    createdAt: Date.now(),
+  };
+  await saveModelPair(pair);
+  return pair;
+}
+
+export async function modelPairForWorkspace(workspaceId: string, id: string): Promise<ModelPair> {
+  const pair = await getModelPair(id);
+  assertWorkspace(pair.workspaceId, workspaceId);
+  return pair;
+}
+
 export async function createConsistencyRun(
   workspaceId: string,
   input: z.infer<typeof createRunSchema>,
 ): Promise<ConsistencyRun> {
   if (!installedWorkflowIds().has(input.workflowId)) throw new Error("商品套图模板不存在");
-  await masterImages(input.productId);
+  const productReferenceNames = input.productReferenceNames as [string, string, string];
+  await selectedMasterImages(input.productId, productReferenceNames);
+  const modelPair = await modelPairForWorkspace(workspaceId, input.modelPairId);
   const [female, male] = await Promise.all([
-    getProfile(input.profileIds.female),
-    getProfile(input.profileIds.male),
+    getProfile(modelPair.profileIds.female),
+    getProfile(modelPair.profileIds.male),
   ]);
   assertProfile(female, workspaceId, "female");
   assertProfile(male, workspaceId, "male");
@@ -245,27 +285,38 @@ export async function createConsistencyRun(
     productId: input.productId,
     productName: Buffer.from(input.productId, "base64url").toString("utf8"),
     workflowId: input.workflowId,
-    profileIds: input.profileIds,
+    modelPairId: modelPair.id,
+    profileIds: modelPair.profileIds,
+    productReferenceNames,
     status: "queued",
     stage: "queued",
     provider: "mono-image",
     model: configuredExperimentModel(workspaceId),
-    slots: experimentSlotIds.map((id) => ({
+    slots: experimentSlotIds.map((id) => {
+      const lookId = demoLookForSlot(id);
+      return ({
       id,
-      identityGroupId: "female",
-      lookId: "",
+      identityGroupId: lookId === "B" ? "male" : "female",
+      lookId,
       colorRank: 0,
       status: "queued",
       attempts: 0,
       imageName: `${id}.jpg`,
       review: { identity: "pending", product: "pending" },
-    })),
+      });
+    }),
     createdAt: now,
     updatedAt: now,
   };
   await saveRun(run);
   scheduleRun(run.id);
   return run;
+}
+
+function demoLookForSlot(slotId: ExperimentSlotId): "A" | "B" | "C" {
+  if (slotId === "01") return "A";
+  if (slotId === "04") return "B";
+  return "C";
 }
 
 export async function runForWorkspace(workspaceId: string, id: string): Promise<ConsistencyRun> {

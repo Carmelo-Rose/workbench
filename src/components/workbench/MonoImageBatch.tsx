@@ -55,7 +55,7 @@ export function MonoImageBatchGallery({
   const result = imageBatchResult(job);
   const slots = useMemo(() => result?.slots ?? [], [result]);
   const successful = useMemo(
-    () => slots.filter((slot) => slot.status === "succeeded" && slot.imageUrl),
+    () => slots.filter((slot) => slot.status === "succeeded" && (slot.assetId || slot.imageUrl)),
     [slots],
   );
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -106,7 +106,7 @@ export function MonoImageBatchGallery({
       >
         {slots.map((slot) => (
           <article key={slot.index} className="bg-muted/50 overflow-hidden rounded-xl">
-            {slot.status === "succeeded" && slot.imageUrl ? (
+            {slot.status === "succeeded" && (slot.assetId || slot.imageUrl) ? (
               <>
                 <button
                   type="button"
@@ -115,9 +115,11 @@ export function MonoImageBatchGallery({
                   className="group relative block w-full cursor-zoom-in"
                   style={{ aspectRatio: css }}
                 >
-                  {/* Provider URLs are dynamic and cannot use Next Image's static allowlist. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={slot.imageUrl} alt={`Mono 生成结果 ${slot.index + 1}`} className="size-full object-contain" />
+                  <ImageWithFallback
+                    src={downloadUrl(job.id, slot.index)}
+                    alt={`Mono 生成结果 ${slot.index + 1}`}
+                    className="size-full object-contain"
+                  />
                   <span className="absolute inset-0 flex items-center justify-center bg-black/35 text-white opacity-0 transition-opacity group-hover:opacity-100">
                     <MaximizeIcon className="size-5" />
                   </span>
@@ -133,7 +135,7 @@ export function MonoImageBatchGallery({
                         size="xs"
                         disabled={referencePendingIndex !== null}
                         onClick={() => void handleUseAsReference({
-                          displayUrl: slot.imageUrl!,
+                          displayUrl: downloadUrl(job.id, slot.index),
                           fetchUrl: downloadUrl(job.id, slot.index),
                           index: slot.index,
                         })}
@@ -176,7 +178,7 @@ export function MonoImageBatchGallery({
       </div>
       <ImageLightbox
         images={successful.map((slot) => ({
-          displayUrl: slot.imageUrl!,
+          displayUrl: downloadUrl(job.id, slot.index),
           fetchUrl: downloadUrl(job.id, slot.index),
           index: slot.index,
         }))}
@@ -188,6 +190,19 @@ export function MonoImageBatchGallery({
       />
     </div>
   );
+}
+
+function ImageWithFallback({ src, alt, className }: { src: string; alt: string; className: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <span className="text-muted-foreground flex size-full items-center justify-center gap-2 text-xs">
+        <ImageIcon className="size-4" />历史图片已失效
+      </span>
+    );
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} alt={alt} className={className} onError={() => setFailed(true)} />;
 }
 
 function ImageLightbox({

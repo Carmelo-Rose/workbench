@@ -1,7 +1,8 @@
 export const identityGroupIds = ["female", "male"] as const;
 export type IdentityGroupId = (typeof identityGroupIds)[number];
 
-export const experimentSlotIds = ["01", "03", "04", "05", "06", "07", "08"] as const;
+// Two-image baseline: one female A slot and one male B slot.
+export const experimentSlotIds = ["01", "04"] as const;
 export type ExperimentSlotId = (typeof experimentSlotIds)[number];
 
 export type ExperimentStatus =
@@ -58,6 +59,15 @@ export type ModelProfile = {
   createdAt: number;
 };
 
+/** A reusable, user-named female + male combination for a product-set run. */
+export type ModelPair = {
+  id: string;
+  workspaceId: string;
+  displayName: string;
+  profileIds: Record<IdentityGroupId, string>;
+  createdAt: number;
+};
+
 export type SlotReview = {
   identity: "pending" | "passed" | "failed";
   product: "pending" | "passed" | "failed";
@@ -83,7 +93,10 @@ export type ConsistencyRun = {
   productId: string;
   productName: string;
   workflowId: string;
+  modelPairId: string;
   profileIds: Record<IdentityGroupId, string>;
+  /** Exactly three user-confirmed, same-colour product references in master-image order. */
+  productReferenceNames: [string, string, string];
   status: ExperimentStatus;
   stage: "queued" | "classifying" | "generating" | "review" | "completed" | "interrupted";
   provider: "mono-image";
@@ -100,6 +113,8 @@ export type ExperimentProduct = {
   id: string;
   name: string;
   masterCount: number;
+  /** Safe basenames only; used by the demo to let a human choose the three references. */
+  masterImageNames: string[];
   ready: boolean;
   issue?: string;
 };
@@ -107,6 +122,7 @@ export type ExperimentProduct = {
 export type ExperimentCatalog = {
   products: ExperimentProduct[];
   profiles: ModelProfile[];
+  modelPairs: ModelPair[];
   /** Newest first. Existing castings are restored on dialog open; they are
    * never recreated just because a page was refreshed. */
   castings: CastingRecord[];

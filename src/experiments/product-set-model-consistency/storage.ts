@@ -1,18 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { cp, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { productSourceRoot } from "@/lib/mono/product-pipeline";
+import { productSourceRoot } from "@/lib/mono/product-roots";
 import type {
   CastingRecord,
   ConsistencyRun,
   ExperimentCatalog,
   ExperimentProduct,
+  ModelPair,
   ModelProfile,
 } from "./types";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 const CASTING_ID = /^casting_[0-9a-f-]{36}$/u;
 const PROFILE_ID = /^profile_[0-9a-f-]{36}$/u;
+const PAIR_ID = /^pair_[0-9a-f-]{36}$/u;
 const RUN_ID = /^run_[0-9a-f-]{36}$/u;
 
 export function experimentRoot(): string {
@@ -37,12 +39,13 @@ export function assertExperimentPath(candidate: string): string {
   return resolved;
 }
 
-function opaqueId(prefix: "casting" | "profile" | "run"): string {
+function opaqueId(prefix: "casting" | "profile" | "pair" | "run"): string {
   return `${prefix}_${randomUUID()}`;
 }
 
 export const newCastingId = () => opaqueId("casting");
 export const newProfileId = () => opaqueId("profile");
+export const newPairId = () => opaqueId("pair");
 export const newRunId = () => opaqueId("run");
 
 function requireId(id: string, pattern: RegExp, label: string): string {
@@ -64,6 +67,14 @@ export function profilesRoot(): string {
 
 export function profileDir(id: string): string {
   return assertExperimentPath(path.join(profilesRoot(), requireId(id, PROFILE_ID, "模特卡")));
+}
+
+export function pairsRoot(): string {
+  return assertExperimentPath(path.join(experimentRoot(), "_model-pairs"));
+}
+
+export function pairDir(id: string): string {
+  return assertExperimentPath(path.join(pairsRoot(), requireId(id, PAIR_ID, "模特组合")));
 }
 
 function runIndexRoot(): string {
@@ -104,6 +115,7 @@ export async function ensureExperimentRoot(): Promise<void> {
   await Promise.all([
     mkdir(castingsRoot(), { recursive: true }),
     mkdir(profilesRoot(), { recursive: true }),
+    mkdir(pairsRoot(), { recursive: true }),
     mkdir(runIndexRoot(), { recursive: true }),
   ]);
 }
@@ -166,6 +178,14 @@ export async function saveProfile(profile: ModelProfile): Promise<void> {
 
 export async function getProfile(id: string): Promise<ModelProfile> {
   return readJson<ModelProfile>(path.join(profileDir(id), "profile.json"));
+}
+
+export async function saveModelPair(pair: ModelPair): Promise<void> {
+  await writeJsonAtomic(path.join(pairDir(pair.id), "pair.json"), pair);
+}
+
+export async function getModelPair(id: string): Promise<ModelPair> {
+  return readJson<ModelPair>(path.join(pairDir(id), "pair.json"));
 }
 
 export async function copyCandidateToProfile(
@@ -242,6 +262,15 @@ export async function listProfiles(workspaceId: string): Promise<ModelProfile[]>
   return profiles.sort((first, second) => second.createdAt - first.createdAt);
 }
 
+export async function listModelPairs(workspaceId: string): Promise<ModelPair[]> {
+  const pairs = await listJsonDirectories<ModelPair>(
+    pairsRoot(),
+    "pair.json",
+    (pair) => pair.workspaceId === workspaceId,
+  );
+  return pairs.sort((first, second) => second.createdAt - first.createdAt);
+}
+
 /**
  * Castings are intentionally file-backed just like profiles.  Keeping this
  * list means a browser refresh can restore an unfinished or partially
@@ -273,16 +302,30 @@ export async function listProducts(): Promise<ExperimentProduct[]> {
     .filter((entry) => entry.isDirectory() && !entry.name.startsWith("_"))
     .map(async (entry): Promise<ExperimentProduct> => {
       const directory = assertExperimentPath(path.join(experimentRoot(), entry.name));
-      const masterCount = await imageCount(path.join(directory, "主图"));
+      const masterDirectory = path.join(directory, "主图");
+      const masterCount = await imageCount(masterDirectory);
+      const masterImageNames = await masterImageNamesInDirectory(masterDirectory);
       return {
         id: productId(entry.name),
         name: entry.name,
         masterCount,
+        masterImageNames,
         ready: masterCount > 0,
         issue: masterCount > 0 ? undefined : "缺少可直接使用的主图",
       };
     }));
   return products.sort((first, second) => first.name.localeCompare(second.name, "zh-CN"));
+}
+
+async function masterImageNamesInDirectory(directory: string): Promise<string[]> {
+  try {
+    return (await readdir(assertExperimentPath(directory), { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
+      .map((entry) => entry.name)
+      .sort((first, second) => first.localeCompare(second, "zh-CN"));
+  } catch {
+    return [];
+  }
 }
 
 export async function masterImages(id: string): Promise<string[]> {
@@ -294,6 +337,28 @@ export async function masterImages(id: string): Promise<string[]> {
     .sort((first, second) => path.basename(first).localeCompare(path.basename(second), "zh-CN"));
   if (!files.length) throw new Error("测试商品缺少主图");
   return files;
+}
+
+/**
+ * Resolve an explicit three-image reference set without trusting a client path.
+ * The demo uses this instead of the production white-background classifier:
+ * product-only hat photos can legitimately fill the frame edge-to-edge.
+ */
+export async function selectedMasterImages(id: string, names: readonly string[]): Promise<[string, string, string]> {
+  if (names.length !== 3 || new Set(names).size !== 3) {
+    throw new Error("请选择三张不同的同色商品参考图");
+  }
+  const masters = await masterImages(id);
+  const byName = new Map(masters.map((file) => [path.basename(file), file]));
+  const selected = names.map((name) => {
+    if (path.basename(name) !== name || !IMAGE_EXTENSIONS.has(path.extname(name).toLowerCase())) {
+      throw new Error("商品参考图名称无效");
+    }
+    const file = byName.get(name);
+    if (!file) throw new Error("所选商品参考图不属于当前测试货号");
+    return file;
+  });
+  return selected as [string, string, string];
 }
 
 export async function experimentFile(
@@ -319,10 +384,11 @@ export async function buildCatalog(
   workspaceId: string,
   workflows: ExperimentCatalog["workflows"],
 ): Promise<ExperimentCatalog> {
-  const [products, profiles, castings] = await Promise.all([
+  const [products, profiles, modelPairs, castings] = await Promise.all([
     listProducts(),
     listProfiles(workspaceId),
+    listModelPairs(workspaceId),
     listCastings(workspaceId),
   ]);
-  return { products, profiles, castings, workflows };
+  return { products, profiles, modelPairs, castings, workflows };
 }

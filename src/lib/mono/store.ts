@@ -8,10 +8,12 @@ import type {
   MonoAssetInput,
   MonoAssetLocation,
   MonoJob,
+  MonoJobAsset,
   MonoJobKind,
   MonoJobStatus,
   MonoSubject,
   MonoSubjectInput,
+  MonoSubjectKind,
   MonoSubjectPatch,
   MonoSubjectVisibility,
 } from "./contracts";
@@ -57,9 +59,19 @@ type SubjectRow = {
   owner_user_id: string;
   name: string;
   asset_id: string;
+  kind: MonoSubjectKind;
   visibility: MonoSubjectVisibility;
   created_at: number;
   updated_at: number;
+};
+
+type JobAssetRow = {
+  job_id: string;
+  workspace_id: string;
+  asset_id: string;
+  role: string;
+  slot_key: string;
+  created_at: number;
 };
 
 function toAsset(row: AssetRow): MonoAsset {
@@ -108,9 +120,21 @@ function toSubject(row: SubjectRow): MonoSubject {
     ownerUserId: row.owner_user_id,
     name: row.name,
     assetId: row.asset_id,
+    kind: row.kind,
     visibility: row.visibility,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function toJobAsset(row: JobAssetRow): MonoJobAsset {
+  return {
+    jobId: row.job_id,
+    workspaceId: row.workspace_id,
+    assetId: row.asset_id,
+    role: row.role,
+    slotKey: row.slot_key,
+    createdAt: row.created_at,
   };
 }
 
@@ -152,6 +176,100 @@ export function getMonoAsset(actor: MonoActor, assetId: string): MonoAsset | nul
   return row ? toAsset(row) : null;
 }
 
+export function linkMonoJobAsset(
+  actor: Pick<MonoActor, "workspaceId">,
+  jobId: string,
+  assetId: string,
+  role: string,
+  slotKey: string,
+): MonoJobAsset {
+  const db = getDb();
+  const job = db.prepare(
+    "SELECT 1 FROM mono_jobs WHERE id = ? AND workspace_id = ?",
+  ).get(jobId, actor.workspaceId);
+  const asset = db.prepare(
+    "SELECT 1 FROM mono_assets WHERE id = ? AND workspace_id = ?",
+  ).get(assetId, actor.workspaceId);
+  if (!job || !asset) throw new Error("任务产物不属于当前工作区");
+  const createdAt = Date.now();
+  db.prepare(
+    `INSERT INTO mono_job_assets (job_id, workspace_id, asset_id, role, slot_key, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(job_id, role, slot_key) DO UPDATE SET
+       asset_id = excluded.asset_id,
+       workspace_id = excluded.workspace_id,
+       created_at = excluded.created_at`,
+  ).run(jobId, actor.workspaceId, assetId, role, slotKey, createdAt);
+  return {
+    jobId,
+    workspaceId: actor.workspaceId,
+    assetId,
+    role,
+    slotKey,
+    createdAt,
+  };
+}
+
+export function listMonoJobAssets(
+  actor: Pick<MonoActor, "workspaceId">,
+  jobId: string,
+): MonoJobAsset[] {
+  const rows = getDb().prepare(
+    `SELECT job_id, workspace_id, asset_id, role, slot_key, created_at
+     FROM mono_job_assets WHERE job_id = ? AND workspace_id = ?
+     ORDER BY created_at ASC`,
+  ).all(jobId, actor.workspaceId) as JobAssetRow[];
+  return rows.map(toJobAsset);
+}
+
+export function listGeneratedMonoAssets(
+  actor: Pick<MonoActor, "workspaceId">,
+  limit = 24,
+): Array<MonoJobAsset & Pick<MonoAsset, "mimeType" | "name">> {
+  const rows = getDb().prepare(
+    `SELECT link.job_id, link.workspace_id, link.asset_id, link.role, link.slot_key, link.created_at,
+            asset.mime_type, asset.name
+     FROM mono_job_assets AS link
+     JOIN mono_assets AS asset ON asset.id = link.asset_id
+     WHERE link.workspace_id = ? AND link.role <> 'image-reference'
+     ORDER BY link.created_at DESC
+     LIMIT ?`,
+  ).all(actor.workspaceId, Math.min(Math.max(limit, 1), 100)) as Array<JobAssetRow & {
+    mime_type: string | null;
+    name: string | null;
+  }>;
+  return rows.map((row) => ({
+    ...toJobAsset(row),
+    mimeType: row.mime_type ?? undefined,
+    name: row.name ?? undefined,
+  }));
+}
+
+export function deleteMonoAssetIfUnreferenced(
+  actor: Pick<MonoActor, "workspaceId">,
+  assetId: string,
+): { deleted: boolean; storageKey?: string } {
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT storage_key FROM mono_assets WHERE id = ? AND workspace_id = ?",
+  ).get(assetId, actor.workspaceId) as { storage_key: string | null } | undefined;
+  if (!row) return { deleted: false };
+  const result = db.prepare(
+    `DELETE FROM mono_assets
+     WHERE id = ? AND workspace_id = ?
+       AND NOT EXISTS (SELECT 1 FROM mono_subjects WHERE asset_id = ?)
+       AND NOT EXISTS (
+         SELECT 1 FROM mono_product_model_profiles
+         WHERE anchor_asset_id = ? OR body_asset_id = ?
+       )
+       AND NOT EXISTS (SELECT 1 FROM mono_job_assets WHERE asset_id = ?)`,
+  ).run(assetId, actor.workspaceId, assetId, assetId, assetId, assetId);
+  return {
+    deleted: result.changes > 0,
+    storageKey: result.changes > 0 ? row.storage_key ?? undefined : undefined,
+  };
+}
+
 export function createMonoSubject(actor: MonoActor, input: MonoSubjectInput): MonoSubject | null {
   if (!getMonoAsset(actor, input.assetId)) return null;
   const now = Date.now();
@@ -161,20 +279,22 @@ export function createMonoSubject(actor: MonoActor, input: MonoSubjectInput): Mo
     ownerUserId: actor.userId,
     name: input.name,
     assetId: input.assetId,
-    visibility: input.visibility,
+    kind: input.kind ?? "generic",
+    visibility: input.visibility ?? "private",
     createdAt: now,
     updatedAt: now,
   };
   getDb().prepare(
     `INSERT INTO mono_subjects
-     (id, workspace_id, owner_user_id, name, asset_id, visibility, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     (id, workspace_id, owner_user_id, name, asset_id, kind, visibility, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     subject.id,
     subject.workspaceId,
     subject.ownerUserId,
     subject.name,
     subject.assetId,
+    subject.kind,
     subject.visibility,
     subject.createdAt,
     subject.updatedAt,
@@ -185,7 +305,8 @@ export function createMonoSubject(actor: MonoActor, input: MonoSubjectInput): Mo
 export function listMonoSubjects(actor: MonoActor): MonoSubject[] {
   const rows = getDb().prepare(
     `SELECT * FROM mono_subjects
-     WHERE workspace_id = ? AND (owner_user_id = ? OR visibility = 'workspace')
+     WHERE workspace_id = ? AND kind = 'generic'
+       AND (owner_user_id = ? OR visibility = 'workspace')
      ORDER BY updated_at DESC`,
   ).all(actor.workspaceId, actor.userId) as SubjectRow[];
   return rows.map(toSubject);
@@ -371,6 +492,14 @@ export function purgeUnfavoriteMonoJobs(actor: MonoActor, kind: MonoJobKind): nu
        AND status IN ('succeeded', 'failed', 'cancelled')`,
   ).run(actor.workspaceId, kind);
   return Number(result.changes);
+}
+
+export function listPurgeableMonoJobIds(actor: MonoActor, kind: MonoJobKind): string[] {
+  return (getDb().prepare(
+    `SELECT id FROM mono_jobs
+     WHERE workspace_id = ? AND kind = ? AND favorite = 0
+       AND status IN ('succeeded', 'failed', 'cancelled')`,
+  ).all(actor.workspaceId, kind) as Array<{ id: string }>).map((row) => row.id);
 }
 
 export function getMonoJob(actor: MonoActor, jobId: string): MonoJob | null {
@@ -720,6 +849,12 @@ export function updateMonoJobResult(jobId: string, result: Record<string, unknow
     "UPDATE mono_jobs SET result_json = ?, updated_at = ? WHERE id = ? AND status = 'running'",
   ).run(JSON.stringify(result), now, jobId);
   appendMonoJobEvent(jobId, "progress", result);
+}
+
+export function updateMonoJobInput(jobId: string, input: Record<string, unknown>): void {
+  getDb().prepare(
+    "UPDATE mono_jobs SET input_json = ?, updated_at = ? WHERE id = ? AND status = 'running'",
+  ).run(JSON.stringify(input), Date.now(), jobId);
 }
 
 export function completeMonoJob(

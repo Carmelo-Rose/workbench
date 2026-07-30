@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
@@ -100,12 +101,44 @@ CREATE TABLE IF NOT EXISTS mono_assets (
 );
 CREATE INDEX IF NOT EXISTS mono_assets_workspace_created
   ON mono_assets(workspace_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS mono_product_model_profiles (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  group_id TEXT NOT NULL CHECK (group_id IN ('female', 'male')),
+  anchor_asset_id TEXT NOT NULL REFERENCES mono_assets(id) ON DELETE RESTRICT,
+  body_asset_id TEXT REFERENCES mono_assets(id) ON DELETE RESTRICT,
+  subject_id TEXT REFERENCES mono_subjects(id) ON DELETE RESTRICT,
+  source_candidate_id TEXT,
+  prompt TEXT,
+  provider TEXT,
+  model TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mono_product_model_profiles_workspace_created
+  ON mono_product_model_profiles(workspace_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS mono_product_model_pairs (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  female_profile_id TEXT NOT NULL REFERENCES mono_product_model_profiles(id) ON DELETE RESTRICT,
+  male_profile_id TEXT NOT NULL REFERENCES mono_product_model_profiles(id) ON DELETE RESTRICT,
+  female_subject_id TEXT REFERENCES mono_subjects(id) ON DELETE RESTRICT,
+  male_subject_id TEXT REFERENCES mono_subjects(id) ON DELETE RESTRICT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK (female_profile_id <> male_profile_id)
+);
+CREATE INDEX IF NOT EXISTS mono_product_model_pairs_workspace_created
+  ON mono_product_model_pairs(workspace_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS mono_subjects (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
   owner_user_id TEXT NOT NULL,
   name TEXT NOT NULL,
   asset_id TEXT NOT NULL REFERENCES mono_assets(id),
+  kind TEXT NOT NULL DEFAULT 'generic' CHECK (kind IN ('generic', 'product-model')),
   visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private', 'workspace')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -137,6 +170,19 @@ CREATE TABLE IF NOT EXISTS mono_jobs (
   worker_version TEXT,
   UNIQUE(workspace_id, idempotency_key)
 );
+CREATE TABLE IF NOT EXISTS mono_job_assets (
+  job_id TEXT NOT NULL REFERENCES mono_jobs(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL,
+  asset_id TEXT NOT NULL REFERENCES mono_assets(id) ON DELETE RESTRICT,
+  role TEXT NOT NULL,
+  slot_key TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (job_id, role, slot_key)
+);
+CREATE INDEX IF NOT EXISTS mono_job_assets_workspace_created
+  ON mono_job_assets(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS mono_job_assets_asset
+  ON mono_job_assets(asset_id);
 CREATE INDEX IF NOT EXISTS mono_jobs_workspace_updated
   ON mono_jobs(workspace_id, updated_at DESC);
 CREATE TABLE IF NOT EXISTS mono_workers (
@@ -198,6 +244,12 @@ CREATE INDEX IF NOT EXISTS messages_workspace_thread
   ON messages(workspace_id, thread_id);
 CREATE INDEX IF NOT EXISTS mono_assets_workspace_created
   ON mono_assets(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS mono_product_model_profiles_workspace_created
+  ON mono_product_model_profiles(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS mono_product_model_pairs_workspace_created
+  ON mono_product_model_pairs(workspace_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS mono_product_model_profiles_subject
+  ON mono_product_model_profiles(subject_id) WHERE subject_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS mono_subjects_workspace_updated
   ON mono_subjects(workspace_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS mono_subjects_owner_updated
@@ -407,6 +459,112 @@ function migrateApiConfig(db: DatabaseSync): void {
   }
 }
 
+/**
+ * v13: product model cards are first-class entries in the Mono subject
+ * library.  The profile table remains the product-specific subtype (gender
+ * and provenance), while mono_subjects owns the reusable identity card and
+ * anchor asset.  Pairs record the selected subject relationship as well.
+ */
+function migrateProductModelLibraryToSubjects(db: DatabaseSync): void {
+  const subjectColumns = columns(db, "mono_subjects");
+  if (!subjectColumns.some((column) => column.name === "kind")) {
+    db.exec("ALTER TABLE mono_subjects ADD COLUMN kind TEXT NOT NULL DEFAULT 'generic'");
+  }
+
+  const profileColumns = columns(db, "mono_product_model_profiles");
+  if (!profileColumns.some((column) => column.name === "body_asset_id")) {
+    db.exec("ALTER TABLE mono_product_model_profiles ADD COLUMN body_asset_id TEXT REFERENCES mono_assets(id)");
+  }
+  if (!profileColumns.some((column) => column.name === "subject_id")) {
+    db.exec("ALTER TABLE mono_product_model_profiles ADD COLUMN subject_id TEXT REFERENCES mono_subjects(id)");
+  }
+
+  const pairColumns = columns(db, "mono_product_model_pairs");
+  if (!pairColumns.some((column) => column.name === "female_subject_id")) {
+    db.exec("ALTER TABLE mono_product_model_pairs ADD COLUMN female_subject_id TEXT REFERENCES mono_subjects(id)");
+  }
+  if (!pairColumns.some((column) => column.name === "male_subject_id")) {
+    db.exec("ALTER TABLE mono_product_model_pairs ADD COLUMN male_subject_id TEXT REFERENCES mono_subjects(id)");
+  }
+
+  type ProfileWithoutSubject = {
+    id: string;
+    workspace_id: string;
+    display_name: string;
+    anchor_asset_id: string;
+    created_at: number;
+  };
+  const missingSubjects = db.prepare(
+    `SELECT id, workspace_id, display_name, anchor_asset_id, created_at
+     FROM mono_product_model_profiles WHERE subject_id IS NULL OR subject_id = ''`,
+  ).all() as ProfileWithoutSubject[];
+  if (missingSubjects.length) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const assetOwner = db.prepare(
+        "SELECT user_id FROM mono_assets WHERE id = ? AND workspace_id = ?",
+      );
+      const addSubject = db.prepare(
+        `INSERT INTO mono_subjects
+         (id, workspace_id, owner_user_id, name, asset_id, kind, visibility, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'product-model', 'workspace', ?, ?)`,
+      );
+      const linkProfile = db.prepare(
+        "UPDATE mono_product_model_profiles SET subject_id = ?, updated_at = ? WHERE id = ? AND workspace_id = ?",
+      );
+      for (const profile of missingSubjects) {
+        const asset = assetOwner.get(profile.anchor_asset_id, profile.workspace_id) as { user_id: string } | undefined;
+        if (!asset) throw new Error(`模特卡 ${profile.id} 缺少锚点素材`);
+        const subjectId = `subject_${randomUUID()}`;
+        addSubject.run(
+          subjectId,
+          profile.workspace_id,
+          asset.user_id,
+          profile.display_name,
+          profile.anchor_asset_id,
+          profile.created_at,
+          profile.created_at,
+        );
+        linkProfile.run(subjectId, profile.created_at, profile.id, profile.workspace_id);
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  type PairWithoutSubjects = {
+    id: string;
+    workspace_id: string;
+    female_profile_id: string;
+    male_profile_id: string;
+  };
+  const missingPairSubjects = db.prepare(
+    `SELECT id, workspace_id, female_profile_id, male_profile_id
+     FROM mono_product_model_pairs
+     WHERE female_subject_id IS NULL OR male_subject_id IS NULL`,
+  ).all() as PairWithoutSubjects[];
+  if (missingPairSubjects.length) {
+    const profileSubject = db.prepare(
+      "SELECT subject_id, group_id FROM mono_product_model_profiles WHERE id = ? AND workspace_id = ?",
+    );
+    const linkPair = db.prepare(
+      `UPDATE mono_product_model_pairs
+       SET female_subject_id = ?, male_subject_id = ?, updated_at = ?
+       WHERE id = ? AND workspace_id = ?`,
+    );
+    for (const pair of missingPairSubjects) {
+      const female = profileSubject.get(pair.female_profile_id, pair.workspace_id) as { subject_id: string | null; group_id: string } | undefined;
+      const male = profileSubject.get(pair.male_profile_id, pair.workspace_id) as { subject_id: string | null; group_id: string } | undefined;
+      if (!female?.subject_id || female.group_id !== "female" || !male?.subject_id || male.group_id !== "male") {
+        throw new Error(`模特组合 ${pair.id} 的主体关系无效`);
+      }
+      linkPair.run(female.subject_id, male.subject_id, Date.now(), pair.id, pair.workspace_id);
+    }
+  }
+}
+
 function ensureSchema(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
@@ -414,6 +572,7 @@ function ensureSchema(db: DatabaseSync): void {
   seedLegacyTenant(db);
   migrateThreads(db);
   migrateApiConfig(db);
+  migrateProductModelLibraryToSubjects(db);
   // v3：既有库补 favorite 列（DDL 的 CREATE TABLE IF NOT EXISTS 不会改老表）。
   const jobColumns = db.prepare("PRAGMA table_info(mono_jobs)").all() as { name: string }[];
   if (!jobColumns.some((column) => column.name === "favorite")) {
@@ -510,7 +669,7 @@ function ensureSchema(db: DatabaseSync): void {
     );
   `);
   db.exec(INDEX_DDL);
-  db.exec("PRAGMA user_version = 11");
+  db.exec("PRAGMA user_version = 14");
 }
 
 export function openWorkbenchDatabase(dbPath: string): DatabaseSync {

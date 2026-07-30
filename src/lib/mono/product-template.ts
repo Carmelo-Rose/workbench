@@ -49,6 +49,7 @@ export const productTemplateSchema = z.object({
 });
 
 export type ProductTemplate = z.infer<typeof productTemplateSchema>;
+export type ModelIdentityGroup = "female" | "male";
 
 /** Shared camera/lens language appended to every generated slot, regardless of category. */
 const CAMERA_STYLE =
@@ -76,18 +77,34 @@ export function buildModelPrompt(
   colorRank: number,
   width: number,
   height: number,
+  identityGroupId?: ModelIdentityGroup,
+  hasBodyReference = false,
 ): string {
   const slot = template.modelSlots[slotId];
   if (!slot) throw new Error(`模板缺少槽位 ${slotId} 的构图描述`);
   const look = template.looks[colorRank % template.looks.length];
-  // TEST: 去掉商品还原/构图/禁止项三段规则，只留画风文案 + 摄影质感两段，
-  // 配合参考图原图直接试效果。测试完记得视情况改回来。
-  return [look.text, CAMERA_STYLE].join("\n\n");
-  // return [
-  //   `【商品还原 · 最高优先级】\n${template.productLock}`,
-  //   `【画面风格】\n${look.text}`,
-  //   `【构图】\n${template.framingRule}${slot.framing}成图比例 ${width}:${height}。`,
-  //   `【禁止出现】\n${template.negative}`,
-  //   `【摄影质感】\n${CAMERA_STYLE}`,
-  // ].join("\n\n");
+  const productStart = identityGroupId ? (hasBodyReference ? 3 : 2) : 1;
+  const identityRules = identityGroupId
+    ? [
+        `【人物身份 · 最高优先级】\n参考图1只用于识别这位${identityGroupId === "female" ? "女" : "男"}模特的脸型、五官比例、年龄感、肤色和辨识特征。不得照搬其中的服装、姿势、视线、表情、背景、光线、构图或画面风格。`,
+        ...(hasBodyReference
+          ? ["【身材倾向】\n参考图2只用于参考人物的大致身高感、肩胯比例和体型倾向。不得复制其中的动作、服装、场景或镜头角度。"]
+          : []),
+      ]
+    : [];
+  return [
+    `你将收到按顺序编号的参考图。商品参考图从第 ${productStart} 张开始。`,
+    ...identityRules,
+    `【商品还原 · 最高优先级】\n参考图${productStart}及其后的图片是同一件商品的多角度图片，是商品外观的唯一权威。\n${template.productLock}`,
+    `【画面风格】\n${look.text}`,
+    `【构图】\n${template.framingRule}${slot.framing}成图比例 ${width}:${height}。人物姿势和镜头构图只服从本段要求。`,
+    `【禁止出现】\n${template.negative}${identityGroupId ? "不得生成与参考图1不同的人物身份。" : ""}`,
+    `【摄影质感】\n${CAMERA_STYLE}`,
+  ].join("\n\n");
+}
+
+export function identityGroupForLook(lookId: string): ModelIdentityGroup {
+  if (lookId === "B") return "male";
+  if (lookId === "A" || lookId === "C") return "female";
+  throw new Error(`商品套图模板不支持 look ${lookId} 的模特分组`);
 }

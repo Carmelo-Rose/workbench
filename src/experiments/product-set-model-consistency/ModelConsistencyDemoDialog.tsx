@@ -1,14 +1,15 @@
+/* eslint-disable @next/next/no-img-element -- private authenticated image routes are not Next image sources. */
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type {
-  CastingRecord,
   ConsistencyRun,
   ExperimentCatalog,
   ExperimentSlotId,
   IdentityGroupId,
+  ModelPair,
 } from "./types";
 
 const apiRoot = "/api/experiments/model-consistency";
@@ -23,8 +24,12 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-function imageUrl(kind: "casting" | "profile" | "run", id: string, name: string) {
+function imageUrl(kind: "profile" | "run", id: string, name: string) {
   return `${apiRoot}/images/${kind}/${encodeURIComponent(id)}/${encodeURIComponent(name)}`;
+}
+
+function profileLabel(profile: ExperimentCatalog["profiles"][number]) {
+  return `${profile.displayName} · ${profile.sourceCandidateId}`;
 }
 
 export function ModelConsistencyDemoDialog({
@@ -35,54 +40,36 @@ export function ModelConsistencyDemoDialog({
   onOpenChange(open: boolean): void;
 }) {
   const [catalog, setCatalog] = useState<ExperimentCatalog>();
-  const [casting, setCasting] = useState<CastingRecord>();
   const [run, setRun] = useState<ConsistencyRun>();
-  const [selectedCandidates, setSelectedCandidates] = useState<Partial<Record<IdentityGroupId, string>>>({});
-  const [profileIds, setProfileIds] = useState<Partial<Record<IdentityGroupId, string>>>({});
+  const [modelPairId, setModelPairId] = useState("");
   const [productId, setProductId] = useState("");
+  const [productReferenceNames, setProductReferenceNames] = useState<string[]>([]);
   const [workflowId, setWorkflowId] = useState("");
+  const [showPairCreator, setShowPairCreator] = useState(false);
+  const [pairName, setPairName] = useState("模特组合 01");
+  const [pairProfileIds, setPairProfileIds] = useState<Partial<Record<IdentityGroupId, string>>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const paidActionLock = useRef(false);
-
-  const refreshCatalog = async () => {
-    const next = await requestJson<ExperimentCatalog>(`${apiRoot}/catalog`);
-    setCatalog(next);
-    setProductId((current) => current || next.products[0]?.id || "");
-    setWorkflowId((current) => current || next.workflows[0]?.id || "");
-    setProfileIds((current) => ({
-      female: current.female || next.profiles.find((item) => item.groupId === "female")?.id,
-      male: current.male || next.profiles.find((item) => item.groupId === "male")?.id,
-    }));
-    setCasting((current) => current ?? next.castings[0]);
-  };
 
   useEffect(() => {
     if (!open) return;
     void requestJson<ExperimentCatalog>(`${apiRoot}/catalog`).then((next) => {
       setCatalog(next);
+      setModelPairId((current) => current || next.modelPairs[0]?.id || "");
       setProductId((current) => current || next.products[0]?.id || "");
+      setProductReferenceNames((current) => current.length === 3
+        ? current
+        : next.products[0]?.masterImageNames.slice(0, 3) ?? []);
       setWorkflowId((current) => current || next.workflows[0]?.id || "");
-      setProfileIds((current) => ({
-        female: current.female || next.profiles.find((item) => item.groupId === "female")?.id,
-        male: current.male || next.profiles.find((item) => item.groupId === "male")?.id,
+      setPairProfileIds((current) => ({
+        female: current.female || next.profiles.find((profile) => profile.groupId === "female")?.id,
+        male: current.male || next.profiles.find((profile) => profile.groupId === "male")?.id,
       }));
-      setCasting((current) => current ?? next.castings[0]);
     }).catch((reason: unknown) =>
       setError(reason instanceof Error ? reason.message : "无法读取实验目录"));
+  // `open` is the only trigger: no render, refresh, or dialog entry can create images.
   }, [open]);
-
-  const castingId = casting?.id;
-  const castingStatus = casting?.status;
-  useEffect(() => {
-    if (!open || !castingId || !castingStatus || !["queued", "running"].includes(castingStatus)) return;
-    const timer = setInterval(() => {
-      void requestJson<{ casting: CastingRecord }>(`${apiRoot}/castings?id=${encodeURIComponent(castingId)}`)
-        .then((payload) => setCasting(payload.casting))
-        .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "选角状态读取失败"));
-    }, 1500);
-    return () => clearInterval(timer);
-  }, [open, castingId, castingStatus]);
 
   const runId = run?.id;
   const runStatus = run?.status;
@@ -96,94 +83,48 @@ export function ModelConsistencyDemoDialog({
     return () => clearInterval(timer);
   }, [open, runId, runStatus]);
 
-  /** Creates only a local casting record. It never makes an image request. */
-  const createCastingDraft = async () => {
-    if (busy) return;
+  const pairs = catalog?.modelPairs ?? [];
+  const selectedPair = pairs.find((pair) => pair.id === modelPairId);
+  const selectedProduct = catalog?.products.find((product) => product.id === productId);
+  const availableReferenceNames = selectedProduct?.masterImageNames ?? [];
+  const profilesFor = (group: IdentityGroupId) =>
+    catalog?.profiles.filter((profile) => profile.groupId === group) ?? [];
+
+  const savePair = async () => {
+    if (!pairName.trim() || !pairProfileIds.female || !pairProfileIds.male || busy) return;
     setBusy(true);
     setError(undefined);
     try {
-      const payload = await requestJson<{ casting: CastingRecord }>(`${apiRoot}/castings`, {
+      const payload = await requestJson<{ modelPair: ModelPair }>(`${apiRoot}/pairs`, {
         method: "POST",
-        body: JSON.stringify({ candidateCountPerGroup: 4 }),
+        body: JSON.stringify({ displayName: pairName.trim(), profileIds: pairProfileIds }),
       });
-      setCasting(payload.casting);
       setCatalog((current) => current ? {
         ...current,
-        castings: [payload.casting, ...current.castings],
+        modelPairs: [payload.modelPair, ...current.modelPairs],
       } : current);
-      setSelectedCandidates({});
+      setModelPairId(payload.modelPair.id);
+      setShowPairCreator(false);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法创建选角方案");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const continueCandidates = async (candidateIds: string[], purpose: "continue" | "retry") => {
-    if (!casting || candidateIds.length === 0 || paidActionLock.current) return;
-    const label = purpose === "continue" ? "继续生成未完成候选" : "重试失败候选";
-    if (!window.confirm(`${label} ${candidateIds.length} 张。这将发起 ${candidateIds.length} 次付费生图请求；已成功的候选不会重新生成。是否继续？`)) {
-      return;
-    }
-    paidActionLock.current = true;
-    setBusy(true);
-    setError(undefined);
-    try {
-      const payload = await requestJson<{ casting: CastingRecord }>(`${apiRoot}/castings/${casting.id}/continue`, {
-        method: "POST",
-        body: JSON.stringify({ candidateIds }),
-      });
-      setCasting(payload.casting);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法继续选角");
-    } finally {
-      paidActionLock.current = false;
-      setBusy(false);
-    }
-  };
-
-  const createNewCastingAfterConfirmation = async () => {
-    if (!window.confirm("这会创建一套新的 8 位候选方案，不会删除任何已有候选。创建后仍需点击“开始生成”才会产生付费请求。是否创建新方案？")) {
-      return;
-    }
-    await createCastingDraft();
-  };
-
-  const saveProfiles = async () => {
-    if (!casting || !selectedCandidates.female || !selectedCandidates.male) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      const payload = await requestJson<{ profiles: ExperimentCatalog["profiles"] }>(`${apiRoot}/profiles`, {
-        method: "POST",
-        body: JSON.stringify({
-          castingId: casting.id,
-          selections: selectedCandidates,
-          names: { female: "AI 女模特", male: "AI 男模特" },
-        }),
-      });
-      setProfileIds({
-        female: payload.profiles.find((item) => item.groupId === "female")?.id,
-        male: payload.profiles.find((item) => item.groupId === "male")?.id,
-      });
-      await refreshCatalog();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "模特卡保存失败");
+      setError(reason instanceof Error ? reason.message : "保存模特组合失败");
     } finally {
       setBusy(false);
     }
   };
 
   const startRun = async () => {
-    if (!productId || !workflowId || !profileIds.female || !profileIds.male) return;
-    if (paidActionLock.current) return;
+    if (!modelPairId || !productId || !workflowId || productReferenceNames.length !== 3) return;
+    if (new Set(productReferenceNames).size !== 3 || paidActionLock.current) return;
+    if (!window.confirm(
+      "将用当前模特组合生成 2 张实验套图，并发起 2 次付费生图请求。确认后才会开始。是否继续？",
+    )) return;
     paidActionLock.current = true;
     setBusy(true);
     setError(undefined);
     try {
       const payload = await requestJson<{ run: ConsistencyRun }>(`${apiRoot}/runs`, {
         method: "POST",
-        body: JSON.stringify({ productId, workflowId, profileIds }),
+        body: JSON.stringify({ productId, workflowId, modelPairId, productReferenceNames }),
       });
       setRun(payload.run);
     } catch (reason) {
@@ -210,9 +151,7 @@ export function ModelConsistencyDemoDialog({
     try {
       const payload = await requestJson<{ run: ConsistencyRun }>(`${apiRoot}/runs/${run.id}/review`, {
         method: "PATCH",
-        body: JSON.stringify({
-          slots: succeeded.map((slot) => ({ id: slot.id, ...slot.review })),
-        }),
+        body: JSON.stringify({ slots: succeeded.map((slot) => ({ id: slot.id, ...slot.review })) }),
       });
       setRun(payload.run);
     } catch (reason) {
@@ -223,13 +162,12 @@ export function ModelConsistencyDemoDialog({
   };
 
   const retryable = useMemo(() => run?.slots.filter((slot) =>
-    slot.status === "failed"
-    || slot.review.identity === "failed"
-    || slot.review.product === "failed").map((slot) => slot.id) ?? [], [run]);
+    slot.status === "failed" || slot.review.identity === "failed" || slot.review.product === "failed",
+  ).map((slot) => slot.id) ?? [], [run]);
 
   const retryRejected = async () => {
-    if (!run || retryable.length === 0) return;
-    if (paidActionLock.current) return;
+    if (!run || retryable.length === 0 || paidActionLock.current) return;
+    if (!window.confirm(`将只重跑 ${retryable.length} 个未通过槽位，并产生对应付费请求。是否继续？`)) return;
     paidActionLock.current = true;
     setBusy(true);
     try {
@@ -246,149 +184,96 @@ export function ModelConsistencyDemoDialog({
     }
   };
 
-  const profilesFor = (group: IdentityGroupId) =>
-    catalog?.profiles.filter((profile) => profile.groupId === group) ?? [];
-  const existingCastings = catalog?.castings ?? [];
-  const incompleteCandidateIds = casting?.candidates
-    .filter((candidate) => candidate.status === "queued" || candidate.status === "interrupted")
-    .map((candidate) => candidate.id) ?? [];
-  const failedCandidateIds = casting?.candidates
-    .filter((candidate) => candidate.status === "failed")
-    .map((candidate) => candidate.id) ?? [];
-  const generationInProgress = casting?.status === "queued" || casting?.status === "running";
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            商品套图 · 模特一致性
+            商品套图 · 模特组合
             <span className="bg-secondary text-secondary-foreground rounded-full px-2 py-0.5 text-xs">实验</span>
           </DialogTitle>
-          <DialogDescription>
-            仅写入 test/model-consistency；生成 01、03–08 七张，不进入正式商品任务。
-          </DialogDescription>
+          <DialogDescription>仅写入 test/model-consistency；当前基线生成 01、04 两张，不进入正式商品任务。</DialogDescription>
         </DialogHeader>
 
         <section className="space-y-3 rounded-lg border p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="font-medium">1. 选择男女模特卡</h3>
-              <p className="text-muted-foreground text-xs">A/C 使用女模特，B 使用男模特。</p>
+              <h3 className="font-medium">1. 选择模特组合</h3>
+              <p className="text-muted-foreground text-xs">A/C 固定使用女模特，B 固定使用男模特。</p>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={busy || generationInProgress}
-              onClick={casting ? createNewCastingAfterConfirmation : createCastingDraft}
-            >
-              {casting ? "重新选角（新方案）" : "创建选角方案（不生图）"}
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => setShowPairCreator((current) => !current)}>
+              {showPairCreator ? "收起" : pairs.length ? "新建组合" : "创建第一组"}
             </Button>
           </div>
-          {existingCastings.length > 0 ? (
-            <label className="block space-y-1 text-sm">
-              <span className="text-muted-foreground">恢复已有选角方案（刷新不会重新生成）</span>
-              <select
-                className="border-input bg-background w-full rounded-md border px-2 py-2"
-                value={casting?.id ?? ""}
-                onChange={(event) => {
-                  const next = existingCastings.find((item) => item.id === event.target.value);
-                  setCasting(next);
-                  setSelectedCandidates({});
-                }}
-              >
-                {existingCastings.map((item) => {
-                  const ready = item.candidates.filter((candidate) => candidate.status === "succeeded").length;
-                  return <option key={item.id} value={item.id}>{item.id.slice(-8)} · {item.status} · 已完成 {ready}/8</option>;
-                })}
-              </select>
-            </label>
-          ) : null}
-          <div className="grid gap-3 sm:grid-cols-2">
-            {(["female", "male"] as const).map((group) => (
-              <label key={group} className="space-y-1 text-sm">
-                <span>{group === "female" ? "女模特卡" : "男模特卡"}</span>
-                <select
-                  className="border-input bg-background w-full rounded-md border px-2 py-2"
-                  value={profileIds[group] ?? ""}
-                  onChange={(event) => setProfileIds((current) => ({ ...current, [group]: event.target.value }))}
-                >
-                  <option value="">请选择</option>
-                  {profilesFor(group).map((profile) => (
-                    <option key={profile.id} value={profile.id}>{profile.displayName}</option>
-                  ))}
-                </select>
-              </label>
-            ))}
-          </div>
 
-          {casting ? (
-            <div className="space-y-3 border-t pt-3">
-              <p className="text-sm">选角状态：{casting.status}</p>
-              <div className="flex flex-wrap gap-2">
-                {generationInProgress ? (
-                  <span className="text-muted-foreground text-sm">正在生成；刷新页面会恢复进度，不会创建新候选。</span>
-                ) : null}
-                {incompleteCandidateIds.length > 0 ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => continueCandidates(incompleteCandidateIds, "continue")}
+          {pairs.length ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {pairs.map((pair) => {
+                const female = catalog?.profiles.find((profile) => profile.id === pair.profileIds.female);
+                const male = catalog?.profiles.find((profile) => profile.id === pair.profileIds.male);
+                const selected = pair.id === modelPairId;
+                return (
+                  <button
+                    key={pair.id}
+                    type="button"
+                    onClick={() => setModelPairId(pair.id)}
+                    className={`flex items-center gap-3 rounded-md border-2 p-2 text-left ${selected ? "border-primary" : "border-transparent bg-muted/40"}`}
                   >
-                    {casting.status === "draft"
-                      ? `开始生成 ${incompleteCandidateIds.length} 位候选（付费）`
-                      : `继续未完成候选（${incompleteCandidateIds.length} 张，付费）`}
-                  </Button>
-                ) : null}
-                {failedCandidateIds.length > 0 ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy || generationInProgress}
-                    onClick={() => continueCandidates(failedCandidateIds, "retry")}
+                    {female ? <img className="h-14 w-12 rounded object-cover" src={imageUrl("profile", female.id, female.anchorImageName)} alt="女模特" /> : null}
+                    {male ? <img className="h-14 w-12 rounded object-cover" src={imageUrl("profile", male.id, male.anchorImageName)} alt="男模特" /> : null}
+                    <span className="min-w-0">
+                      <strong className="block truncate text-sm">{pair.displayName}</strong>
+                      <span className="text-muted-foreground text-xs">女 {female?.sourceCandidateId ?? "-"} · 男 {male?.sourceCandidateId ?? "-"}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">还没有模特组合。创建一次后，之后只需在这里点选即可。</p>
+          )}
+
+          {showPairCreator ? (
+            <div className="space-y-3 rounded-md bg-muted/40 p-3">
+              <p className="text-sm font-medium">新建模特组合（不生图、不收费）</p>
+              <input
+                className="border-input bg-background w-full rounded-md border px-2 py-2 text-sm"
+                value={pairName}
+                maxLength={40}
+                onChange={(event) => setPairName(event.target.value)}
+                placeholder="组合名称，例如 Y2K 组合 01"
+              />
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(["female", "male"] as const).map((group) => (
+                  <select
+                    key={group}
+                    className="border-input bg-background rounded-md border px-2 py-2 text-sm"
+                    value={pairProfileIds[group] ?? ""}
+                    onChange={(event) => setPairProfileIds((current) => ({ ...current, [group]: event.target.value }))}
                   >
-                    重试失败候选（{failedCandidateIds.length} 张，付费）
-                  </Button>
-                ) : null}
+                    <option value="">选择{group === "female" ? "女" : "男"}模特</option>
+                    {profilesFor(group).map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}
+                  </select>
+                ))}
               </div>
-              {(["female", "male"] as const).map((group) => (
-                <div key={group}>
-                  <p className="mb-2 text-sm font-medium">{group === "female" ? "女模特候选" : "男模特候选"}</p>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    {casting.candidates.filter((item) => item.groupId === group).map((candidate) => (
-                      <button
-                        key={candidate.id}
-                        type="button"
-                        disabled={candidate.status !== "succeeded"}
-                        onClick={() => setSelectedCandidates((current) => ({ ...current, [group]: candidate.id }))}
-                        className={`overflow-hidden rounded-md border-2 text-left ${
-                          selectedCandidates[group] === candidate.id ? "border-primary" : "border-transparent"
-                        }`}
-                      >
-                        {candidate.status === "succeeded"
-                          // eslint-disable-next-line @next/next/no-img-element
-                          ? <img className="aspect-[3/4] w-full object-cover" src={imageUrl("casting", casting.id, candidate.imageName)} alt="" />
-                          : <div className="bg-muted flex aspect-[3/4] items-center justify-center text-xs">{candidate.status}</div>}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              <Button
-                disabled={busy || !selectedCandidates.female || !selectedCandidates.male}
-                onClick={saveProfiles}
-              >
-                保存两张可复用模特卡
-              </Button>
+              <Button disabled={busy || !pairName.trim() || !pairProfileIds.female || !pairProfileIds.male} onClick={savePair}>保存组合</Button>
             </div>
           ) : null}
         </section>
 
         <section className="space-y-3 rounded-lg border p-4">
-          <h3 className="font-medium">2. 选择测试货号并生成七张</h3>
+          <h3 className="font-medium">2. 选择商品并生成套图</h3>
           <div className="grid gap-3 sm:grid-cols-2">
-            <select className="border-input bg-background rounded-md border px-2 py-2" value={productId} onChange={(event) => setProductId(event.target.value)}>
+            <select
+              className="border-input bg-background rounded-md border px-2 py-2"
+              value={productId}
+              onChange={(event) => {
+                const nextProductId = event.target.value;
+                setProductId(nextProductId);
+                const product = catalog?.products.find((item) => item.id === nextProductId);
+                setProductReferenceNames(product?.masterImageNames.slice(0, 3) ?? []);
+              }}
+            >
               <option value="">选择 test 中的货号</option>
               {catalog?.products.map((product) => <option key={product.id} value={product.id}>{product.name}（主图 {product.masterCount}）</option>)}
             </select>
@@ -397,11 +282,35 @@ export function ModelConsistencyDemoDialog({
               {catalog?.workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.label}</option>)}
             </select>
           </div>
+
+          {selectedProduct ? (
+            <details className="rounded-md bg-muted/40 p-3 text-sm">
+              <summary className="cursor-pointer font-medium">商品参考图（默认已选同色前三张；需要时再调整）</summary>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                {[0, 1, 2].map((index) => (
+                  <select
+                    key={index}
+                    className="border-input bg-background rounded-md border px-2 py-2 text-sm"
+                    value={productReferenceNames[index] ?? ""}
+                    onChange={(event) => setProductReferenceNames((current) => {
+                      const next = [...current];
+                      next[index] = event.target.value;
+                      return next;
+                    })}
+                  >
+                    <option value="">选择参考图 {index + 1}</option>
+                    {availableReferenceNames.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                ))}
+              </div>
+            </details>
+          ) : null}
+
           <Button
-            disabled={busy || !productId || !workflowId || !profileIds.female || !profileIds.male}
+            disabled={busy || !selectedPair || !productId || !workflowId || productReferenceNames.length !== 3 || new Set(productReferenceNames).size !== 3}
             onClick={startRun}
           >
-            生成七张实验套图（付费）
+            用“{selectedPair?.displayName ?? "未选择组合"}”生成七张实验套图（付费）
           </Button>
         </section>
 
@@ -411,14 +320,12 @@ export function ModelConsistencyDemoDialog({
               <h3 className="font-medium">3. 逐张审核</h3>
               <span className="text-muted-foreground text-sm">{run.stage} · {run.status}</span>
             </div>
+            {run.error ? <p className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{run.error}</p> : null}
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {run.slots.map((slot) => (
                 <article key={slot.id} className="space-y-2 rounded-md border p-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <strong>{slot.id}</strong><span>{slot.identityGroupId} · {slot.status}</span>
-                  </div>
+                  <div className="flex items-center justify-between text-sm"><strong>{slot.id}</strong><span>{slot.lookId} · {slot.identityGroupId} · {slot.status}</span></div>
                   {slot.status === "succeeded"
-                    // eslint-disable-next-line @next/next/no-img-element
                     ? <img className="aspect-[3/4] w-full rounded object-cover" src={imageUrl("run", run.id, slot.imageName)} alt={`槽位 ${slot.id}`} />
                     : <div className="bg-muted flex aspect-[3/4] items-center justify-center rounded px-3 text-center text-xs">{slot.error ?? slot.status}</div>}
                   {slot.status === "succeeded" ? (
@@ -439,9 +346,7 @@ export function ModelConsistencyDemoDialog({
             </div>
             <div className="flex flex-wrap gap-2">
               <Button disabled={busy || run.slots.every((slot) => slot.status !== "succeeded")} onClick={saveReview}>保存审核</Button>
-              <Button variant="outline" disabled={busy || retryable.length === 0} onClick={retryRejected}>
-                只重跑未通过槽位（{retryable.length}）
-              </Button>
+              <Button variant="outline" disabled={busy || retryable.length === 0} onClick={retryRejected}>只重跑未通过槽位（{retryable.length}）</Button>
             </div>
           </section>
         ) : null}

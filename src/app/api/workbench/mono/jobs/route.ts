@@ -28,7 +28,7 @@ export async function GET(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const actor = actorFromWorkbenchRequest(request);
-    const deleted = purgeUnfavoriteJobs(actor, "image_generation");
+    const deleted = await purgeUnfavoriteJobs(actor, "image_generation");
     return Response.json({ deleted });
   } catch (error) {
     return monoErrorResponse(error);

@@ -68,6 +68,26 @@ describe("Image2 generation contract", () => {
 
     mode.reset();
   });
+
+  it("opens the model-management tab only from the unstructured subject library", () => {
+    const mode = useImage2Mode.getState();
+    mode.reset();
+
+    mode.openSubjectLibrary(undefined, "models");
+    expect(useImage2Mode.getState()).toMatchObject({
+      subjectLibraryOpen: true,
+      subjectLibrarySlot: undefined,
+      subjectLibraryTab: "models",
+    });
+
+    mode.openSubjectLibrary(0, "pairs");
+    expect(useImage2Mode.getState()).toMatchObject({
+      subjectLibraryOpen: true,
+      subjectLibrarySlot: 0,
+      subjectLibraryTab: "subjects",
+    });
+    mode.reset();
+  });
 });
 
 describe("Mono subject library", () => {

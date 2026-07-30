@@ -12,6 +12,7 @@
     "test": "vitest run",
     "start": "next start",
     "lint": "eslint",
+    "mono:backfill-images": "tsx scripts/backfill-mono-image-assets.ts",
     "mono:mcp": "node services/mono-mcp/server.mjs",
     "mono:worker": "tsx scripts/mono-worker.ts"
   },

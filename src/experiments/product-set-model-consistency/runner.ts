@@ -2,10 +2,8 @@ import { cp, mkdir } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { getConfigValue } from "@/lib/server/api-config";
-import { classifyProductSources } from "@/lib/mono/product-classify";
 import {
   MODEL_SLOTS,
-  modelSlotColorRanks,
   productTemplateRoot,
   runModelGenerationPhase,
   type DetailSlot,
@@ -19,8 +17,8 @@ import {
   getCasting,
   getProfile,
   getRun,
-  masterImages,
   profileDir,
+  selectedMasterImages,
   runDir,
   saveCasting,
   saveRun,
@@ -169,20 +167,24 @@ async function executeRun(id: string, onlySlots?: readonly ExperimentSlotId[]): 
     run.stage = "classifying";
     run.startedAt ??= Date.now();
     run.updatedAt = Date.now();
-    await saveRun(run);
+    // Slot workers complete independently. Serialize writes so a slower JSON
+    // write cannot replace a later slot's success state.
+    let saveChain: Promise<void> = Promise.resolve();
+    const persist = () => {
+      saveChain = saveChain.catch(() => undefined).then(() => saveRun(run));
+      return saveChain;
+    };
+    await persist();
 
-    const [template, masters, female, male] = await Promise.all([
+    const [template, productReferences, female, male] = await Promise.all([
       loadProductTemplate(productTemplateRoot(run.workflowId)),
-      masterImages(run.productId),
+      selectedMasterImages(run.productId, run.productReferenceNames),
       getProfile(run.profileIds.female),
       getProfile(run.profileIds.male),
     ]);
     if (female.workspaceId !== run.workspaceId || male.workspaceId !== run.workspaceId) {
       throw new Error("模特卡不属于当前工作区");
     }
-    const classification = await classifyProductSources(masters);
-    if (!classification.colors.length) throw new Error("主图未识别出有效商品颜色");
-    const colorRanks = modelSlotColorRanks(classification.colors.length);
     run.stage = "generating";
 
     const selected = new Set(onlySlots ?? run.slots.map((slot) => slot.id));
@@ -198,9 +200,9 @@ async function executeRun(id: string, onlySlots?: readonly ExperimentSlotId[]): 
         record.error = undefined;
         record.review = { identity: "pending", product: "pending" };
         run.updatedAt = Date.now();
-        await saveRun(run);
+        await persist();
         try {
-          await generateSlot(run, slot, template, classification, colorRanks, female.id, male.id);
+          await generateSlot(run, slot, template, productReferences, female.id, male.id);
           record.status = "succeeded";
           record.error = undefined;
           return { slot: slot[0], attempts: record.attempts };
@@ -210,16 +212,17 @@ async function executeRun(id: string, onlySlots?: readonly ExperimentSlotId[]): 
           throw error;
         } finally {
           run.updatedAt = Date.now();
-          await saveRun(run);
+          await persist();
         }
       },
     );
+    await saveChain;
     const failures = run.slots.filter((slot) => slot.status === "failed");
     run.status = failures.length ? "partial" : "succeeded";
     run.stage = "review";
     run.completedAt = Date.now();
     run.updatedAt = run.completedAt;
-    await saveRun(run);
+    await persist();
   } catch (error) {
     try {
       const run = await getRun(id);
@@ -238,20 +241,14 @@ async function generateSlot(
   run: ConsistencyRun,
   slot: DetailSlot,
   template: Awaited<ReturnType<typeof loadProductTemplate>>,
-  classification: Awaited<ReturnType<typeof classifyProductSources>>,
-  colorRanks: Map<string, number>,
+  productReferences: [string, string, string],
   femaleProfileId: string,
   maleProfileId: string,
 ): Promise<void> {
   const record = run.slots.find((item) => item.id === slot[0]);
   if (!record) throw new Error(`实验运行缺少槽位 ${slot[0]}`);
-  const colorRank = colorRanks.get(slot[0]) ?? 0;
-  const color = classification.colors[colorRank] ?? classification.colors[0];
-  const look = template.looks[colorRank % template.looks.length];
-  const groupId = identityGroupForLook(look.id);
+  const groupId = identityGroupForLook(record.lookId);
   const profileId = groupId === "female" ? femaleProfileId : maleProfileId;
-  const productReferences = color.members.slice(0, 3).map((member) => member.path);
-  while (productReferences.length < 3) productReferences.push(productReferences[productReferences.length - 1]);
   const references = buildSlotReferences(
     path.join(profileDir(profileId), "anchor.jpg"),
     productReferences,
@@ -262,7 +259,7 @@ async function generateSlot(
     try {
       const bytes = await generateExperimentImage({
         workspaceId: run.workspaceId,
-        prompt: buildConsistencyPrompt({ template, slot, colorRank, identityGroupId: groupId }),
+        prompt: buildConsistencyPrompt({ template, slot, lookId: record.lookId, identityGroupId: groupId }),
         references,
         aspectRatio: `${slot[1]}:${slot[2]}`,
         model: run.model,
@@ -271,8 +268,7 @@ async function generateSlot(
         path.join(await runDir(run.id), record.imageName),
       );
       record.identityGroupId = groupId;
-      record.lookId = look.id;
-      record.colorRank = colorRank;
+      record.colorRank = 0;
       return;
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);

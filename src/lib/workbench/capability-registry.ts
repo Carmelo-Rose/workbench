@@ -44,6 +44,8 @@ export type CapabilityDefinition<TInput = unknown> = {
   jobKind?: MonoJobKind;
 };
 
+// Registry entries intentionally erase their individual schema input types at this lookup boundary.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const CAPABILITY_REGISTRY: Record<string, CapabilityDefinition<any>> = {
   image_to_prompt: {
     id: "image_to_prompt",
@@ -86,6 +88,7 @@ export const CAPABILITY_REGISTRY: Record<string, CapabilityDefinition<any>> = {
   },
 };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function getCapability(capabilityId: string): CapabilityDefinition<any> | undefined {
   return CAPABILITY_REGISTRY[capabilityId];
 }

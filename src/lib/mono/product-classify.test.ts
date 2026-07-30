@@ -5,13 +5,14 @@ import nodePath from "node:path";
 import sharp from "sharp";
 import {
   allocateModelSlots,
+  catalogueRepresentative,
   classifySources,
   clusterByColor,
   deltaE,
   type Lab,
   type MeasuredSource,
 } from "./product-classify";
-import { applyBrandMark, renderDetailPresentation, tileRects } from "./product-layouts";
+import { applyBrandMark, renderDetailPresentation, renderTiledDisplay, tileRects } from "./product-layouts";
 import { buildModelPrompt, productTemplateSchema } from "./product-template";
 
 /** Measured from a real three-colourway shoot; the values the thresholds were tuned against. */
@@ -102,6 +103,12 @@ describe("shoot classification", () => {
     expect(result.colors.map((color) => color.rank)).toEqual([0, 1, 2]);
   });
 
+  it("uses the third standard angle for catalogue SKU and tiled display", () => {
+    const members = colourway("black", BLACK);
+    expect(catalogueRepresentative(members).path).toBe("/shoot/black2.jpg");
+    expect(catalogueRepresentative(members.slice(0, 2)).path).toBe("/shoot/black1.jpg");
+  });
+
   it("orders detail crops hero-colour first and fullest frame first", () => {
     const result = classifySources(shoot);
     // The off-colour lining sorts last, so it is only used if the hero is short.
@@ -151,6 +158,38 @@ describe("tile layout", () => {
         expect(rect.left + rect.width).toBeLessThanOrEqual(area.left + area.width);
         expect(rect.top + rect.height).toBeLessThanOrEqual(area.top + area.height);
       }
+    }
+  });
+
+  it("renders supplied strict foregrounds instead of shadow-bearing source files", async () => {
+    const dir = await mkdtemp(nodePath.join(os.tmpdir(), "tile-clean-"));
+    const output = nodePath.join(dir, "tile.jpg");
+    try {
+      const foreground = await sharp({
+        create: { width: 120, height: 80, channels: 4, background: { r: 20, g: 30, b: 40, alpha: 0 } },
+      })
+        .composite([{
+          input: await sharp({
+            create: { width: 80, height: 50, channels: 4, background: { r: 120, g: 30, b: 20, alpha: 1 } },
+          }).png().toBuffer(),
+          left: 20,
+          top: 15,
+        }])
+        .png()
+        .toBuffer();
+      const representative = shot("missing-source", BLACK, 0.01);
+      representative.metric.box = { left: 0, top: 0, width: 1, height: 1 };
+      await renderTiledDisplay(
+        [representative],
+        output,
+        790,
+        610,
+        { chinese: "平铺展示", english: "TILED DISPLAY" },
+        [foreground],
+      );
+      await expect(sharp(output).metadata()).resolves.toMatchObject({ width: 790, height: 610 });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

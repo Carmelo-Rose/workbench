@@ -198,8 +198,12 @@ export async function renderTiledDisplay(
   width: number,
   height: number,
   title: PageTitle,
+  shadowFreeForegrounds?: readonly Buffer[],
 ): Promise<void> {
   if (!representatives.length) throw new Error("平铺展示图没有可用的商品图");
+  if (shadowFreeForegrounds && shadowFreeForegrounds.length !== representatives.length) {
+    throw new Error("平铺展示图的无阴影主体数量与颜色数量不一致");
+  }
   const { top, bottom, left, right, gapX, gapY } = PAGE.tiled;
   const area: Rect = {
     left,
@@ -209,8 +213,21 @@ export async function renderTiledDisplay(
   };
   // Crop first, then let the crops' own shape pick the grid. A cap lineup is
   // wide, and a grid laid out for upright product would letterbox every tile.
-  const crops = await Promise.all(representatives.map((source) =>
-    cropToProduct(source.path, source.metric.box, TILE_CROP_PADDING)));
+  const crops = await Promise.all(representatives.map(async (source, index) => {
+    const foreground = shadowFreeForegrounds?.[index];
+    if (!foreground) return cropToProduct(source.path, source.metric.box, TILE_CROP_PADDING);
+    const { width: sourceWidth, height: sourceHeight } = await sharp(foreground).metadata();
+    if (!sourceWidth || !sourceHeight) throw new Error("无法读取平铺展示图的无阴影主体尺寸");
+    const box = source.metric.box;
+    const left = Math.max(0, Math.round((box.left - TILE_CROP_PADDING) * sourceWidth));
+    const top = Math.max(0, Math.round((box.top - TILE_CROP_PADDING) * sourceHeight));
+    const right = Math.min(sourceWidth, Math.round((box.left + box.width + TILE_CROP_PADDING) * sourceWidth));
+    const bottom = Math.min(sourceHeight, Math.round((box.top + box.height + TILE_CROP_PADDING) * sourceHeight));
+    return sharp(foreground)
+      .extract({ left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) })
+      .png()
+      .toBuffer();
+  }));
   const shapes = await Promise.all(crops.map(async (crop) => {
     const shape = await sharp(crop).metadata();
     return shape.width && shape.height ? shape.width / shape.height : DEFAULT_TILE_ASPECT;

@@ -25,13 +25,14 @@ export function identityGroupForLook(lookId: string): IdentityGroupId {
 export function buildConsistencyPrompt(input: {
   template: ProductTemplate;
   slot: DetailSlot;
-  colorRank: number;
+  lookId: string;
   identityGroupId: IdentityGroupId;
 }): string {
-  const { template, slot, colorRank, identityGroupId } = input;
+  const { template, slot, lookId, identityGroupId } = input;
   const slotConfig = template.modelSlots[slot[0]];
   if (!slotConfig) throw new Error(`模板缺少槽位 ${slot[0]} 的构图描述`);
-  const look = template.looks[colorRank % template.looks.length];
+  const look = template.looks.find((item) => item.id === lookId);
+  if (!look) throw new Error(`实验模板不支持 look ${lookId}`);
   return [
     "你将收到 4 张参考图，编号与输入顺序严格一致。",
     `【人物身份 · 最高优先级】\n参考图1是本套图片唯一的${identityGroupId === "female" ? "女" : "男"}模特身份。必须保持同一个人的脸型、五官比例、年龄感、肤色和辨识特征。允许按照本槽位改变姿势、视线、表情和基础服装，但不得换脸、混合身份或复制参考图1的原始姿势。`,

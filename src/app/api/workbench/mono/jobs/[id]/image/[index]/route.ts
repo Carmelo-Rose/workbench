@@ -1,6 +1,8 @@
 import { actorFromWorkbenchRequest, MonoHttpError, monoErrorResponse } from "@/lib/mono/http";
 import { getJob } from "@/lib/mono/service";
 import { monoImageGenerationResultSchema } from "@/lib/mono/contracts";
+import { getMonoAsset } from "@/lib/mono/store";
+import { openObjectStream, statObject } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +32,18 @@ export async function GET(request: Request, context: Context) {
     const slot = result.success
       ? result.data.slots.find((item) => item.index === Number(index))
       : undefined;
+    if (slot?.assetId) {
+      const asset = getMonoAsset(actor, slot.assetId);
+      if (!asset?.storageKey) throw new MonoHttpError(404, "这张图片的持久化文件不存在");
+      const info = await statObject(asset.storageKey);
+      if (!info) throw new MonoHttpError(404, "这张图片的持久化文件已丢失");
+      return attachment(
+        Readable.toWeb(openObjectStream(asset.storageKey)) as ReadableStream,
+        asset.mimeType ?? "image/png",
+        id,
+        slot.index,
+      );
+    }
     const imageUrl = slot?.imageUrl;
     if (!imageUrl) throw new MonoHttpError(404, "这张图还没有生成结果");
 
@@ -65,3 +79,4 @@ function attachment(body: BodyInit, contentType: string, jobId: string, index: n
     },
   });
 }
+import { Readable } from "node:stream";

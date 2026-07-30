@@ -73,7 +73,7 @@ describe("default workspace migration", () => {
       "SELECT organization_id FROM workspaces WHERE id = 'default'",
     ).get()).toEqual({ organization_id: "org_default" });
     expect(migrated.prepare("PRAGMA user_version").get())
-      .toEqual({ user_version: 11 });
+      .toEqual({ user_version: 14 });
     migrated.close();
   });
 
@@ -168,7 +168,94 @@ describe("default workspace migration", () => {
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mono_product_pipeline_jobs'",
     ).get()).toEqual({ name: "mono_product_pipeline_jobs" });
     expect(migrated.prepare("PRAGMA user_version").get())
-      .toEqual({ user_version: 11 });
+      .toEqual({ user_version: 14 });
+    migrated.close();
+  });
+
+  it("moves existing product model cards and pairs into the subject library", () => {
+    const dbPath = path.join(
+      os.tmpdir(),
+      `workbench-product-model-subjects-${crypto.randomUUID()}.db`,
+    );
+    const legacy = new DatabaseSync(dbPath);
+    // v12 product-model records predate their formal linkage to mono_subjects.
+    legacy.exec(`
+      CREATE TABLE mono_assets (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        mime_type TEXT,
+        name TEXT,
+        storage_key TEXT,
+        location TEXT NOT NULL DEFAULT 'remote-url',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE mono_subjects (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        owner_user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        asset_id TEXT NOT NULL,
+        visibility TEXT NOT NULL DEFAULT 'private',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE mono_product_model_profiles (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        group_id TEXT NOT NULL,
+        anchor_asset_id TEXT NOT NULL,
+        source_candidate_id TEXT,
+        prompt TEXT,
+        provider TEXT,
+        model TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE mono_product_model_pairs (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        female_profile_id TEXT NOT NULL,
+        male_profile_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO mono_assets (id, workspace_id, user_id, source_url, created_at)
+      VALUES
+        ('asset_female', 'ws-1', 'user-1', 'storage:female', 1),
+        ('asset_male', 'ws-1', 'user-1', 'storage:male', 1);
+      INSERT INTO mono_product_model_profiles
+        (id, workspace_id, display_name, group_id, anchor_asset_id, created_at, updated_at)
+      VALUES
+        ('profile_female', 'ws-1', 'Female', 'female', 'asset_female', 1, 1),
+        ('profile_male', 'ws-1', 'Male', 'male', 'asset_male', 1, 1);
+      INSERT INTO mono_product_model_pairs
+        (id, workspace_id, display_name, female_profile_id, male_profile_id, created_at, updated_at)
+      VALUES ('pair_1', 'ws-1', 'Pair', 'profile_female', 'profile_male', 1, 1);
+    `);
+    legacy.close();
+
+    const migrated = openWorkbenchDatabase(dbPath);
+    const profiles = migrated.prepare(
+      `SELECT profile.group_id, subject.kind, subject.asset_id
+       FROM mono_product_model_profiles AS profile
+       JOIN mono_subjects AS subject ON subject.id = profile.subject_id
+       WHERE profile.workspace_id = 'ws-1'
+       ORDER BY profile.group_id`,
+    ).all();
+    expect(profiles).toEqual([
+      { group_id: "female", kind: "product-model", asset_id: "asset_female" },
+      { group_id: "male", kind: "product-model", asset_id: "asset_male" },
+    ]);
+    expect(migrated.prepare(
+      `SELECT female_subject_id, male_subject_id FROM mono_product_model_pairs WHERE id = 'pair_1'`,
+    ).get()).toEqual({
+      female_subject_id: expect.stringMatching(/^subject_/u),
+      male_subject_id: expect.stringMatching(/^subject_/u),
+    });
     migrated.close();
   });
 });

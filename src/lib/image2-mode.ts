@@ -13,6 +13,8 @@ export type PendingComposer = {
   appendFiles?: File[];
 };
 
+export type SubjectLibraryTab = "subjects" | "models" | "pairs";
+
 type Image2ModeState = {
   active: boolean;
   selectedTemplateId?: MonoImage2TemplateId;
@@ -22,6 +24,7 @@ type Image2ModeState = {
   structuredSubjectIds: [string | undefined, string | undefined];
   subjectLibraryOpen: boolean;
   subjectLibrarySlot?: 0 | 1;
+  subjectLibraryTab: SubjectLibraryTab;
   activate: () => void;
   activateWithPrompt: (prompt: string) => void;
   /** 工具卡片拿不到主 composer 的 ambient scope，只能经这里转交。 */
@@ -32,8 +35,9 @@ type Image2ModeState = {
   selectTemplate: (templateId: MonoImage2TemplateId) => void;
   setAspectRatio: (aspectRatio: MonoImageGenerationInput["aspectRatio"]) => void;
   setVariants: (variants: MonoImageGenerationInput["variants"]) => void;
-  openSubjectLibrary: (slot?: 0 | 1) => void;
+  openSubjectLibrary: (slot?: 0 | 1, tab?: SubjectLibraryTab) => void;
   closeSubjectLibrary: () => void;
+  setSubjectLibraryTab: (tab: SubjectLibraryTab) => void;
   setStructuredSubject: (slot: 0 | 1, subjectId?: string) => void;
 };
 
@@ -46,6 +50,7 @@ const defaults = {
   structuredSubjectIds: [undefined, undefined] as [string | undefined, string | undefined],
   subjectLibraryOpen: false,
   subjectLibrarySlot: undefined,
+  subjectLibraryTab: "subjects" as SubjectLibraryTab,
 };
 
 export const useImage2Mode = create<Image2ModeState>((set) => ({
@@ -59,8 +64,18 @@ export const useImage2Mode = create<Image2ModeState>((set) => ({
   selectTemplate: (selectedTemplateId) => set({ active: true, selectedTemplateId }),
   setAspectRatio: (aspectRatio) => set({ aspectRatio }),
   setVariants: (variants) => set({ variants }),
-  openSubjectLibrary: (subjectLibrarySlot) => set({ subjectLibraryOpen: true, subjectLibrarySlot }),
-  closeSubjectLibrary: () => set({ subjectLibraryOpen: false, subjectLibrarySlot: undefined }),
+  openSubjectLibrary: (subjectLibrarySlot, subjectLibraryTab = "subjects") => set({
+    subjectLibraryOpen: true,
+    subjectLibrarySlot,
+    // Structured Image2 slots can only choose ordinary reference subjects.
+    subjectLibraryTab: subjectLibrarySlot === undefined ? subjectLibraryTab : "subjects",
+  }),
+  closeSubjectLibrary: () => set({
+    subjectLibraryOpen: false,
+    subjectLibrarySlot: undefined,
+    subjectLibraryTab: "subjects",
+  }),
+  setSubjectLibraryTab: (subjectLibraryTab) => set({ subjectLibraryTab }),
   setStructuredSubject: (slot, subjectId) => set((state) => {
     const structuredSubjectIds = [...state.structuredSubjectIds] as [string | undefined, string | undefined];
     structuredSubjectIds[slot] = subjectId;

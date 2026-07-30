@@ -307,7 +307,7 @@ export const MonoCancelJobToolUI = makeAssistantToolUI<{ jobId: string }, MonoJo
  * and a queued job has no result to read it back from yet.
  */
 export const MonoProductPipelineToolUI = makeAssistantToolUI<
-  { folderId?: string; folderName?: string; workflowId?: string; onlySlots?: string[] },
+  { folderId?: string; folderName?: string; workflowId?: string; modelPairId?: string; onlySlots?: string[] },
   MonoJob
 >({
   toolName: "mono_product_pipeline",
