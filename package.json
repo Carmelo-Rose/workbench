@@ -14,7 +14,7 @@
     "lint": "eslint",
     "mono:backfill-images": "tsx scripts/backfill-mono-image-assets.ts",
     "mono:mcp": "node services/mono-mcp/server.mjs",
-    "mono:worker": "tsx scripts/mono-worker.ts"
+    "mono:worker": "tsx watch scripts/mono-worker.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.5",

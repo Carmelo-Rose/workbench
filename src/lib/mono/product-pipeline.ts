@@ -77,7 +77,7 @@ const MODEL_CONCURRENCY = 8;
  * set. Flip back to false (or delete alongside the block that reads it)
  * once the online shadow generation is confirmed.
  */
-const PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL = true;
+const PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL = false;
 const DETAIL_SLOTS = [
   ["01", 790, 1243, "model"], ["02", 790, 681, "fixed"], ["03", 790, 1021, "model"],
   ["04", 790, 1008, "model"], ["05", 790, 1005, "model"], ["06", 790, 1004, "model"],
@@ -923,8 +923,16 @@ export async function composeNaturalShadowBackdrop(sourcePath: string, cutout: B
 type MasterRenderLayers = {
   foreground: Buffer;
   skuForeground: Buffer;
-  naturalShadow: Buffer;
+  mainImage: Buffer;
 };
+
+/**
+ * The generator returns a sweep a few levels off pure white. Left alone, the
+ * 主图 crop lands on the white canvas as a faintly visible rectangle. Lifting
+ * the top of the range to 255 costs a few percent of shadow density and
+ * removes the seam.
+ */
+const GENERATED_SWEEP_WHITE_FLOOR = 245;
 
 async function makeWhiteMaster(
   source: SourceImage,
@@ -935,12 +943,22 @@ async function makeWhiteMaster(
 ): Promise<MasterRenderLayers> {
   const cutout = await requestCutout(source, folderKey, signal);
   const rawForeground = await composeWhiteMaster(source.path, cutout, output);
-  const [foreground, skuForeground, naturalShadow] = await Promise.all([
+  // 主图 is the generated frame whole, product included — not a cutout laid
+  // over a generated backdrop. Compositing the two means aligning a redrawn
+  // product with a photographed one pixel for pixel, and everywhere they
+  // disagree prints as a doubled outline. The cutout still feeds SKU, the
+  // colour clustering and the crop box; it just no longer reaches 主图.
+  const [foreground, skuForeground, generated] = await Promise.all([
     refineProductForeground(rawForeground),
     refineSkuForeground(rawForeground),
     requestShadowBackdrop(source, signal, workspaceId),
   ]);
-  return { foreground, skuForeground, naturalShadow };
+  const mainImage = await sharp(generated)
+    .linear(255 / GENERATED_SWEEP_WHITE_FLOOR, 0)
+    .removeAlpha()
+    .png()
+    .toBuffer();
+  return { foreground, skuForeground, mainImage };
 }
 
 /** Square 1:1 deliverable side, matching the hand-built reference set on the share. */
@@ -950,8 +968,6 @@ const SQUARE_SKU_CROP_PADDING = 0.04;
 const SQUARE_SKU_FILL_RATIO = 0.86;
 /** Tighter 主图 framing measured from the supplied before/after references. */
 const SQUARE_MAIN_CROP_PADDING = 0.02;
-/** A cast shadow needs more source context than the opaque product crop. */
-const SQUARE_SHADOW_CROP_PADDING = 0.12;
 /** Front views need more breathing room than a low, wide side view. */
 const SQUARE_COMPACT_FILL_RATIO = 0.87;
 const SQUARE_LANDSCAPE_FILL_RATIO = 0.96;
@@ -994,58 +1010,31 @@ async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number
   };
 }
 
-async function clipLayerToSquare(
-  buffer: Buffer,
-  width: number,
-  height: number,
-  left: number,
-  top: number,
-): Promise<{ input: Buffer; left: number; top: number } | null> {
-  const sourceLeft = Math.max(0, -left);
-  const sourceTop = Math.max(0, -top);
-  const targetLeft = Math.max(0, left);
-  const targetTop = Math.max(0, top);
-  const visibleWidth = Math.min(width - sourceLeft, SQUARE_CANVAS_SIZE - targetLeft);
-  const visibleHeight = Math.min(height - sourceTop, SQUARE_CANVAS_SIZE - targetTop);
-  if (visibleWidth < 1 || visibleHeight < 1) return null;
-  const input = sourceLeft || sourceTop || visibleWidth !== width || visibleHeight !== height
-    ? await sharp(buffer)
-      .extract({
-        left: sourceLeft,
-        top: sourceTop,
-        width: visibleWidth,
-        height: visibleHeight,
-      })
-      .png()
-      .toBuffer()
-    : buffer;
-  return { input, left: targetLeft, top: targetTop };
-}
-
 /**
- * Renders the published 1:1 deliverable: the product cropped to its measured
- * box and centred on a white square. For 主图, `naturalShadow` is the separately
- * recovered light-sweep backdrop; for SKU it is omitted. Nothing synthetic is
- * generated from the product silhouette.
+ * Renders the published 1:1 deliverable: the source cropped to its measured
+ * box and centred on a white square. 主图 frames tighter than SKU and is fed
+ * the generated frame, whose shadow is already part of the image; SKU is fed
+ * the cutout. Nothing synthetic is generated from the product silhouette.
  *
- * `box` must come from measuring the *same* foreground this was cut from
+ * `box` must come from measuring a photo framed the *same* way as this one
  * (`classification`'s per-shot box) — a mismatched box would crop the wrong
- * region of a differently-framed photo.
+ * region. The generated frame qualifies: it is returned at the source photo's
+ * own dimensions and composition.
  */
 export async function composeSquareDeliverable(
-  foreground: Buffer,
+  source: Buffer,
   box: RelativeBox,
   output: string,
-  options: { naturalShadow?: Buffer } = {},
+  options: { framing?: "main" | "sku" } = {},
 ): Promise<void> {
-  const isMainImage = Boolean(options.naturalShadow);
+  const isMainImage = options.framing === "main";
   const cropped = await cropBufferToBox(
-    foreground,
+    source,
     box,
     isMainImage ? SQUARE_MAIN_CROP_PADDING : SQUARE_SKU_CROP_PADDING,
   );
   const fillRatio = isMainImage
-    ? await squareFillRatio(foreground, box)
+    ? await squareFillRatio(source, box)
     : SQUARE_SKU_FILL_RATIO;
   const target = Math.round(SQUARE_CANVAS_SIZE * fillRatio);
   const { data: resized, info } = await sharp(cropped.buffer)
@@ -1054,47 +1043,8 @@ export async function composeSquareDeliverable(
     .toBuffer({ resolveWithObject: true });
   const left = Math.round((SQUARE_CANVAS_SIZE - info.width) / 2);
   const top = Math.round((SQUARE_CANVAS_SIZE - info.height) / 2);
-  const layers: { input: Buffer; left: number; top: number }[] = [];
-  if (options.naturalShadow) {
-    const croppedShadow = await cropBufferToBox(
-      options.naturalShadow,
-      box,
-      SQUARE_SHADOW_CROP_PADDING,
-    );
-    const productRelativeWidth = cropped.relativeRight - cropped.relativeLeft;
-    const productRelativeHeight = cropped.relativeBottom - cropped.relativeTop;
-    const horizontalScale = info.width / productRelativeWidth;
-    const verticalScale = info.height / productRelativeHeight;
-    const shadowWidth = Math.max(
-      1,
-      Math.round((croppedShadow.relativeRight - croppedShadow.relativeLeft) * horizontalScale),
-    );
-    const shadowHeight = Math.max(
-      1,
-      Math.round((croppedShadow.relativeBottom - croppedShadow.relativeTop) * verticalScale),
-    );
-    const resizedShadow = await sharp(croppedShadow.buffer)
-      .resize(shadowWidth, shadowHeight, { fit: "fill" })
-      .png()
-      .toBuffer();
-    const shadowLeft = Math.round(
-      left + (croppedShadow.relativeLeft - cropped.relativeLeft) * horizontalScale,
-    );
-    const shadowTop = Math.round(
-      top + (croppedShadow.relativeTop - cropped.relativeTop) * verticalScale,
-    );
-    const clippedShadow = await clipLayerToSquare(
-      resizedShadow,
-      shadowWidth,
-      shadowHeight,
-      shadowLeft,
-      shadowTop,
-    );
-    if (clippedShadow) layers.push(clippedShadow);
-  }
-  layers.push({ input: resized, left, top });
   await sharp({ create: { width: SQUARE_CANVAS_SIZE, height: SQUARE_CANVAS_SIZE, channels: 3, background: "#ffffff" } })
-    .composite(layers)
+    .composite([{ input: resized, left, top }])
     // sharp applies flatten() in a fixed internal stage that runs before
     // composite(), so it cannot strip the alpha composite() just introduced —
     // removeAlpha() has no such ordering quirk.
@@ -1257,6 +1207,10 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   });
   await assertSourcesUnchanged(sources);
   const masters = articleSources.map((source) => path.join(masterStage, `${source.stem}.jpg`));
+  // TRIAL: color.members[].path (below) is a white-master path; model-slot
+  // generation resolves it back to the matching raw original through this map
+  // instead of waiting on the cutout/composite step for its reference images.
+  const masterToOriginal = new Map(articleSources.map((source) => [path.join(masterStage, `${source.stem}.jpg`), source.path]));
   progress(job, "main_published", 25, { resumed: false, masterHashes: await Promise.all(masters.map(fileHash)) });
   // The bundle the job asked for, not a hardcoded one — otherwise dropping a
   // second category into config/product-pipeline would still render every
@@ -1289,10 +1243,10 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     if (!layers) throw new Error(`缺少白底图中间产物：${member.path}`);
     const stem = path.parse(member.path).name;
     await composeSquareDeliverable(
-      layers.foreground,
+      layers.mainImage,
       member.metric.box,
       path.join(masterSquareStage, `${stem}.png`),
-      { naturalShadow: layers.naturalShadow },
+      { framing: "main" },
     );
   });
   await runWithConcurrency(classification.colors, PRODUCT_CUTOUT_CONCURRENCY, async (color) => {
@@ -1385,6 +1339,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
         signal,
         job.workspaceId,
         modelPair,
+        masterToOriginal,
       );
       if (record.warning) warnings.push(`${slot[0]}: ${record.warning}`);
       return { slot: slot[0], colorRank: color.rank, ...record };
@@ -1586,6 +1541,7 @@ async function generateModelSlot(
   signal: AbortSignal,
   workspaceId: string,
   modelPair?: ResolvedProductModelPair,
+  masterToOriginal?: ReadonlyMap<string, string>,
 ): Promise<Record<string, unknown>> {
   const look = template.looks[color.rank % template.looks.length];
   const identityGroupId: ModelIdentityGroup | undefined = modelPair
@@ -1603,7 +1559,11 @@ async function generateModelSlot(
   );
   // Several angles of the same colourway make it much harder for the model to
   // invent a plain version of an article whose graphic sits on one face only.
-  const productReferences = color.members.slice(0, PRODUCT_REFERENCE_COUNT).map((member) => member.path);
+  // OLD (white-master references; waits on the cutout/composite step):
+  // const productReferences = color.members.slice(0, PRODUCT_REFERENCE_COUNT).map((member) => member.path);
+  // TRIAL: raw originals, resolved from the white-master path classification carries.
+  const productReferences = color.members.slice(0, PRODUCT_REFERENCE_COUNT)
+    .map((member) => masterToOriginal?.get(member.path) ?? member.path);
   const references = modelImageReferences(
     productReferences,
     identityProfile?.faceBytes,

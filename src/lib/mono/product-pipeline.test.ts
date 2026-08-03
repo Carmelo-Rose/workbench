@@ -507,23 +507,31 @@ describe("square deliverable composition", () => {
     expect(centre).not.toEqual([255, 255, 255]);
   });
 
-  it("places a supplied natural-shadow backdrop under the product", async () => {
+  it("keeps the shadow a 主图 frame already contains, without a separate layer", async () => {
     const root = await fixture();
-    const output = path.join(root, "square-with-shadow.png");
-    const shadow = Buffer.alloc(40 * 30 * 3, 255);
+    const output = path.join(root, "square-main.png");
+    // A generated frame: white sweep, product, and the shadow already in it.
+    const frame = Buffer.alloc(40 * 30 * 3, 255);
+    for (let y = 7; y < 23; y += 1) {
+      for (let x = 10; x < 30; x += 1) {
+        const offset = (y * 40 + x) * 3;
+        frame[offset] = 200; frame[offset + 1] = 30; frame[offset + 2] = 30;
+      }
+    }
     for (let x = 8; x < 32; x += 1) {
       const offset = (23 * 40 + x) * 3;
-      shadow[offset] = 170;
-      shadow[offset + 1] = 175;
-      shadow[offset + 2] = 185;
+      frame[offset] = 170; frame[offset + 1] = 175; frame[offset + 2] = 185;
     }
-    const naturalShadow = await sharp(shadow, { raw: { width: 40, height: 30, channels: 3 } }).png().toBuffer();
-    await composeSquareDeliverable(await foreground(), box, output, { naturalShadow });
+    const generated = await sharp(frame, { raw: { width: 40, height: 30, channels: 3 } }).png().toBuffer();
+    await composeSquareDeliverable(generated, box, output, { framing: "main" });
 
     const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
     const pixel = (x: number, y: number) =>
       Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x + 1) * info.channels));
-    expect(Math.max(...pixel(400, 630))).toBeLessThan(230);
+    expect(info).toMatchObject({ width: 800, height: 800, channels: 3 });
+    // The band below the product survived the crop and resize.
+    const column = Array.from({ length: 800 }, (_, y) => Math.max(...pixel(400, y)));
+    expect(column.slice(500).some((value) => value < 230)).toBe(true);
     expect(pixel(0, 0)).toEqual([255, 255, 255]);
   });
 });
