@@ -1,10 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import {
+import { loadEnvConfig } from "@next/env";
+import type { MonoJobKind } from "@/lib/mono/contracts";
+
+// This standalone process is outside the Next runtime, so load the same
+// root-level .env files before importing services that read configuration.
+loadEnvConfig(process.cwd());
+
+// `tsx` runs this script as CommonJS in the current workspace.  A synchronous
+// require deliberately keeps service-module evaluation after `loadEnvConfig`.
+// Top-level await would make the standalone worker fail before it can heartbeat.
+const {
   createEmptyWorkerInFlight,
   reportStandaloneWorkerHeartbeat,
   runStandaloneWorkerTick,
-} from "@/lib/mono/service";
+} = require("@/lib/mono/service") as typeof import("@/lib/mono/service");
 
 /**
  * 独立 Mono Worker 进程（架构治理 Phase 4）。跟 Next.js web 进程共用同一个

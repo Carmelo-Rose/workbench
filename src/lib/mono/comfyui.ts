@@ -11,13 +11,13 @@ import path from "node:path";
 
 export type ComfyOutputFile = { filename: string; subfolder: string; type: string };
 
-function comfyBaseUrl(): string {
+export function comfyBaseUrl(): string {
   const url = process.env.COMFYUI_URL;
   if (!url) throw new Error("ComfyUI 未配置：请设置 COMFYUI_URL（如 http://127.0.0.1:8188）");
   return url.replace(/\/+$/u, "");
 }
 
-function comfyTimeoutMs(): number {
+export function comfyTimeoutMs(): number {
   const parsed = Number(process.env.COMFYUI_TIMEOUT_MS);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 10 * 60_000;
 }
@@ -29,7 +29,7 @@ export function workflowsDir(): string {
 /** 读取某能力的工作流模板并填充 "{{TOKEN}}" 占位值。 */
 export async function loadComfyWorkflow(
   kind: string,
-  values: Record<string, string>,
+  values: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const filePath = path.join(workflowsDir(), `${kind}.json`);
   let raw: string;
@@ -38,10 +38,12 @@ export async function loadComfyWorkflow(
   } catch {
     throw new Error(`「${kind}」能力的 ComfyUI 工作流未配置：请把 API 格式工作流放到 ${filePath}`);
   }
-  const filled = raw.replace(/"\{\{([A-Z0-9_]+)\}\}"/gu, (token, name: string) =>
-    name in values ? JSON.stringify(values[name]) : token,
+  const filled = raw.replace(/"\{\{([A-Z0-9_]+)\}\}"|\{\{([A-Z0-9_]+)\}\}/gu, (token, quotedName: string | undefined, bareName: string | undefined) => {
+    const name = quotedName ?? bareName!;
+    return name in values ? JSON.stringify(values[name]) : token;
+  },
   );
-  const leftover = filled.match(/"\{\{([A-Z0-9_]+)\}\}"/u);
+  const leftover = filled.match(/\{\{([A-Z0-9_]+)\}\}/u);
   if (leftover) throw new Error(`工作流占位符 {{${leftover[1]}}} 没有对应参数`);
   return JSON.parse(filled) as Record<string, unknown>;
 }
@@ -63,11 +65,10 @@ export async function uploadComfyInput(
 }
 
 /** 提交工作流并轮询直到产出输出文件列表。 */
-export async function runComfyWorkflow(
+export async function submitComfyWorkflow(
   workflow: Record<string, unknown>,
   signal: AbortSignal,
-  onStage?: (stage: string) => void,
-): Promise<ComfyOutputFile[]> {
+): Promise<string> {
   const base = comfyBaseUrl();
   const response = await fetch(`${base}/prompt`, {
     method: "POST",
@@ -82,23 +83,53 @@ export async function runComfyWorkflow(
     const detail = submitted?.error?.message ?? `HTTP ${response.status}`;
     throw new Error(`ComfyUI 拒绝了工作流：${detail}`);
   }
+  return submitted.prompt_id;
+}
+
+export async function pollComfyWorkflow(promptId: string, signal: AbortSignal): Promise<{
+  status: "queued" | "running" | "succeeded" | "failed";
+  outputs?: ComfyOutputFile[];
+}> {
+  const base = comfyBaseUrl();
+  const response = await fetch(`${base}/history/${encodeURIComponent(promptId)}`, { signal });
+  if (!response.ok) throw new Error(`ComfyUI 历史查询失败：HTTP ${response.status}`);
+  const history = await response.json().catch(() => null) as Record<string, {
+    status?: { completed?: boolean; status_str?: string };
+    outputs?: Record<string, Record<string, unknown>>;
+  }> | null;
+  const entry = history?.[promptId];
+  if (!entry) return { status: "running" };
+  if (entry.status?.status_str === "error") return { status: "failed" };
+  if (!entry.status?.completed) return { status: "running" };
+  const outputs = collectOutputFiles(entry.outputs ?? {});
+  if (outputs.length === 0) throw new Error("ComfyUI 任务完成但没有输出文件（工作流需要包含保存节点）");
+  return { status: "succeeded", outputs };
+}
+
+export async function cancelComfyWorkflow(promptId: string, signal: AbortSignal): Promise<void> {
+  const response = await fetch(`${comfyBaseUrl()}/queue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ delete: [promptId] }),
+    signal,
+  });
+  if (!response.ok) throw new Error(`ComfyUI 取消任务失败：HTTP ${response.status}`);
+}
+
+export async function runComfyWorkflow(
+  workflow: Record<string, unknown>,
+  signal: AbortSignal,
+  onStage?: (stage: string) => void,
+): Promise<ComfyOutputFile[]> {
+  const promptId = await submitComfyWorkflow(workflow, signal);
   onStage?.("processing");
 
   const deadline = Date.now() + comfyTimeoutMs();
   while (Date.now() < deadline) {
     await waitAborting(2_000, signal);
-    const historyResponse = await fetch(`${base}/history/${encodeURIComponent(submitted.prompt_id)}`, { signal });
-    const history = await historyResponse.json().catch(() => null) as Record<string, {
-      status?: { completed?: boolean; status_str?: string };
-      outputs?: Record<string, Record<string, unknown>>;
-    }> | null;
-    const entry = history?.[submitted.prompt_id];
-    if (!entry) continue;
-    if (entry.status?.status_str === "error") throw new Error("ComfyUI 工作流执行失败，请检查 ComfyUI 侧日志");
-    if (!entry.status?.completed) continue;
-    const outputs = collectOutputFiles(entry.outputs ?? {});
-    if (outputs.length === 0) throw new Error("ComfyUI 工作流完成但没有输出文件（工作流需要包含保存节点）");
-    return outputs;
+    const result = await pollComfyWorkflow(promptId, signal);
+    if (result.status === "failed") throw new Error("ComfyUI 工作流执行失败，请检查 ComfyUI 侧日志");
+    if (result.status === "succeeded") return result.outputs!;
   }
   throw new Error("ComfyUI 任务超时");
 }

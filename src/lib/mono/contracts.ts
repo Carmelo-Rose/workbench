@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { monoImage2TemplateIds } from "./image2-templates";
 
-export const monoJobKinds = ["video_analysis", "image_generation", "matting", "product_pipeline"] as const;
+export const monoJobKinds = ["video_analysis", "video_generation", "image_generation", "matting", "product_pipeline"] as const;
 export const monoJobStatuses = [
   "queued",
   "running",
@@ -155,15 +155,72 @@ export const monoImageGenerationResultSchema = z.object({
   model: z.string(),
 });
 
+export const monoVideoGenerationModes = ["text-to-video", "image-to-video"] as const;
+export const monoVideoResolutions = ["480p", "720p"] as const;
+export const monoVideoSlotStatuses = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
+
+/**
+ * The contract intentionally accepts the superset of provider options.  The
+ * selected provider's live capability document validates the final values so
+ * a client can never opt into a spec the installed provider cannot perform.
+ */
+export const monoVideoGenerationSchema = z.object({
+  mode: z.enum(monoVideoGenerationModes),
+  prompt: z.string().trim().max(8_000).default(""),
+  firstFrameAssetId: z.string().min(1).optional(),
+  lastFrameAssetId: z.string().min(1).optional(),
+  aspectRatio: z.enum(monoAspectRatios).optional(),
+  durationSeconds: z.number().int().min(1).max(30),
+  resolution: z.enum(monoVideoResolutions),
+  variants: z.number().int().min(1).max(4),
+  model: z.string().min(1).max(160).default("auto"),
+  idempotencyKey: z.string().min(1).max(180).optional(),
+}).superRefine((input, context) => {
+  if (input.mode === "text-to-video") {
+    if (!input.prompt) context.addIssue({ code: "custom", path: ["prompt"], message: "文生视频需要提示词" });
+    if (input.firstFrameAssetId || input.lastFrameAssetId) {
+      context.addIssue({ code: "custom", path: ["firstFrameAssetId"], message: "文生视频不能携带输入帧" });
+    }
+  } else {
+    if (!input.firstFrameAssetId) {
+      context.addIssue({ code: "custom", path: ["firstFrameAssetId"], message: "图生视频需要首帧素材" });
+    }
+    if (input.aspectRatio) {
+      context.addIssue({ code: "custom", path: ["aspectRatio"], message: "图生视频比例跟随首帧" });
+    }
+  }
+});
+
+export const monoVideoGenerationSlotSchema = z.object({
+  index: z.number().int().min(0),
+  status: z.enum(monoVideoSlotStatuses),
+  providerTaskId: z.string().optional(),
+  providerPromptId: z.string().optional(),
+  assetId: z.string().regex(/^asset_[0-9a-f-]{36}$/u).optional(),
+  error: z.string().optional(),
+});
+
+export const monoVideoGenerationResultSchema = z.object({
+  stage: z.string(),
+  provider: z.string(),
+  model: z.string(),
+  slots: z.array(monoVideoGenerationSlotSchema),
+  succeeded: z.number().int().min(0),
+  failed: z.number().int().min(0),
+});
+
 export type MonoActor = z.infer<typeof monoActorSchema>;
 export type MonoAssetInput = z.infer<typeof monoAssetInputSchema>;
 export type MonoImageAnalysisInput = z.infer<typeof monoImageAnalysisSchema>;
 export type MonoVideoAnalysisInput = z.infer<typeof monoVideoAnalysisSchema>;
 export type MonoMattingInput = z.infer<typeof monoMattingSchema>;
 export type MonoImageGenerationInput = z.infer<typeof monoImageGenerationSchema>;
+export type MonoVideoGenerationInput = z.infer<typeof monoVideoGenerationSchema>;
 export type ProductPipelineInput = z.infer<typeof productPipelineInputSchema>;
 export type MonoImageGenerationSlot = z.infer<typeof monoImageGenerationSlotSchema>;
 export type MonoImageGenerationResult = z.infer<typeof monoImageGenerationResultSchema>;
+export type MonoVideoGenerationSlot = z.infer<typeof monoVideoGenerationSlotSchema>;
+export type MonoVideoGenerationResult = z.infer<typeof monoVideoGenerationResultSchema>;
 /** Input remains backward-compatible: omitted kind/visibility use their schema defaults. */
 export type MonoSubjectInput = z.input<typeof monoSubjectInputSchema>;
 export type MonoSubjectPatch = z.infer<typeof monoSubjectPatchSchema>;

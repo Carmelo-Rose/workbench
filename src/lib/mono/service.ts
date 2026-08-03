@@ -17,6 +17,9 @@ import type {
   MonoImageGenerationInput,
   MonoImageGenerationResult,
   MonoImageGenerationSlot,
+  MonoVideoGenerationInput,
+  MonoVideoGenerationResult,
+  MonoVideoGenerationSlot,
   MonoJob,
   MonoJobKind,
   MonoMattingInput,
@@ -40,6 +43,11 @@ import { deleteObject, readObjectBuffer, saveObjectBuffer } from "@/lib/storage"
 import { compileSubjectPrompt, subjectIdsFromPrompt } from "./subject-compiler";
 import { uploadVideoToTosAndGetUrl } from "./tos";
 import {
+  resolveVideoGeneration,
+  videoProvider,
+  type PersistedVideoInput,
+} from "./video-provider";
+import {
   cancelMonoJob,
   claimMonoJob,
   claimNextMonoJob,
@@ -59,6 +67,7 @@ import {
   listMonoJobs,
   listGeneratedMonoAssets,
   listMonoJobAssets,
+  listUnreferencedMonoAssetsOlderThan,
   linkMonoJobAsset,
   listPurgeableMonoJobIds,
   listMonoSubjects,
@@ -99,6 +108,7 @@ const PRODUCT_PIPELINE_ACTIVE_FOLDERS = productPipelineSchedulingSettings().acti
 const JOB_CONCURRENCY: Record<MonoJobKind, number> = {
   image_generation: Math.max(1, Number(process.env.MONO_IMAGE_JOB_CONCURRENCY) || 3),
   video_analysis: 1,
+  video_generation: 1,
   matting: 1,
   product_pipeline: PRODUCT_PIPELINE_ACTIVE_FOLDERS,
 };
@@ -130,7 +140,7 @@ const MONO_WORKER_VERSION = process.env.MONO_WORKER_VERSION ?? process.env.npm_p
 
 type WorkerState = { started: boolean; scheduled: boolean; inFlight: Record<MonoJobKind, number> };
 const emptyInFlight = (): Record<MonoJobKind, number> =>
-  ({ image_generation: 0, video_analysis: 0, matting: 0, product_pipeline: 0 });
+  ({ image_generation: 0, video_analysis: 0, video_generation: 0, matting: 0, product_pipeline: 0 });
 
 // worker 状态挂在 globalThis 上跨模块实例复用，开发态热更会留下上一版形状的对象。
 // 缺字段必须补齐：drain 在 setImmediate 里跑，抛出去没人接，整个队列会静默卡死。
@@ -372,6 +382,36 @@ export function listJobs(
   return listMonoJobs(actor, options);
 }
 
+/**
+ * The provider and concrete model are resolved once at submission time and
+ * saved in the job input.  A later settings change therefore cannot make a
+ * recovered job silently hop to a different, chargeable provider.
+ */
+export function createVideoGenerationJob(actor: MonoActor, input: MonoVideoGenerationInput): MonoJob {
+  const resolved = resolveVideoGeneration(input, actor.workspaceId);
+  const assetIds = [input.firstFrameAssetId, input.lastFrameAssetId].filter((value): value is string => Boolean(value));
+  for (const assetId of assetIds) {
+    const asset = getMonoAsset(actor, assetId);
+    if (!asset) throw new MonoHttpError(400, "输入帧不存在或不属于当前工作区");
+    if (!asset.mimeType?.toLowerCase().startsWith("image/")) throw new MonoHttpError(400, "视频输入帧必须是图片素材");
+  }
+  const durableInput: PersistedVideoInput = {
+    ...input,
+    provider: resolved.provider,
+    providerModel: resolved.model,
+  };
+  const job = createMonoJob(actor, "video_generation", durableInput, input.idempotencyKey);
+  // createMonoJob returns the already-persisted object for an idempotent retry.
+  // Do not change its asset graph with a different browser request.
+  if (job.input === durableInput) {
+    if (input.firstFrameAssetId) linkMonoJobAsset(actor, job.id, input.firstFrameAssetId, "video-first-frame", "primary");
+    if (input.lastFrameAssetId) linkMonoJobAsset(actor, job.id, input.lastFrameAssetId, "video-last-frame", "primary");
+  }
+  void cleanupExpiredUnreferencedAssets(actor).catch((error) => console.warn("[mono] 清理未引用上传失败", error));
+  scheduleMonoWorker();
+  return job;
+}
+
 export function listGeneratedAssets(
   actor: MonoActor,
   limit = 24,
@@ -411,6 +451,22 @@ export async function purgeJob(actor: MonoActor, jobId: string): Promise<boolean
   return true;
 }
 
+export async function deleteAssetIfUnreferenced(actor: MonoActor, assetId: string): Promise<boolean> {
+  const deleted = deleteMonoAssetIfUnreferenced(actor, assetId);
+  if (!deleted.deleted) return false;
+  if (deleted.storageKey) await deleteObject(deleted.storageKey);
+  return true;
+}
+
+/** Remove abandoned uploads after 24 hours, while retaining every shared asset. */
+export async function cleanupExpiredUnreferencedAssets(actor: MonoActor): Promise<number> {
+  let deleted = 0;
+  for (const asset of listUnreferencedMonoAssetsOlderThan(actor, Date.now() - 24 * 60 * 60_000)) {
+    if (await deleteAssetIfUnreferenced(actor, asset.id)) deleted += 1;
+  }
+  return deleted;
+}
+
 export async function purgeUnfavoriteJobs(actor: MonoActor, kind: MonoJobKind): Promise<number> {
   let deleted = 0;
   for (const jobId of listPurgeableMonoJobIds(actor, kind)) {
@@ -443,7 +499,7 @@ export function lightenMonoJob(job: MonoJob): MonoJob & { input: { referenceImag
   return { ...job, input: { ...input, referenceImageCount: Math.max(references.length, referenceAssetIds.length) } };
 }
 
-export function cancelJob(actor: MonoActor, jobId: string): MonoJob | null {
+export async function cancelJob(actor: MonoActor, jobId: string): Promise<MonoJob | null> {
   const ownedJob = getMonoJob(actor, jobId);
   if (!ownedJob) return null;
 
@@ -454,6 +510,24 @@ export function cancelJob(actor: MonoActor, jobId: string): MonoJob | null {
   if (ownedJob.kind === "image_generation" && ownedJob.status === "running") {
     stopRequested.add(jobId);
     return ownedJob;
+  }
+
+  if (ownedJob.kind === "video_generation" && ownedJob.status === "running") {
+    const input = ownedJob.input as Partial<PersistedVideoInput>;
+    const slot = Array.isArray(ownedJob.result?.slots)
+      ? ownedJob.result?.slots.find((value) => typeof value === "object" && value !== null) as Record<string, unknown> | undefined
+      : undefined;
+    const providerTaskId = typeof slot?.providerTaskId === "string"
+      ? slot.providerTaskId
+      : typeof slot?.providerPromptId === "string" ? slot.providerPromptId : undefined;
+    // DashScope only accepts PENDING cancellation.  If execution has begun we
+    // preserve the real job state and explain the provider rejection to the UI.
+    if (input.provider === "dashscope-wan" && providerTaskId && ownedJob.result?.stage !== "queued") {
+      return ownedJob;
+    }
+    if (providerTaskId && input.provider) {
+      await videoProvider(input.provider).cancel(providerTaskId, new AbortController().signal);
+    }
   }
 
   const cancelled = cancelMonoJob(actor, jobId);
@@ -629,6 +703,14 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
     try {
       if (job.kind === "video_analysis") {
         completeMonoJob(job.id, await runVideoAnalysis(job, controller.signal));
+      } else if (job.kind === "video_generation") {
+        const result = await runVideoGeneration(job, controller.signal);
+        completeMonoJob(
+          job.id,
+          result as unknown as Record<string, unknown>,
+          result.succeeded === 0 ? (result.failed ? "视频生成失败" : undefined) : undefined,
+          result.slots.some((slot) => slot.status === "cancelled") ? "cancelled" : undefined,
+        );
       } else if (job.kind === "matting") {
         completeMonoJob(job.id, await runMatting(job, controller.signal));
       } else if (job.kind === "product_pipeline") {
@@ -889,12 +971,15 @@ async function runImageGenerationBatch(
   const referenceImageUrls = Array.isArray(input.referenceImageUrls)
     ? input.referenceImageUrls.filter((value): value is string => typeof value === "string")
     : [];
-  const persistedReferences = await persistImageGenerationReferences(
-    actor,
-    jobId,
-    referenceImageUrls,
-    signal,
-  );
+  const persistedAssetIds = Array.isArray(input.referenceAssetIds)
+    ? input.referenceAssetIds.filter((value): value is string => typeof value === "string")
+    : [];
+  const persistedReferences = referenceImageUrls.length
+    ? await persistImageGenerationReferences(actor, jobId, referenceImageUrls, signal)
+    : {
+        assetIds: persistedAssetIds,
+        urls: await hydrateImageGenerationReferences(actor, jobId, persistedAssetIds),
+      };
   input.referenceImageUrls = persistedReferences.urls;
   input.referenceAssetIds = persistedReferences.assetIds;
   const durableInput = { ...input, referenceImageUrls: [] };
@@ -967,6 +1052,89 @@ async function runImageGenerationBatch(
   return snapshot();
 }
 
+function videoResultSnapshot(
+  input: PersistedVideoInput,
+  slot: MonoVideoGenerationSlot,
+  stage: string,
+): MonoVideoGenerationResult {
+  const slots = [{ ...slot }];
+  return {
+    stage,
+    provider: input.provider,
+    model: input.providerModel,
+    slots,
+    succeeded: slot.status === "succeeded" ? 1 : 0,
+    failed: slot.status === "failed" ? 1 : 0,
+  };
+}
+
+/**
+ * Remote IDs are checkpointed before the first poll.  A recovered lease reads
+ * that checkpoint and resumes polling instead of ever submitting a second
+ * provider task, which is vital for DashScope's per-second billing.
+ */
+async function runVideoGeneration(job: MonoJob, signal: AbortSignal): Promise<MonoVideoGenerationResult> {
+  const input = job.input as PersistedVideoInput;
+  if (!input.provider || !input.providerModel) throw new Error("视频任务缺少已解析的 provider 配置");
+  const actor = newMonoActor({ userId: job.userId, workspaceId: job.workspaceId, traceId: job.traceId });
+  const provider = videoProvider(input.provider);
+  const previous = job.result;
+  const oldSlot = Array.isArray(previous?.slots) && previous?.slots[0] && typeof previous.slots[0] === "object"
+    ? previous.slots[0] as Record<string, unknown>
+    : undefined;
+  const checkpointId = typeof oldSlot?.providerTaskId === "string"
+    ? oldSlot.providerTaskId
+    : typeof oldSlot?.providerPromptId === "string" ? oldSlot.providerPromptId : undefined;
+  const slot: MonoVideoGenerationSlot = {
+    index: 0,
+    status: "queued",
+    ...(typeof oldSlot?.assetId === "string" ? { assetId: oldSlot.assetId } : {}),
+    ...(input.provider === "comfyui"
+      ? checkpointId ? { providerPromptId: checkpointId } : {}
+      : checkpointId ? { providerTaskId: checkpointId } : {}),
+  };
+
+  let remoteId = checkpointId;
+  if (!remoteId) {
+    updateMonoJobResult(job.id, videoResultSnapshot(input, slot, "submitting"));
+    remoteId = (await provider.submit(input, actor, signal)).remoteId;
+    Object.assign(slot, input.provider === "comfyui" ? { providerPromptId: remoteId } : { providerTaskId: remoteId });
+    // This write is deliberately the very next operation after submit.
+    updateMonoJobResult(job.id, videoResultSnapshot(input, slot, "queued"));
+  }
+
+  const deadline = Date.now() + Math.max(60 * 60_000, Number(process.env.MONO_VIDEO_GENERATION_TIMEOUT_MS) || 0);
+  while (Date.now() < deadline) {
+    if (signal.aborted) throw new Error("视频生成已取消");
+    const polled = await provider.poll(remoteId, signal);
+    if (polled.status === "queued" || polled.status === "running") {
+      slot.status = polled.status;
+      updateMonoJobResult(job.id, videoResultSnapshot(input, slot, polled.stage));
+      await wait(provider.pollIntervalMs, signal);
+      continue;
+    }
+    if (polled.status === "cancelled") {
+      slot.status = "cancelled";
+      return videoResultSnapshot(input, slot, "cancelled");
+    }
+    if (polled.status === "failed") {
+      slot.status = "failed";
+      slot.error = polled.error ?? "视频生成失败";
+      return videoResultSnapshot(input, slot, "failed");
+    }
+    if (!polled.output) throw new Error("视频 provider 成功但没有返回结果");
+    updateMonoJobResult(job.id, videoResultSnapshot(input, slot, "downloading"));
+    const video = await provider.download(polled.output, signal);
+    const filename = video.filename || `video-${job.id}.mp4`;
+    const stored = await saveObjectBuffer(video.buffer, filename);
+    const asset = createStoredAsset(actor, { storageKey: stored.key, mimeType: video.mimeType, name: filename });
+    linkMonoJobAsset(actor, job.id, asset.id, "video-generation", "0");
+    Object.assign(slot, { status: "succeeded", assetId: asset.id, error: undefined });
+    return videoResultSnapshot(input, slot, "succeeded");
+  }
+  throw new Error("视频生成超时");
+}
+
 async function persistImageGenerationReferences(
   actor: MonoActor,
   jobId: string,
@@ -981,14 +1149,13 @@ async function persistImageGenerationReferences(
     if (existingAsset?.storageKey) {
       linkMonoJobAsset(actor, jobId, existingAsset.id, "image-reference", String(index));
       assetIds.push(existingAsset.id);
-      stableUrls.push(publicAssetUrl(existingAsset.id));
+      stableUrls.push(await imageDataUrlFromStoredAsset(actor, existingAsset.id));
       continue;
     }
     const source = await resolveSourceBytes(actor, null, sourceUrl, signal);
     const metadata = await sharp(source.buffer).metadata();
     if (!metadata.width || !metadata.height) throw new Error(`参考图 ${index + 1} 不是有效图片`);
-    const mimeType = source.mimeType?.split(";")[0]
-      || (metadata.format ? `image/${metadata.format === "jpg" ? "jpeg" : metadata.format}` : "image/png");
+    const mimeType = imageMimeType(source.mimeType, metadata.format);
     const extension = mimeType === "image/jpeg" ? "jpg" : mimeType.split("/")[1] || "png";
     const filename = `image2-reference-${jobId}-${index + 1}.${extension}`;
     const stored = await saveObjectBuffer(source.buffer, filename);
@@ -999,9 +1166,49 @@ async function persistImageGenerationReferences(
     });
     linkMonoJobAsset(actor, jobId, asset.id, "image-reference", String(index));
     assetIds.push(asset.id);
-    stableUrls.push(publicAssetUrl(asset.id));
+    stableUrls.push(imageDataUrl(source.buffer, mimeType));
   }
   return { assetIds, urls: stableUrls };
+}
+
+/**
+ * A reclaimed job has only durable asset IDs: its original external URLs are
+ * deliberately removed from the database. Rebuild provider-ready data URLs
+ * directly from object storage so retrying never depends on a browser session
+ * or an externally reachable Workbench URL.
+ */
+async function hydrateImageGenerationReferences(
+  actor: MonoActor,
+  jobId: string,
+  assetIds: string[],
+): Promise<string[]> {
+  return Promise.all(assetIds.map(async (assetId, index) => {
+    linkMonoJobAsset(actor, jobId, assetId, "image-reference", String(index));
+    return imageDataUrlFromStoredAsset(actor, assetId);
+  }));
+}
+
+async function imageDataUrlFromStoredAsset(actor: MonoActor, assetId: string): Promise<string> {
+  const asset = getMonoAsset(actor, assetId);
+  if (!asset?.storageKey) {
+    throw new Error("参考图持久化素材不存在，无法恢复任务");
+  }
+  const bytes = await readObjectBuffer(asset.storageKey);
+  const metadata = await sharp(bytes).metadata();
+  if (!metadata.width || !metadata.height) throw new Error("参考图持久化素材不是有效图片");
+  return imageDataUrl(bytes, imageMimeType(asset.mimeType, metadata.format));
+}
+
+function imageMimeType(contentType: string | undefined, format: string | undefined): string {
+  const normalized = contentType?.split(";", 1)[0]?.trim().toLowerCase();
+  if (normalized?.startsWith("image/")) return normalized === "image/jpg" ? "image/jpeg" : normalized;
+  if (format === "jpg" || format === "jpeg") return "image/jpeg";
+  if (format) return `image/${format}`;
+  return "image/png";
+}
+
+function imageDataUrl(bytes: Buffer, mimeType: string): string {
+  return `data:${mimeType};base64,${bytes.toString("base64")}`;
 }
 
 function assetIdFromContentUrl(sourceUrl: string): string | null {

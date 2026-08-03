@@ -139,7 +139,7 @@ describe("Image2 generation job runner (Phase 1 baseline)", () => {
     expect(body).toEqual({
       model: "gpt-image-2",
       prompt: "你将收到 1 张参考图，编号与输入图片顺序一致。\n请严格按编号理解用户指令。\n\n用户指令：画一只猫",
-      images: [expect.stringMatching(/\/api\/workbench\/mono\/assets\/.+\/content$/)],
+      images: [expect.stringMatching(/^data:image\/png;base64,/)],
       aspectRatio: "1:1",
       replyType: "json",
     });
@@ -247,6 +247,39 @@ describe("Image2 generation job runner (Phase 1 baseline)", () => {
     expect(store.getMonoJob(actor, job.id)?.result).toMatchObject({ succeeded: 1, failed: 0 });
   });
 
+  it("rebuilds data URL references from durable assets when a job is retried", async () => {
+    const fetchMock = vi.fn().mockImplementation((endpoint: string) => Promise.resolve(
+      endpoint === "https://image.example.test/v1/api/generate"
+        ? new Response(
+          JSON.stringify({ results: [{ url: "https://image.example.test/replayed.png" }] }),
+          { status: 200 },
+        )
+        : imageResponse(),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { newMonoActor } = await import("./service");
+    const service = await import("./service");
+    const store = await import("./store");
+    const actor = newMonoActor({ userId: "u1", workspaceId: `ws-${crypto.randomUUID()}` });
+    const job = service.createImageGenerationJob(actor, baseInput());
+    await service.dispatchJob(job.id);
+    const finished = store.getMonoJob(actor, job.id);
+    if (!finished) throw new Error("test setup failed: missing finished job");
+
+    const replay = store.createMonoJob(actor, "image_generation", {
+      ...finished.input,
+      referenceImageUrls: [],
+    });
+    await service.dispatchJob(replay.id);
+
+    const calls = generationCalls(fetchMock);
+    expect(calls).toHaveLength(2);
+    const replayBody = JSON.parse(calls[1][1].body);
+    expect(replayBody.images).toEqual([expect.stringMatching(/^data:image\/png;base64,/)]);
+    expect(replayBody.images[0]).not.toContain("/api/workbench/mono/assets/");
+  });
+
   it("resolves subjectIds into a reference image and rewrites @name into 参考图N（name）", async () => {
     const fetchMock = vi.fn().mockImplementation((endpoint: string) => Promise.resolve(
       endpoint === "https://image.example.test/v1/api/generate"
@@ -276,7 +309,7 @@ describe("Image2 generation job runner (Phase 1 baseline)", () => {
 
     const [[, init]] = generationCalls(fetchMock);
     const body = JSON.parse(init.body);
-    expect(body.images).toEqual([expect.stringMatching(/\/api\/workbench\/mono\/assets\/.+\/content$/)]);
+    expect(body.images).toEqual([expect.stringMatching(/^data:image\/png;base64,/)]);
     expect(body.prompt).toContain("参考图1（猫咪）");
     expect(body.prompt).not.toContain("@猫咪");
   });

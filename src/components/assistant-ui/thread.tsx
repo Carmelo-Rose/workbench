@@ -45,14 +45,25 @@ import {
   Image2ModeControl,
   Image2StructuredSlots,
   Image2TemplateRail,
+  useExitImage2Mode,
   useImage2SendBlocked,
   useImage2StructuredTemplate,
 } from "@/components/workbench/Image2ChatMode";
+import {
+  adoptComposerImageAsVideoFrame,
+  submitVideoGeneration,
+  VideoGenerationJobTurn,
+  VideoGenerationModeControl,
+  VideoGenerationNotice,
+  VideoGenerationSendButton,
+  VideoGenerationSlots,
+} from "@/components/workbench/VideoGenerationMode";
 import { emitSendBurst } from "@/components/workbench/send-burst";
 import { useTilt } from "@/components/workbench/use-tilt";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useImage2Mode } from "@/lib/image2-mode";
+import { useVideoGenerationMode } from "@/lib/video-generation-mode";
 import {
   ActionBarMorePrimitive,
   ActionBarPrimitive,
@@ -183,6 +194,8 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS }) => {
 const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
   const image2Active = useImage2Mode((state) => state.active);
+  const videoGenerationActive = useVideoGenerationMode((state) => state.active);
+  const hasVideoTurn = Boolean(useVideoGenerationMode((state) => state.currentJobId));
 
   return (
     <ThreadPrimitive.Root
@@ -195,19 +208,17 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
         ["--composer-padding" as string]: "8px",
       }}
     >
-      <ThreadBackdrop active={isEmpty} />
+      <ThreadBackdrop active={isEmpty && !hasVideoTurn} />
       <CapabilityActionsProvider>
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         data-slot="aui_thread-viewport"
         className={cn(
           "relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth px-4 pt-4",
-          isEmpty && "justify-center",
+          isEmpty && !hasVideoTurn && "justify-center",
         )}
       >
-        <AuiIf condition={isNewChatView}>
-          <Welcome />
-        </AuiIf>
+        {isEmpty && !hasVideoTurn ? <Welcome /> : null}
 
         <div
           data-slot="aui_message-group"
@@ -216,18 +227,19 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
           <ThreadPrimitive.Messages>
             {() => <ThreadMessage />}
           </ThreadPrimitive.Messages>
+          <VideoGenerationJobTurn />
         </div>
 
         <ThreadPrimitive.ViewportFooter
           className={cn(
             "aui-thread-viewport-footer mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4 overflow-visible pb-4 md:pb-6",
-            !isEmpty &&
+            (!isEmpty || hasVideoTurn) &&
               "bg-background sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
           )}
         >
           <ThreadScrollToBottom />
           <Composer />
-          <AuiIf condition={isNewChatView}>
+          {isEmpty && !videoGenerationActive && !hasVideoTurn ? (
             <div className="aui-thread-welcome-suggestions-shell min-h-19">
               {image2Active ? (
                 <ThreadSuggestions />
@@ -237,7 +249,7 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
                 </AuiIf>
               )}
             </div>
-          </AuiIf>
+          ) : null}
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
       </CapabilityActionsProvider>
@@ -424,7 +436,9 @@ function DirectiveChip(props: DirectiveChipProps) {
 }
 
 const Composer: FC = () => {
+  const aui = useAui();
   const openSubjectLibrary = useImage2Mode((state) => state.openSubjectLibrary);
+  const videoGenerationActive = useVideoGenerationMode((state) => state.active);
   const subjects = useMonoSubjectCatalog((state) => state.subjects);
   const loadSubjects = useMonoSubjectCatalog((state) => state.load);
   const structuredTemplate = useImage2StructuredTemplate();
@@ -454,7 +468,7 @@ const Composer: FC = () => {
   // picker, which shows subjects (+ a pinned create/manage action)
   // immediately — no drill-down step. `@` = 引用，全模式常驻（生图、非生图
   // 都可插主体/参考图）；仅结构化模板用槽位 UI 时让位，不弹 @ 列表。
-  const mentionItems = useMemo(() => !structuredTemplate ? [
+  const mentionItems = useMemo(() => !structuredTemplate && !videoGenerationActive ? [
     ...subjects.map((subject) => ({
       id: subject.id,
       type: "subject",
@@ -479,7 +493,7 @@ const Composer: FC = () => {
       icon: "subject-library",
       metadata: { actionOnly: true },
     },
-  ] : undefined, [structuredTemplate, subjects, imageAttachments, attachmentPreviews]);
+  ] : undefined, [structuredTemplate, videoGenerationActive, subjects, imageAttachments, attachmentPreviews]);
   const mention = unstable_useMentionAdapter({
     items: mentionItems,
     includeModelContextTools: true,
@@ -503,15 +517,14 @@ const Composer: FC = () => {
   // 同一套 run（填提示词 / 拉起选择器 / 开视频卡 / 切生图模式）。removeOnExecute
   // 剥掉用户敲的 /xxx；fill 型用 setText 整体替换文本，本就不会残留。
   const slashCommands = useMemo<Unstable_SlashCommand[]>(
-    () =>
-      SLASH_CAPABILITIES.map((cap) => ({
+    () => videoGenerationActive ? [] : SLASH_CAPABILITIES.map((cap) => ({
         id: cap.id,
         label: cap.label,
         description: cap.hint,
         icon: cap.iconKey,
         execute: () => runCapability({ action: cap.action, prompt: cap.prompt }),
       })),
-    [runCapability],
+    [runCapability, videoGenerationActive],
   );
   const slash = unstable_useSlashCommandAdapter({
     commands: slashCommands,
@@ -530,11 +543,34 @@ const Composer: FC = () => {
           >
             <ComposerQuotePreview />
             <Image2ComposerContext />
-            {structuredTemplate ? <Image2StructuredSlots /> : <ComposerAttachments />}
+            <VideoGenerationNotice />
+            {videoGenerationActive ? (
+              <VideoGenerationSlots />
+            ) : structuredTemplate ? (
+              <Image2StructuredSlots />
+            ) : (
+              <ComposerAttachments />
+            )}
             <LexicalComposerInput
+              submitMode={videoGenerationActive ? "none" : "enter"}
+              onKeyDownCapture={(event) => {
+                if (
+                  !videoGenerationActive ||
+                  event.key !== "Enter" ||
+                  event.shiftKey ||
+                  event.ctrlKey ||
+                  event.metaKey ||
+                  event.nativeEvent.isComposing
+                ) return;
+                event.preventDefault();
+                event.stopPropagation();
+                void submitVideoGeneration(aui);
+              }}
               directiveChip={DirectiveChip}
               directivePluginProps={{ onDirectiveSelect: openSubjectLibraryFromDirective }}
-              placeholder="Send a message... (@ to mention, / for commands)"
+              placeholder={videoGenerationActive
+                ? "描述画面、动作和镜头语言（图生视频可留空）"
+                : "Send a message... (@ to mention, / for commands)"}
               className="aui-composer-input [&_.aui-lexical-placeholder]:text-muted-foreground/80 relative max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none [&_.aui-directive-chip]:inline-flex [&_.aui-directive-chip]:items-baseline [&_.aui-directive-chip]:gap-1 [&_.aui-directive-chip]:rounded-md [&_.aui-directive-chip]:bg-blue-100 [&_.aui-directive-chip]:px-1.5 [&_.aui-directive-chip]:py-0.5 [&_.aui-directive-chip]:text-[13px] [&_.aui-directive-chip]:leading-none [&_.aui-directive-chip]:font-medium [&_.aui-directive-chip]:text-blue-700 dark:[&_.aui-directive-chip]:bg-blue-900/50 dark:[&_.aui-directive-chip]:text-blue-300 [&_.aui-directive-chip-icon]:self-center [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:right-0 [&_.aui-lexical-placeholder]:left-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1"
             />
             <ComposerAction />
@@ -543,11 +579,13 @@ const Composer: FC = () => {
 
         <ComposerTriggerPopover char="@" {...mention} onActionItem={openSubjectLibraryFromDirective} />
 
-        <ComposerTriggerPopover
-          char="/"
-          {...slash}
-          emptyItemsLabel="No matching commands"
-        />
+        {videoGenerationActive ? null : (
+          <ComposerTriggerPopover
+            char="/"
+            {...slash}
+            emptyItemsLabel="No matching commands"
+          />
+        )}
         <SubjectLibrarySheet />
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
@@ -559,10 +597,24 @@ const Composer: FC = () => {
  * 后续新能力（视频分析、素材库等）继续往这里挂。
  */
 const ComposerPlusMenu: FC = () => {
+  const aui = useAui();
   const router = useRouter();
   const image2Active = useImage2Mode((state) => state.active);
   const activateImage2 = useImage2Mode((state) => state.activate);
+  const exitImage2Mode = useExitImage2Mode();
   const openSubjectLibrary = useImage2Mode((state) => state.openSubjectLibrary);
+  const videoGenerationActive = useVideoGenerationMode((state) => state.active);
+  const activateVideoGeneration = useVideoGenerationMode((state) => state.activate);
+  const resetVideoGeneration = useVideoGenerationMode((state) => state.reset);
+
+  const enterVideoGeneration = () => {
+    void (async () => {
+      if (image2Active) await exitImage2Mode();
+      await adoptComposerImageAsVideoFrame(aui);
+      activateVideoGeneration();
+      router.push("/?mode=video");
+    })();
+  };
 
   return (
     <DropdownMenu>
@@ -589,6 +641,7 @@ const ComposerPlusMenu: FC = () => {
         <DropdownMenuItem
           disabled={image2Active}
           onSelect={() => {
+            if (videoGenerationActive) resetVideoGeneration();
             activateImage2();
             router.push("/?mode=image2");
           }}
@@ -596,6 +649,14 @@ const ComposerPlusMenu: FC = () => {
           <SparklesIcon />
           创建图片
           {image2Active ? <CheckIcon className="ml-auto" /> : null}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={videoGenerationActive}
+          onSelect={enterVideoGeneration}
+        >
+          <FilmIcon />
+          创建视频
+          {videoGenerationActive ? <CheckIcon className="ml-auto" /> : null}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => openSubjectLibrary()}>
           <UsersIcon />
@@ -606,15 +667,36 @@ const ComposerPlusMenu: FC = () => {
   );
 };
 
+const ComposerCancelAction: FC = () => (
+  <ComposerPrimitive.Cancel asChild>
+    <Button
+      type="button"
+      variant="default"
+      size="icon"
+      className="aui-composer-cancel size-7 rounded-full"
+      aria-label="Stop generating"
+    >
+      <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
+    </Button>
+  </ComposerPrimitive.Cancel>
+);
+
 const ComposerAction: FC = () => {
   const image2Active = useImage2Mode((state) => state.active);
+  const videoGenerationActive = useVideoGenerationMode((state) => state.active);
   const image2SendBlocked = useImage2SendBlocked();
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
       <div className="flex items-center gap-1">
         <ComposerPlusMenu />
-        <ModelPicker />
-        {image2Active ? <Image2ModeControl /> : null}
+        {videoGenerationActive ? (
+          <VideoGenerationModeControl />
+        ) : (
+          <>
+            <ModelPicker />
+            {image2Active ? <Image2ModeControl /> : null}
+          </>
+        )}
       </div>
       <div className="flex items-center gap-1.5">
         <AuiIf condition={(s) => s.thread.capabilities.dictation}>
@@ -649,36 +731,39 @@ const ComposerAction: FC = () => {
             </ComposerPrimitive.StopDictation>
           </AuiIf>
         </AuiIf>
-        <AuiIf condition={(s) => !s.thread.isRunning}>
-          <ComposerPrimitive.Send asChild>
-            <TooltipIconButton
-              tooltip="Send message"
-              side="bottom"
-              type="button"
-              variant="default"
-              size="icon"
-              className="aui-composer-send size-7 rounded-full"
-              aria-label="Send message"
-              disabled={image2SendBlocked}
-              onClick={(e) => emitSendBurst(e.currentTarget)}
-            >
-              <ArrowUpIcon className="aui-composer-send-icon size-4.5" />
-            </TooltipIconButton>
-          </ComposerPrimitive.Send>
-        </AuiIf>
-        <AuiIf condition={(s) => s.thread.isRunning}>
-          <ComposerPrimitive.Cancel asChild>
-            <Button
-              type="button"
-              variant="default"
-              size="icon"
-              className="aui-composer-cancel size-7 rounded-full"
-              aria-label="Stop generating"
-            >
-              <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
-            </Button>
-          </ComposerPrimitive.Cancel>
-        </AuiIf>
+        {videoGenerationActive ? (
+          <>
+            <AuiIf condition={(s) => !s.thread.isRunning}>
+              <VideoGenerationSendButton />
+            </AuiIf>
+            <AuiIf condition={(s) => s.thread.isRunning}>
+              <ComposerCancelAction />
+            </AuiIf>
+          </>
+        ) : (
+          <>
+            <AuiIf condition={(s) => !s.thread.isRunning}>
+              <ComposerPrimitive.Send asChild>
+                <TooltipIconButton
+                  tooltip="Send message"
+                  side="bottom"
+                  type="button"
+                  variant="default"
+                  size="icon"
+                  className="aui-composer-send size-7 rounded-full"
+                  aria-label="Send message"
+                  disabled={image2SendBlocked}
+                  onClick={(e) => emitSendBurst(e.currentTarget)}
+                >
+                  <ArrowUpIcon className="aui-composer-send-icon size-4.5" />
+                </TooltipIconButton>
+              </ComposerPrimitive.Send>
+            </AuiIf>
+            <AuiIf condition={(s) => s.thread.isRunning}>
+              <ComposerCancelAction />
+            </AuiIf>
+          </>
+        )}
       </div>
     </div>
   );

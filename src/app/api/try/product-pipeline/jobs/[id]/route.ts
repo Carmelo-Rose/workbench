@@ -29,7 +29,7 @@ export async function DELETE(request: Request, context: Context) {
     const { id } = await context.params;
     const job = trialProductPipelineJob(trial.actor, id);
     if (!job) throw new MonoHttpError(404, "任务不存在或已无权访问");
-    const cancelled = cancelJob(trial.actor, id);
+    const cancelled = await cancelJob(trial.actor, id);
     if (!cancelled) throw new MonoHttpError(404, "任务不存在或已无权访问");
     return productPipelineTrialJson({ job: lightenMonoJob(cancelled) }, trial);
   } catch (error) {

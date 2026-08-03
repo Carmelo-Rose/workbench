@@ -176,7 +176,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
     mono_get_job: tool({
       description: "查询 Mono 任务（视频分析、图片生成、抠像、商品套图）的进度和结果。查状态一律用这个，不要重新发起任务。",
       inputSchema: z.object({ jobId: z.string().min(1) }),
-      execute: ({ jobId }) => {
+      execute: async ({ jobId }) => {
         const job = getJob(actor, jobId);
         if (!job) throw new Error("Mono 任务不存在，或不属于当前工作区");
         return lightenMonoJob(job);
@@ -185,8 +185,8 @@ export function createMonoTools(context: MonoToolContext = {}) {
     mono_cancel_job: tool({
       description: "取消仍在排队或运行中的 Mono 任务。",
       inputSchema: z.object({ jobId: z.string().min(1) }),
-      execute: ({ jobId }) => {
-        const job = cancelJob(actor, jobId);
+      execute: async ({ jobId }) => {
+        const job = await cancelJob(actor, jobId);
         if (!job) throw new Error("Mono 任务不存在，或不属于当前工作区");
         return lightenMonoJob(job);
       },

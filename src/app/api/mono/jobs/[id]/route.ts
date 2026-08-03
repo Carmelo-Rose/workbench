@@ -24,7 +24,7 @@ export async function DELETE(request: Request, context: Context) {
     assertMonoApiAccess(request);
     const actor = actorFromRequest(request);
     const { id } = await context.params;
-    const job = cancelJob(actor, id);
+    const job = await cancelJob(actor, id);
     if (!job) throw new MonoHttpError(404, "Mono 任务不存在");
     return Response.json({ job });
   } catch (error) {

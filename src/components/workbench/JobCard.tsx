@@ -26,6 +26,7 @@ type JobCardProps = {
 const JOB_TITLES: Record<MonoJob["kind"], string> = {
   image_generation: "图片生成",
   video_analysis: "视频分析",
+  video_generation: "视频生成",
   matting: "抠像换背景",
   product_pipeline: "商品套图",
 };

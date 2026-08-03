@@ -4,12 +4,14 @@ import {
   monoImageAnalysisSchema,
   monoImageGenerationSchema,
   monoMattingSchema,
+  monoVideoGenerationSchema,
   monoVideoAnalysisSchema,
 } from "@/lib/mono/contracts";
 import {
   analyzeImage,
   createImageGenerationJob,
   createMattingJob,
+  createVideoGenerationJob,
   createVideoAnalysisJob,
 } from "@/lib/mono/service";
 
@@ -85,6 +87,15 @@ export const CAPABILITY_REGISTRY: Record<string, CapabilityDefinition<any>> = {
     inputSchema: monoImageGenerationSchema,
     runAsync: (actor, input) => createImageGenerationJob(actor, input),
     jobKind: "image_generation",
+  },
+  mono_generate_video: {
+    id: "mono_generate_video",
+    mode: "async",
+    assetKinds: ["image"],
+    chatToolDescription: "创建真实的视频生成任务。输入必须引用已登记的首帧/尾帧素材 ID；能力规格以当前 provider 返回的 capability 为准。",
+    inputSchema: monoVideoGenerationSchema,
+    runAsync: (actor, input) => createVideoGenerationJob(actor, input),
+    jobKind: "video_generation",
   },
 };
 

@@ -365,6 +365,10 @@ const GROUP_META: Record<string, { label: string; sub: string }> = {
     sub: "第三方视频理解服务地址，与上面的视觉模型是两套独立通道。",
   },
   monoImage: { label: "生图服务（Mono）", sub: "AI 生图服务地址。" },
+  videoGeneration: {
+    label: "视频生成服务（Mono）",
+    sub: "选择 comfyui 或 dashscope-wan；云端请填 Base URL、API Key 和两个 Wan 2.7 模型。",
+  },
   videoStorage: {
     label: "大视频云存储（TOS）",
     sub: "本机上传的视频超过约 7.3MB 直传阈值时，先传到这里再把可访问链接交给视频分析模型。",
@@ -385,6 +389,11 @@ const FIELD_LABEL: Record<string, string> = {
   MONO_IMAGE_BASE_URL: "Base URL",
   MONO_IMAGE_API_KEY: "API Key",
   MONO_IMAGE_MODEL: "模型",
+  VIDEO_GENERATION_PROVIDER: "Provider（comfyui / dashscope-wan）",
+  VIDEO_GENERATION_BASE_URL: "Base URL",
+  VIDEO_GENERATION_API_KEY: "API Key",
+  VIDEO_GENERATION_T2V_MODEL: "文生模型",
+  VIDEO_GENERATION_I2V_MODEL: "图生模型",
   TOS_AK: "AccessKeyId",
   TOS_SK: "SecretAccessKey",
   TOS_REGION: "Region",

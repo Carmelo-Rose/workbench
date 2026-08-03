@@ -100,7 +100,9 @@ import {
 import { serverThreadListAdapter } from "@/lib/server-threads";
 import { createHistoryProvider } from "@/lib/thread-history";
 import { useImage2Mode } from "@/lib/image2-mode";
+import { useVideoGenerationMode } from "@/lib/video-generation-mode";
 import { useWorkbenchSession } from "@/components/workbench/auth-gate";
+import { adoptComposerImageAsVideoFrame } from "@/components/workbench/VideoGenerationMode";
 
 /** 会话历史落在服务端 SQLite（/api/threads），首次加载自动迁移旧 localStorage。 */
 const threadListAdapter = {
@@ -146,6 +148,7 @@ export const Assistant = () => {
       <VideoMattingToolUI />
       <BackendModelContext />
       <Image2ModeSync />
+      <VideoGenerationModeSync />
       <ThreadTitleSync />
       <AssistantShell />
     </AssistantRuntimeProvider>
@@ -189,6 +192,32 @@ const Image2ModeSync: FC = () => {
       })();
     }
   }, [pendingComposer, aui, consumePendingComposer]);
+
+  return null;
+};
+
+/** Query-driven entry point for the real Create Video mode. */
+const VideoGenerationModeSync: FC = () => {
+  const searchParams = useSearchParams();
+  const aui = useAui();
+  const active = useVideoGenerationMode((state) => state.active);
+  const activate = useVideoGenerationMode((state) => state.activate);
+  const deactivate = useVideoGenerationMode((state) => state.deactivate);
+  const image2Active = useImage2Mode((state) => state.active);
+  const resetImage2 = useImage2Mode((state) => state.reset);
+  const requested = searchParams.get("mode") === "video";
+
+  useEffect(() => {
+    if (requested) {
+      if (image2Active) resetImage2();
+      if (!active) {
+        activate();
+        void adoptComposerImageAsVideoFrame(aui);
+      }
+      return;
+    }
+    if (active) deactivate();
+  }, [active, activate, aui, deactivate, image2Active, requested, resetImage2]);
 
   return null;
 };

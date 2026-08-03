@@ -1,4 +1,4 @@
-import { actorFromWorkbenchRequest, monoErrorResponse } from "@/lib/mono/http";
+import { actorFromWorkbenchRequest, MonoHttpError, monoErrorResponse } from "@/lib/mono/http";
 import { monoJobKinds, type MonoJobKind } from "@/lib/mono/contracts";
 import { lightenMonoJob, listJobs, purgeUnfavoriteJobs } from "@/lib/mono/service";
 
@@ -28,7 +28,11 @@ export async function GET(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const actor = actorFromWorkbenchRequest(request);
-    const deleted = await purgeUnfavoriteJobs(actor, "image_generation");
+    const kindParam = new URL(request.url).searchParams.get("kind") ?? "image_generation";
+    if (!(monoJobKinds as readonly string[]).includes(kindParam)) {
+      throw new MonoHttpError(400, "任务类型无效");
+    }
+    const deleted = await purgeUnfavoriteJobs(actor, kindParam as MonoJobKind);
     return Response.json({ deleted });
   } catch (error) {
     return monoErrorResponse(error);

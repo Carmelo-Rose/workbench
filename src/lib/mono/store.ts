@@ -270,6 +270,25 @@ export function deleteMonoAssetIfUnreferenced(
   };
 }
 
+/** Safety net for uploads that were never linked to a job, subject or profile. */
+export function listUnreferencedMonoAssetsOlderThan(
+  actor: Pick<MonoActor, "workspaceId">,
+  olderThan: number,
+): Array<{ id: string; storageKey?: string }> {
+  const rows = getDb().prepare(
+    `SELECT asset.id, asset.storage_key
+     FROM mono_assets AS asset
+     WHERE asset.workspace_id = ? AND asset.created_at < ?
+       AND NOT EXISTS (SELECT 1 FROM mono_job_assets WHERE asset_id = asset.id)
+       AND NOT EXISTS (SELECT 1 FROM mono_subjects WHERE asset_id = asset.id)
+       AND NOT EXISTS (
+         SELECT 1 FROM mono_product_model_profiles
+         WHERE anchor_asset_id = asset.id OR body_asset_id = asset.id
+       )`,
+  ).all(actor.workspaceId, olderThan) as Array<{ id: string; storage_key: string | null }>;
+  return rows.map((row) => ({ id: row.id, storageKey: row.storage_key ?? undefined }));
+}
+
 export function createMonoSubject(actor: MonoActor, input: MonoSubjectInput): MonoSubject | null {
   if (!getMonoAsset(actor, input.assetId)) return null;
   const now = Date.now();

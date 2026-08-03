@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +20,7 @@ import {
   publishImages,
   refineProductForeground,
   refineSkuForeground,
+  requestShadowBackdrop,
   resolveProductFolder,
   resolveProductFolderByName,
   runModelGenerationPhase,
@@ -666,5 +667,75 @@ describe("product pipeline partial publish", () => {
     await mkdir(stage, { recursive: true });
     await sharp({ create: { width: 790, height: 681, channels: 3, background: "#ffffff" } }).jpeg().toFile(path.join(stage, "商品一_02.jpg"));
     await expect(verifyDetailOutputs(stage, "商品一", [], new Set(["02"]))).resolves.toBeUndefined();
+  });
+});
+
+describe("online shadow backdrop generation", () => {
+  const originalBaseUrl = process.env.MONO_IMAGE_BASE_URL;
+  const originalApiKey = process.env.MONO_IMAGE_API_KEY;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (originalBaseUrl === undefined) delete process.env.MONO_IMAGE_BASE_URL;
+    else process.env.MONO_IMAGE_BASE_URL = originalBaseUrl;
+    if (originalApiKey === undefined) delete process.env.MONO_IMAGE_API_KEY;
+    else process.env.MONO_IMAGE_API_KEY = originalApiKey;
+  });
+
+  async function sourceFixture(root: string, width = 60, height = 40): Promise<{
+    path: string; name: string; stem: string; size: number; mtimeMs: number; hash: string;
+  }> {
+    const sourcePath = path.join(root, "hat.jpg");
+    await sharp({ create: { width, height, channels: 3, background: "#eeeeee" } }).jpeg().toFile(sourcePath);
+    const stats = await (await import("node:fs/promises")).stat(sourcePath);
+    return { path: sourcePath, name: "hat.jpg", stem: "hat", size: stats.size, mtimeMs: stats.mtimeMs, hash: "irrelevant" };
+  }
+
+  it("sends the source photo as the sole reference, sized to its own aspect ratio", async () => {
+    process.env.MONO_IMAGE_BASE_URL = "https://image.example.test";
+    process.env.MONO_IMAGE_API_KEY = "test-image-key";
+    const root = await fixture();
+    const source = await sourceFixture(root, 90, 60);
+    const resultPng = await sharp({ create: { width: 12, height: 8, channels: 3, background: "#123456" } }).png().toBuffer();
+
+    const fetchMock = vi.fn().mockImplementation((endpoint: string) => {
+      if (endpoint === "https://image.example.test/v1/api/generate") {
+        return Promise.resolve(new Response(
+          JSON.stringify({ results: [{ url: "https://image.example.test/shadow.png" }] }),
+          { status: 200 },
+        ));
+      }
+      return Promise.resolve(new Response(new Uint8Array(resultPng), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const backdrop = await requestShadowBackdrop(source, new AbortController().signal, "ws-test");
+
+    const generateCall = fetchMock.mock.calls.find(([endpoint]) => endpoint === "https://image.example.test/v1/api/generate");
+    expect(generateCall).toBeDefined();
+    const body = JSON.parse(generateCall![1].body);
+    expect(body.images).toHaveLength(1);
+    expect(body.images[0]).toMatch(/^data:image\/jpeg;base64,/);
+    expect(body.aspectRatio).toBe("90:60");
+
+    const { info } = await sharp(backdrop).raw().toBuffer({ resolveWithObject: true });
+    expect(info).toMatchObject({ width: 90, height: 60, channels: 3 });
+  });
+
+  it("throws after three failed attempts instead of falling back to the local algorithm", async () => {
+    process.env.MONO_IMAGE_BASE_URL = "https://image.example.test";
+    process.env.MONO_IMAGE_API_KEY = "test-image-key";
+    const root = await fixture();
+    const source = await sourceFixture(root);
+
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify({ error: "violation" }), { status: 400 })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(requestShadowBackdrop(source, new AbortController().signal, "ws-test")).rejects.toThrow(
+      "主图阴影三次都没拿到有效结果",
+    );
+    const generateCalls = fetchMock.mock.calls.filter(([endpoint]) => endpoint === "https://image.example.test/v1/api/generate");
+    expect(generateCalls).toHaveLength(3);
   });
 });

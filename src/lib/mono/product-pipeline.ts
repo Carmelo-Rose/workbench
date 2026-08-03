@@ -71,6 +71,13 @@ export async function listProductWorkflows(): Promise<ProductWorkflow[]> {
   }));
 }
 const MODEL_CONCURRENCY = 8;
+/**
+ * TEMPORARY (shadow-backdrop trial only): when true, runProductPipeline
+ * publishes 主图/SKU and returns without generating the paid images/ detail
+ * set. Flip back to false (or delete alongside the block that reads it)
+ * once the online shadow generation is confirmed.
+ */
+const PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL = true;
 const DETAIL_SLOTS = [
   ["01", 790, 1243, "model"], ["02", 790, 681, "fixed"], ["03", 790, 1021, "model"],
   ["04", 790, 1008, "model"], ["05", 790, 1005, "model"], ["06", 790, 1004, "model"],
@@ -924,13 +931,14 @@ async function makeWhiteMaster(
   output: string,
   folderKey: string,
   signal: AbortSignal,
+  workspaceId: string,
 ): Promise<MasterRenderLayers> {
   const cutout = await requestCutout(source, folderKey, signal);
   const rawForeground = await composeWhiteMaster(source.path, cutout, output);
   const [foreground, skuForeground, naturalShadow] = await Promise.all([
     refineProductForeground(rawForeground),
     refineSkuForeground(rawForeground),
-    composeNaturalShadowBackdrop(source.path, cutout),
+    requestShadowBackdrop(source, signal, workspaceId),
   ]);
   return { foreground, skuForeground, naturalShadow };
 }
@@ -1242,7 +1250,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     if (signal.aborted) throw new Error("任务已取消");
     await assertSourcesUnchanged(sources);
     const name = `${source.stem}.jpg`; const output = path.join(masterStage, name);
-    const layers = await makeWhiteMaster(source, output, folderKey, signal);
+    const layers = await makeWhiteMaster(source, output, folderKey, signal, job.workspaceId);
     layersByPath.set(output, layers);
     outputs[index] = { name, sha256: sha256(await readFile(output)) };
     progress(job, "正在生成白底主图", Math.round(5 + (outputs.filter(Boolean).length / articleSources.length) * 70), { sourceCount: articleSources.length, outputs: outputs.filter(Boolean) });
@@ -1303,6 +1311,35 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     ...(await persistProductDirectory(job, masterDestination, "product-main")),
     ...(await persistProductDirectory(job, skuDestination, "product-sku")),
   ];
+
+  // TEMPORARY (shadow-backdrop trial only): skip paid model-image generation
+  // and the images/ detail set entirely so a run only exercises 主图/SKU.
+  // Remove this block — and the `PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL` constant
+  // below — once the online shadow generation is confirmed and this goes back
+  // to producing the full detail set.
+  if (PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL) {
+    await rm(masterStage, { recursive: true, force: true });
+    return {
+      stage: "completed",
+      progress: 100,
+      relativePath,
+      templateVersion: manifest.version,
+      modelPairId: modelPair?.id,
+      modelPairName: modelPair?.displayName,
+      colors: classification.colors.map((color) => ({
+        rank: color.rank,
+        lab: color.lab.map((channel) => Math.round(channel * 10) / 10),
+        shots: color.members.length,
+      })),
+      detailShots: detailShots.length || classification.details.length,
+      slots: [],
+      deliverables,
+      warnings: [...classification.warnings, "PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL：本次运行跳过了 images 详情图生成"],
+      resumed: false,
+      incomplete: false,
+      failedSlots: [],
+    };
+  }
 
   const slotColorRank = modelSlotColorRanks(classification.colors.length);
   const rawOnlySlots = job.input.onlySlots;
@@ -1638,15 +1675,16 @@ export function modelImageReferences(
     : [...productReferences];
 }
 
-async function requestModelImage(
+async function callImageGenerate(
   references: readonly (string | Buffer)[],
   prompt: string,
-  slot: DetailSlot,
+  aspectRatio: string,
   signal: AbortSignal,
   workspaceId: string,
+  model: string,
 ): Promise<Buffer> {
   const base = getConfigValue("MONO_IMAGE_BASE_URL", workspaceId); const key = getConfigValue("MONO_IMAGE_API_KEY", workspaceId);
-  if (!base || !key) throw new Error("详情套图需要配置 MONO_IMAGE_BASE_URL 和 MONO_IMAGE_API_KEY（将调用付费 gpt-image-2）");
+  if (!base || !key) throw new Error(`详情套图需要配置 MONO_IMAGE_BASE_URL 和 MONO_IMAGE_API_KEY（将调用付费 ${model}）`);
   const endpoint = process.env.MONO_IMAGE_GENERATE_URL ?? new URL("/v1/api/generate", base).toString();
   const bytes = await Promise.all(references.map((reference) =>
     Buffer.isBuffer(reference) ? reference : readFile(reference)));
@@ -1654,10 +1692,10 @@ async function requestModelImage(
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
     body: JSON.stringify({
-      model: "gpt-image-2",
+      model,
       prompt,
       images: bytes.map((buffer) => `data:image/jpeg;base64,${buffer.toString("base64")}`),
-      aspectRatio: `${slot[1]}:${slot[2]}`,
+      aspectRatio,
       replyType: "json",
     }),
     signal,
@@ -1670,8 +1708,66 @@ async function requestModelImage(
   let json: GenerateResponse | null = null;
   try { json = JSON.parse(body) as GenerateResponse; } catch { /* upstream errors are not always JSON */ }
   const url = json?.url ?? json?.results?.[0]?.url;
-  if (!response.ok || !url) throw new Error(`gpt-image-2 请求失败 (HTTP ${response.status})：${body.slice(0, 300)}`);
-  const image = await fetch(url, { signal }); if (!image.ok) throw new Error("无法下载 gpt-image-2 结果"); return Buffer.from(await image.arrayBuffer());
+  if (!response.ok || !url) throw new Error(`${model} 请求失败 (HTTP ${response.status})：${body.slice(0, 300)}`);
+  const image = await fetch(url, { signal }); if (!image.ok) throw new Error(`无法下载 ${model} 结果`); return Buffer.from(await image.arrayBuffer());
+}
+
+async function requestModelImage(
+  references: readonly (string | Buffer)[],
+  prompt: string,
+  slot: DetailSlot,
+  signal: AbortSignal,
+  workspaceId: string,
+): Promise<Buffer> {
+  return callImageGenerate(references, prompt, `${slot[1]}:${slot[2]}`, signal, workspaceId, "gpt-image-2");
+}
+
+const SHADOW_BACKDROP_PROMPT = "请保持商品本体像素级不变，构图与裁切与输入图完全一致；"
+  + "将背景替换为纯白色 #FFFFFF，并渲染一个自然、方向感一致、虚实过渡自然的影棚级投影，"
+  + "不要改变商品的形状、颜色、材质、图案或位置。";
+
+/**
+ * Replaces the local histogram-based shadow recovery with the same online
+ * generation service already used for detail-page model shots
+ * (`MONO_IMAGE_BASE_URL`/`MONO_IMAGE_API_KEY`). The source photo itself is
+ * sent as the only reference — its real lighting already contains the
+ * shadow — and the model is asked to clean the background rather than
+ * invent one from nothing.
+ *
+ * No silent fallback to `composeNaturalShadowBackdrop` on failure: a
+ * downgraded-quality shadow must surface as a failed run, not slip through
+ * unnoticed.
+ */
+export async function requestShadowBackdrop(
+  source: SourceImage,
+  signal: AbortSignal,
+  workspaceId: string,
+  model = "gpt-image-2",
+): Promise<Buffer> {
+  const { width, height } = await sharp(source.path).metadata();
+  if (!width || !height) throw new Error("无法读取原图尺寸");
+  let lastFailure = "";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const generated = await callImageGenerate(
+        [source.path],
+        SHADOW_BACKDROP_PROMPT,
+        `${width}:${height}`,
+        signal,
+        workspaceId,
+        model,
+      );
+      return await sharp(generated)
+        .resize(width, height, { fit: "fill" })
+        .removeAlpha()
+        .png()
+        .toBuffer();
+    } catch (error) {
+      if (signal.aborted) throw error;
+      lastFailure = error instanceof Error ? error.message : "生成结果无法解码";
+    }
+  }
+  throw new Error(`主图阴影三次都没拿到有效结果：${lastFailure}`);
 }
 /** Validates only the slots actually staged this run — a failed or `onlySlots`-skipped model slot has no file here, and that is expected. */
 export async function verifyDetailOutputs(

@@ -12,7 +12,9 @@ import {
 import { useRouter } from "next/navigation";
 import { useAui } from "@assistant-ui/react";
 import { useImage2Mode } from "@/lib/image2-mode";
+import { useVideoGenerationMode } from "@/lib/video-generation-mode";
 import { useExitImage2Mode } from "@/components/workbench/Image2ChatMode";
+import { adoptComposerImageAsVideoFrame } from "@/components/workbench/VideoGenerationMode";
 import { VideoAnalysisLauncher } from "@/components/workbench/VideoAnalysisLauncher";
 import { ProductPipelineLauncher } from "@/components/workbench/ProductPipelineLauncher";
 import type { CapabilityAction } from "@/lib/workbench/capabilities";
@@ -53,6 +55,9 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
   const activateImage2 = useImage2Mode((state) => state.activate);
   const image2Active = useImage2Mode((state) => state.active);
   const exitImage2Mode = useExitImage2Mode();
+  const videoGenerationActive = useVideoGenerationMode((state) => state.active);
+  const activateVideoGeneration = useVideoGenerationMode((state) => state.activate);
+  const resetVideoGeneration = useVideoGenerationMode((state) => state.reset);
   const [videoDialogOpen, setVideoDialogOpen] = useState(false);
   const [productPipelineOpen, setProductPipelineOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -125,13 +130,25 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
   const run = ({ action = "fill", prompt }: CapabilityRunInput) => {
     // 从生图模式切到别的能力时，先清掉模板参考图和模式状态，避免底部的
     // "模板 / 比例 / 张数" 生图控制条残留在跟生图无关的对话里。
-    if (action !== "image2-mode" && image2Active) {
+    if (action !== "image2-mode" && action !== "video-generation-mode" && image2Active) {
       void exitImage2Mode();
+    }
+    if (action !== "video-generation-mode" && videoGenerationActive) {
+      resetVideoGeneration();
     }
     switch (action) {
       case "image2-mode":
+        if (videoGenerationActive) resetVideoGeneration();
         activateImage2();
         router.push("/?mode=image2");
+        return;
+      case "video-generation-mode":
+        void (async () => {
+          if (image2Active) await exitImage2Mode();
+          await adoptComposerImageAsVideoFrame(aui);
+          activateVideoGeneration();
+          router.push("/?mode=video");
+        })();
         return;
       case "image-picker":
         reverseImageInputRef.current?.click();

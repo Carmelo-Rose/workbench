@@ -29,6 +29,16 @@ export const API_CONFIG_GROUPS = {
     label: "生图服务（Mono）",
     keys: ["MONO_IMAGE_BASE_URL", "MONO_IMAGE_API_KEY", "MONO_IMAGE_MODEL"] as const,
   },
+  videoGeneration: {
+    label: "视频生成服务（Mono）",
+    keys: [
+      "VIDEO_GENERATION_PROVIDER",
+      "VIDEO_GENERATION_BASE_URL",
+      "VIDEO_GENERATION_API_KEY",
+      "VIDEO_GENERATION_T2V_MODEL",
+      "VIDEO_GENERATION_I2V_MODEL",
+    ] as const,
+  },
   videoStorage: {
     label: "大视频云存储（TOS）",
     keys: ["TOS_AK", "TOS_SK", "TOS_REGION", "TOS_BUCKET"] as const,
@@ -43,6 +53,7 @@ const SECRET_KEYS = new Set<string>([
   "VISION_API_KEY",
   "MONO_VIDEO_API_KEY",
   "MONO_IMAGE_API_KEY",
+  "VIDEO_GENERATION_API_KEY",
   "TOS_AK",
   "TOS_SK",
 ]);

@@ -23,6 +23,12 @@
 | 占位符 | 含义 |
 |---|---|
 | `{{INPUT_MEDIA}}` | 输入文件名（Workbench 已上传到 ComfyUI 的 input 目录） |
+
+`wan2.2-ti2v-5b.json` is the checked-in API prompt export for the official
+Wan2.2 TI2V-5B workflow. It uses `wan2.2_ti2v_5B_fp16.safetensors`,
+`wan2.2_vae.safetensors`, and the installed UMT5 encoder. The video runner
+fills its prompt, seed, dimensions, 121 frames, and output prefix; for text to
+video it removes the optional `LoadImage` edge before submission.
 | `{{BACKGROUND_COLOR}}` | 背景纯色 `#RRGGBB`，未指定时为空字符串 |
 | `{{BACKGROUND_MEDIA}}` | 背景图文件名，未指定时为空字符串 |
 

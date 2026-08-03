@@ -112,7 +112,7 @@ const VIDEO_OBJECT_PREFIX = "workbench-video";
 const PRESIGNED_GET_TTL_SECONDS = 3600;
 
 function inferExtension(mimeType: string): string {
-  const match = /^video\/([0-9a-z]+)/i.exec(mimeType);
+  const match = /^(?:video|image)\/([0-9a-z]+)/i.exec(mimeType);
   return match ? `.${match[1].toLowerCase()}` : ".mp4";
 }
 
@@ -125,5 +125,17 @@ export async function uploadVideoToTosAndGetUrl(buffer: Buffer, mimeType: string
   const datePath = new Date().toISOString().slice(0, 10).replace(/-/g, "/");
   const key = `${VIDEO_OBJECT_PREFIX}/${datePath}/${randomUUID()}${inferExtension(mimeType)}`;
   await putObject(config, key, buffer, mimeType || "video/mp4");
+  return buildPresignedGetUrl(config, key, PRESIGNED_GET_TTL_SECONDS);
+}
+
+/** A short-lived HTTPS URL for image-to-video input frames. */
+export async function uploadImageToTosAndGetUrl(buffer: Buffer, mimeType: string): Promise<string> {
+  const config = getTosConfig();
+  if (!config) {
+    throw new Error("视频输入帧云存储未配置：请设置 TOS_AK / TOS_SK / TOS_REGION / TOS_BUCKET");
+  }
+  const datePath = new Date().toISOString().slice(0, 10).replace(/-/g, "/");
+  const key = `${VIDEO_OBJECT_PREFIX}/${datePath}/${randomUUID()}${inferExtension(mimeType || "image/png")}`;
+  await putObject(config, key, buffer, mimeType || "image/png");
   return buildPresignedGetUrl(config, key, PRESIGNED_GET_TTL_SECONDS);
 }

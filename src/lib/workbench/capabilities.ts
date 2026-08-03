@@ -20,6 +20,7 @@ export type CapabilityAction =
   | "import-picker"
   | "video-picker"
   | "image2-mode"
+  | "video-generation-mode"
   | "product-pipeline";
 
 export type CapabilityOption = {
@@ -110,6 +111,15 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
     label: "视频工具箱",
     iconKey: "film",
     options: [
+      {
+        id: "generate-video",
+        label: "生成视频",
+        prompt: "",
+        action: "video-generation-mode",
+        iconKey: "film",
+        hint: "创建文生或图生视频，规格以当前 provider 能力为准",
+        slash: true,
+      },
       {
         id: "video-erase",
         label: "智能擦除",
