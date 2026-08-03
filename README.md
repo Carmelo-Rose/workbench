@@ -43,7 +43,7 @@ Browser ──► Next.js (App Router, Turbopack)
 ```bash
 cp .env.example .env.local   # 填入你的 API Key
 npm install
-npm run dev                  # http://localhost:3000
+npm run dev                  # http://localhost:3020
 ```
 
 ### 环境变量
@@ -82,7 +82,7 @@ npm run mono:mcp
 ```
 
 MCP 默认监听 `http://127.0.0.1:8787/mcp`，并转发至 Workbench 的
-`http://127.0.0.1:3000`。Hermes 只有确认支持远程 Streamable HTTP MCP 后才应配置该地址。
+`http://127.0.0.1:3020`。Hermes 只有确认支持远程 Streamable HTTP MCP 后才应配置该地址。
 
 ## 常用命令
 

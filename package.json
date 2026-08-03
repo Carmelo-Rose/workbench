@@ -7,10 +7,10 @@
   },
   "scripts": {
     "postinstall": "node scripts/patch-assistant-ui-mention-trigger.mjs",
-    "dev": "next dev",
+    "dev": "next dev -p 3020",
     "build": "next build",
     "test": "vitest run",
-    "start": "next start",
+    "start": "next start -p 3020",
     "lint": "eslint",
     "mono:backfill-images": "tsx scripts/backfill-mono-image-assets.ts",
     "mono:mcp": "node services/mono-mcp/server.mjs",

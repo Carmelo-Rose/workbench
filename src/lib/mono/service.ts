@@ -157,7 +157,7 @@ function imageSource(sourceUrl: string): URL | string {
 
 /** 存储素材对外的可取回 URL（外部处理服务用它拉取内容）。 */
 function publicAssetUrl(assetId: string): string {
-  const baseUrl = process.env.WORKBENCH_PUBLIC_URL ?? "http://127.0.0.1:3000";
+  const baseUrl = process.env.WORKBENCH_PUBLIC_URL ?? "http://127.0.0.1:3020";
   return new URL(`/api/workbench/mono/assets/${encodeURIComponent(assetId)}/content`, baseUrl).toString();
 }
 
@@ -365,7 +365,7 @@ export function createImageGenerationJob(actor: MonoActor, input: MonoImageGener
 
 function absoluteTemplateReference(path: string): string {
   if (/^https?:\/\//.test(path)) return path;
-  const baseUrl = process.env.WORKBENCH_PUBLIC_URL ?? "http://127.0.0.1:3000";
+  const baseUrl = process.env.WORKBENCH_PUBLIC_URL ?? "http://127.0.0.1:3020";
   return new URL(path, baseUrl).toString();
 }
 

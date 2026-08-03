@@ -5,7 +5,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import * as z from "zod/v4";
 
 const port = Number.parseInt(process.env.MONO_MCP_PORT ?? "8787", 10);
-const serviceUrl = (process.env.MONO_SERVICE_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "");
+const serviceUrl = (process.env.MONO_SERVICE_URL ?? "http://127.0.0.1:3020").replace(/\/$/, "");
 const mcpApiKey = process.env.MONO_MCP_API_KEY ?? "";
 const platformApiKey = process.env.MONO_PLATFORM_API_KEY ?? "";
 

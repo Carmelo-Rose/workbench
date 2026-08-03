@@ -5,7 +5,7 @@
       "name": "workbench-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
-      "port": 3000
+      "port": 3020
     },
     {
       "name": "workbench-dev-3100",

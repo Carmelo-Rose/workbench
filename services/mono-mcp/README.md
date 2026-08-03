@@ -7,7 +7,7 @@ Mono Creative Service API.
 ```bash
 MONO_MCP_API_KEY=client-token \
 MONO_PLATFORM_API_KEY=platform-token \
-MONO_SERVICE_URL=http://127.0.0.1:3000 \
+MONO_SERVICE_URL=http://127.0.0.1:3020 \
 npm run mono:mcp
 ```
 
