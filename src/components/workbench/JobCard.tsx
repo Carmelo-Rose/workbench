@@ -116,7 +116,7 @@ export function JobCard({ initialJob, kind, children, onRetry, inline = false }:
 
   if (!job) {
     if (inline) {
-      return <p className="text-muted-foreground my-3 flex items-center gap-2 text-sm"><LoaderCircleIcon className="size-4 animate-spin" />正在创建图片…</p>;
+      return <p className="text-muted-foreground my-3 flex items-center gap-2 text-sm"><LoaderCircleIcon className="size-4 animate-spin" />正在生成图片…</p>;
     }
     return (
       <TaskShell title={title} status="正在准备" icon={<LoaderCircleIcon className="size-4 animate-spin" />}>
@@ -134,7 +134,7 @@ export function JobCard({ initialJob, kind, children, onRetry, inline = false }:
           <span className="flex items-center gap-2">
             {isActive ? <LoaderCircleIcon className="size-4 animate-spin" /> : job.status === "succeeded" ? <CheckIcon className="size-4" /> : <XIcon className="size-4" />}
             {/* 图片任务串行执行，排队和真正在跑要分开说，否则用户只看到一个转圈。 */}
-            <span>{job.status === "queued" ? "排队中，等前面的任务完成" : isActive ? "正在创建图片" : job.status === "succeeded" ? "图片已生成" : meta.label}</span>
+            <span>{job.status === "queued" ? "排队中，等前面的任务完成" : isActive ? "正在生成图片" : job.status === "succeeded" ? "图片已生成" : meta.label}</span>
           </span>
           {isActive ? (
             <Button variant="ghost" size="xs" onClick={() => void cancel()} disabled={isCancelling || stopRequested}>

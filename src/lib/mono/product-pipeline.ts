@@ -3,8 +3,8 @@ import { cp, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
-import { createMonoAsset, linkMonoJobAsset, updateMonoJobResult } from "./store";
-import { saveObjectBuffer } from "@/lib/storage";
+import { createMonoAsset, getMonoAsset, linkMonoJobAsset, updateMonoJobResult } from "./store";
+import { readObjectBuffer, saveObjectBuffer } from "@/lib/storage";
 import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
 import { getConfigValue } from "@/lib/server/api-config";
 import {
@@ -24,7 +24,7 @@ import {
 } from "./product-template";
 import { resolveProductModelPair, type ResolvedProductModelPair } from "./product-model-pairs";
 import { productDetailPageRoot, productSourceRoot } from "./product-roots";
-import type { MonoJob, ProductPipelineInput } from "./contracts";
+import type { MonoActor, MonoJob, ProductPipelineInput } from "./contracts";
 
 export { productDetailPageRoot, productSourceRoot } from "./product-roots";
 
@@ -87,6 +87,7 @@ const DETAIL_SLOTS = [
 export type DetailSlot = typeof DETAIL_SLOTS[number];
 export const MODEL_SLOTS: readonly DetailSlot[] = DETAIL_SLOTS.filter((slot) => slot[3] === "model");
 const MODEL_SLOT_IDS: ReadonlySet<string> = new Set(MODEL_SLOTS.map((slot) => slot[0]));
+export const DETAIL_SLOT_IDS: readonly string[] = DETAIL_SLOTS.map((slot) => slot[0]);
 
 /** Narrows a retry run to the requested model slots, in their original template order. */
 export function selectModelSlots(onlySlots: readonly string[] | null | undefined): DetailSlot[] {
@@ -343,6 +344,40 @@ export function resolveDetailPageFolder(relativePath: string, root = productDeta
   return absolutePath;
 }
 
+/**
+ * One slot's image bytes, tried in the same order for every caller (single
+ * image route, zip-all route): a stored deliverable asset first, then the
+ * published detail-page mirror, then this run's staging directory. Kept in
+ * one place so the "which of three sources is this slot in" logic can't
+ * drift between the two routes that need it.
+ */
+export async function resolveProductPipelineSlotImage(
+  actor: MonoActor,
+  job: MonoJob,
+  slot: string,
+): Promise<Buffer | null> {
+  const deliverables = (job.result as {
+    deliverables?: Array<{ assetId: string; role: string; slotKey: string }>;
+  } | null)?.deliverables ?? [];
+  const deliverable = deliverables.find((item) => item.role === "product-detail" && item.slotKey === slot);
+  if (deliverable) {
+    const asset = getMonoAsset(actor, deliverable.assetId);
+    if (asset?.storageKey) return readObjectBuffer(asset.storageKey);
+  }
+
+  const folder = resolveProductFolder(String(job.input.folderId ?? ""));
+  const imagesDir = path.resolve(resolveDetailPageFolder(folder.relativePath), "images");
+  const baseName = path.basename(folder.absolutePath);
+  const fileName = `${baseName}_${slot}.jpg`;
+  const target = path.resolve(imagesDir, fileName);
+  if (path.dirname(target) !== imagesDir) return null;
+
+  const stagingDir = path.resolve(productPipelineStagingRoot(job.id), "images");
+  return readFile(target)
+    .catch(() => readFile(path.resolve(stagingDir, fileName)))
+    .catch(() => null);
+}
+
 /** A server-only, opaque identity for a shared product folder. */
 export function productPipelineFolderKey(folderId: string): string {
   // Canonicalize base64url first so a padded and an unpadded representation of
@@ -390,6 +425,21 @@ async function folderStatus(sourceDir: string, detailDir: string, folderName: st
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+/**
+ * Whether the root itself can be read at all. Kept separate from the
+ * recursive `visit` in `listProductFolders`, whose per-directory `catch {
+ * return }` is correct for a permission-denied subdirectory (skip it, keep
+ * listing the rest) but wrong for the root — a root that can't be read at
+ * all (share not mounted, path typo'd) is a configuration failure, not an
+ * empty result, and the two must not collapse into the same "0 个商品" UI.
+ */
+export async function isProductRootReachable(root = productSourceRoot()): Promise<boolean> {
+  try {
+    const info = await stat(normalizeRoot(root));
+    return info.isDirectory();
+  } catch { return false; }
 }
 
 /** Only direct children and grandchildren that themselves contain 原图 are selectable. */

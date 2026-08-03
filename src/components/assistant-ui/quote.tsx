@@ -223,7 +223,7 @@ function ComposerQuotePreviewDismiss({
       {children ?? (
         <button
           type="button"
-          aria-label="Dismiss quote"
+          aria-label="移除引用"
           className={cn(defaultClassName, className)}
         >
           <XIcon className="size-3.5" />

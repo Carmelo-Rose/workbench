@@ -73,6 +73,9 @@ export function ProductPipelineLauncher({
   const [error, setError] = useState<string>();
   const [starting, setStarting] = useState(false);
   const [modelLibraryVersion, setModelLibraryVersion] = useState(0);
+  const [rootReachable, setRootReachable] = useState(true);
+  const [root, setRoot] = useState<string>();
+  const [retryToken, setRetryToken] = useState(0);
   const reopenAfterLibrary = useRef(false);
 
   useEffect(() => {
@@ -106,13 +109,15 @@ export function ProductPipelineLauncher({
           setWorkflows(installed);
           setWorkflowId((current) =>
             current && installed.some((item) => item.id === current) ? current : installed[0]?.id);
+          setRootReachable(payload.rootReachable ?? true);
+          setRoot(payload.root);
           setError(undefined);
         })
         .catch((reason: unknown) =>
           setError(reason instanceof Error ? reason.message : "无法读取商品文件夹"));
     }, 150);
     return () => clearTimeout(timer);
-  }, [open, query, modelLibraryVersion]);
+  }, [open, query, modelLibraryVersion, retryToken]);
 
   const selectedFolder = folders.find((item) => item.id === selected);
   const selectedPair = modelPairs.find((item) => item.id === modelPairId);
@@ -201,9 +206,30 @@ export function ProductPipelineLauncher({
               </button>
             ))}
             {!folders.length ? (
-              <p className="text-muted-foreground col-span-full rounded-xl bg-muted/40 p-6 text-center text-sm">
-                没有匹配的商品
-              </p>
+              !rootReachable ? (
+                <div className="text-muted-foreground col-span-full rounded-xl bg-muted/40 p-6 text-center text-sm">
+                  <p className="text-foreground font-medium">共享盘不可达</p>
+                  <p className="mt-1">
+                    连不上 {root ?? "商品原图目录"}，请检查网络或确认共享盘已挂载
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => setRetryToken((token) => token + 1)}
+                  >
+                    重试
+                  </Button>
+                </div>
+              ) : query ? (
+                <p className="text-muted-foreground col-span-full rounded-xl bg-muted/40 p-6 text-center text-sm">
+                  没有匹配「{query}」的商品，换个关键词试试
+                </p>
+              ) : (
+                <p className="text-muted-foreground col-span-full rounded-xl bg-muted/40 p-6 text-center text-sm">
+                  目录下暂无商品，请让摄影师先上传原图
+                </p>
+              )
             ) : null}
           </div>
         </section>

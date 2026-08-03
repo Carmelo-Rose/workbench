@@ -117,7 +117,7 @@ export function MonoImageBatchGallery({
                 >
                   <ImageWithFallback
                     src={downloadUrl(job.id, slot.index)}
-                    alt={`Mono 生成结果 ${slot.index + 1}`}
+                    alt={`生成结果 ${slot.index + 1}`}
                     className="size-full object-contain"
                   />
                   <span className="absolute inset-0 flex items-center justify-center bg-black/35 text-white opacity-0 transition-opacity group-hover:opacity-100">
@@ -253,7 +253,7 @@ function ImageLightbox({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={current.displayUrl}
-            alt={`Mono 生成结果 ${current.index + 1}`}
+            alt={`生成结果 ${current.index + 1}`}
             className="max-h-[80vh] w-auto max-w-full rounded-xl object-contain shadow-2xl"
           />
           {images.length > 1 ? (

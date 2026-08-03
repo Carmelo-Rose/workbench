@@ -360,6 +360,99 @@ export function importSnapshot(
   return { importedThreads, importedMessages };
 }
 
+export type ThreadSearchHit = {
+  threadId: string;
+  title: string | null;
+  lastMessageAt: number | null;
+  snippet: string | null;
+  matchedIn: "title" | "message";
+};
+
+/** 转义 LIKE 通配符，配合 `ESCAPE '\'` 使用。 */
+function escapeLike(input: string): string {
+  return input.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/** 正文预筛的行数上限：先用 LIKE 命中候选行，再逐行 JSON 解析确认，避免全表扫描拖垮侧边栏。 */
+const MESSAGE_PREFILTER_LIMIT = 500;
+const SNIPPET_RADIUS = 40;
+
+type TitleRow = { remote_id: string; title: string | null; last_message_at: number | null };
+type MessageSearchRow = {
+  thread_id: string;
+  content_json: string;
+  title: string | null;
+  last_message_at: number | null;
+};
+
+/** 标题 LIKE 命中优先，正文用 LIKE 预筛 + parts[] 文本二次确认，双 scope 隔离。 */
+export function searchThreads(scope: ThreadScope, q: string, limit = 20): ThreadSearchHit[] {
+  const query = q.trim();
+  if (!query) return [];
+  const db = getDb();
+  const likeQuery = `%${escapeLike(query)}%`;
+  const hits = new Map<string, ThreadSearchHit>();
+
+  const titleRows = db.prepare(
+    `SELECT remote_id, title, last_message_at FROM threads
+     WHERE workspace_id = ? AND owner_user_id = ? AND title LIKE ? ESCAPE '\\'
+     ORDER BY last_message_at DESC
+     LIMIT ?`,
+  ).all(scope.workspaceId, scope.userId, likeQuery, limit) as TitleRow[];
+  for (const row of titleRows) {
+    hits.set(row.remote_id, {
+      threadId: row.remote_id,
+      title: row.title,
+      lastMessageAt: row.last_message_at,
+      snippet: null,
+      matchedIn: "title",
+    });
+  }
+
+  if (hits.size < limit) {
+    const messageRows = db.prepare(
+      `SELECT m.thread_id AS thread_id, m.content_json AS content_json,
+              t.title AS title, t.last_message_at AS last_message_at
+       FROM messages m
+       JOIN threads t ON t.workspace_id = m.workspace_id AND t.remote_id = m.thread_id
+       WHERE m.workspace_id = ? AND t.owner_user_id = ? AND m.content_json LIKE ? ESCAPE '\\'
+       ORDER BY m.updated_at DESC
+       LIMIT ?`,
+    ).all(scope.workspaceId, scope.userId, likeQuery, MESSAGE_PREFILTER_LIMIT) as MessageSearchRow[];
+
+    const lowerQuery = query.toLowerCase();
+    for (const row of messageRows) {
+      if (hits.size >= limit) break;
+      if (hits.has(row.thread_id)) continue;
+      let content: { parts?: { type?: string; text?: string }[] };
+      try {
+        content = JSON.parse(row.content_json) as typeof content;
+      } catch {
+        continue;
+      }
+      const parts = Array.isArray(content.parts) ? content.parts : [];
+      const combined = parts
+        .filter((p) => p?.type === "text" && typeof p.text === "string")
+        .map((p) => p.text as string)
+        .join("\n");
+      const idx = combined.toLowerCase().indexOf(lowerQuery);
+      if (idx === -1) continue;
+      const start = Math.max(0, idx - SNIPPET_RADIUS);
+      const end = Math.min(combined.length, idx + query.length + SNIPPET_RADIUS);
+      const snippet = `${start > 0 ? "…" : ""}${combined.slice(start, end)}${end < combined.length ? "…" : ""}`;
+      hits.set(row.thread_id, {
+        threadId: row.thread_id,
+        title: row.title,
+        lastMessageAt: row.last_message_at,
+        snippet,
+        matchedIn: "message",
+      });
+    }
+  }
+
+  return Array.from(hits.values()).slice(0, limit);
+}
+
 export function exportSnapshot(scope: ThreadScope): ThreadSnapshot[] {
   const db = getDb();
   return listThreads(scope).map((thread) => {

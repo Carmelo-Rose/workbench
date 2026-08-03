@@ -1,8 +1,8 @@
 "use client";
 
-import { CheckIcon, PawPrintIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, PawPrintIcon } from "lucide-react";
 import type { FC } from "react";
-import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Button } from "@/components/ui/button";
 import { InkKoiPet } from "@/components/workbench/pets/ink-koi";
 import { InkWispPet } from "@/components/workbench/pets/ink-wisp";
 import { InspirationGaugePet } from "@/components/workbench/pets/inspiration-gauge";
@@ -31,11 +31,11 @@ export type CompanionId = (typeof COMPANIONS)[number]["id"];
 const COMPANION_STORAGE_KEY = "wb:companion";
 
 export const loadCompanion = (): CompanionId => {
-  if (typeof window === "undefined") return "neko";
+  if (typeof window === "undefined") return "none";
   const stored = window.localStorage.getItem(COMPANION_STORAGE_KEY);
   return COMPANIONS.some((c) => c.id === stored)
     ? (stored as CompanionId)
-    : "neko";
+    : "none";
 };
 
 export const saveCompanion = (id: CompanionId) => {
@@ -63,18 +63,19 @@ export const CompanionPicker: FC<{
   value: CompanionId;
   onChange: (id: CompanionId) => void;
 }> = ({ value, onChange }) => {
+  const active = COMPANIONS.find((c) => c.id === value) ?? COMPANIONS[0];
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <TooltipIconButton
-          variant="ghost"
-          size="icon"
-          tooltip="伴宠"
-          side="bottom"
-          className="size-8 rounded-full data-[state=open]:bg-accent"
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 rounded-full px-3 font-normal data-[state=open]:bg-accent"
         >
-          <PawPrintIcon className="size-4" />
-        </TooltipIconButton>
+          <PawPrintIcon className="text-muted-foreground size-4" />
+          {active.name}
+          <ChevronDownIcon className="text-muted-foreground size-3.5" />
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-32 rounded-xl">
         {COMPANIONS.map((c) => (

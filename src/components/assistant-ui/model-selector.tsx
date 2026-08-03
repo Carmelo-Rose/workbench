@@ -371,7 +371,7 @@ export type ModelSelectorContentProps = ComponentPropsWithoutRef<
 function ModelSelectorFocusAnchor() {
   return (
     <div className="sr-only">
-      <CommandInput readOnly aria-label="Model" />
+      <CommandInput readOnly aria-label="模式" />
     </div>
   );
 }

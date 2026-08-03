@@ -55,7 +55,7 @@ export type CapabilityGroup = {
 export const CAPABILITY_GROUPS: CapabilityGroup[] = [
   {
     id: "mono",
-    label: "Mono",
+    label: "创作工具",
     iconKey: "sparkles",
     options: [
       {

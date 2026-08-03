@@ -115,19 +115,33 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
     ?? stringValue(job.input.folderRelativePath)
     ?? result.relativePath;
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string>();
   const retryStarted = useRef(false);
   const [viewerSlot, setViewerSlot] = useState<string | null>(null);
 
+  // folderName is a display label ("1234" or "XM2606011 / 普通版" with " / "
+  // standing in for path.sep) — pasted into Explorer it doesn't open anything.
+  // The one thing worth copying is the real absolute path, which job records
+  // deliberately don't carry (see the /path route), so it's fetched on click.
   const copyFolderPath = async () => {
-    if (!folderName) return;
+    const folderId = stringValue(job.input.folderId);
+    if (!folderId) return;
+    setCopyError(false);
     try {
-      await navigator.clipboard.writeText(folderName);
+      const response = await fetch(
+        `/api/workbench/mono/product-pipeline/folders/${encodeURIComponent(folderId)}/path`,
+        { cache: "no-store" },
+      );
+      const payload = await response.json();
+      if (!response.ok || !payload.absolutePath) throw new Error(payload.error ?? "读取路径失败");
+      await navigator.clipboard.writeText(payload.absolutePath);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      // 剪贴板权限被拒时静默失败。
+      setCopyError(true);
+      window.setTimeout(() => setCopyError(false), 2000);
     }
   };
 
@@ -226,13 +240,13 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
 
       {isTerminal && job.status === "succeeded" ? (
         <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button variant="outline" size="sm" onClick={() => downloadAllSlots(job, result)}>
-            <DownloadIcon />下载全部
+          <Button variant="outline" size="sm" onClick={() => downloadAllSlots(job)}>
+            <DownloadIcon />下载全部（打包 zip）
           </Button>
-          {folderName ? (
+          {stringValue(job.input.folderId) ? (
             <Button variant="outline" size="sm" onClick={() => void copyFolderPath()}>
               {copied ? <CheckIcon /> : <CopyIcon />}
-              {copied ? "已复制" : "复制文件夹路径"}
+              {copied ? "已复制" : copyError ? "复制失败，请重试" : "复制文件夹路径"}
             </Button>
           ) : null}
           {result.incomplete && result.failedSlots?.length ? (
@@ -325,18 +339,15 @@ function SlotCell({
   );
 }
 
-function downloadAllSlots(job: MonoJob, result: PipelineResult): void {
-  const ids = (result.slots ?? []).map((slot) => slot.slot);
-  ids.forEach((id, index) => {
-    window.setTimeout(() => {
-      const link = document.createElement("a");
-      link.href = imageUrl(job.id, id);
-      link.download = "";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-    }, index * 250);
-  });
+// Server bundles every produced slot into one zip — eleven separate <a
+// download> clicks used to trigger the browser's multi-download block and
+// land with no extension or product name, see the /download route's comment.
+function downloadAllSlots(job: MonoJob): void {
+  const link = document.createElement("a");
+  link.href = `/api/workbench/mono/product-pipeline/jobs/${encodeURIComponent(job.id)}/download`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 function SlotLightbox({

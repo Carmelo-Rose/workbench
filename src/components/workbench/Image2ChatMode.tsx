@@ -131,12 +131,12 @@ export function Image2ModeControl() {
         <PopoverTrigger asChild>
           <button type="button" className="hover:bg-muted-foreground/10 flex h-7 items-center gap-1.5 rounded-l-full pl-2.5 pr-2 transition-colors">
             <SparklesIcon className="size-3.5" />
-            <span>{activeTemplate?.title ?? "创建图片"}</span>
+            <span>{activeTemplate?.title ?? "生成图片"}</span>
           </button>
         </PopoverTrigger>
         <PopoverContent side="top" align="start" className="max-h-[min(70vh,34rem)] overflow-y-auto">
           <div className="mb-2 flex items-center justify-between gap-3">
-            <strong className="text-sm">创建图片</strong>
+            <strong className="text-sm">生成图片</strong>
             <Button variant="ghost" size="xs" onClick={() => setHistoryOpen(true)}>
               <HistoryIcon />
               历史
@@ -181,8 +181,8 @@ export function Image2ModeControl() {
       <button
         type="button"
         onClick={() => void exit()}
-        aria-label="退出创建图片模式"
-        title="退出创建图片模式"
+        aria-label="退出生成图片模式"
+        title="退出生成图片模式"
         className="text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground mx-1 flex size-5 items-center justify-center rounded-full transition-colors"
       >
         <XIcon className="size-3" />
@@ -196,13 +196,29 @@ export function Image2ComposerContext() {
   const active = useImage2Mode((state) => state.active);
   const selectedTemplateId = useImage2Mode((state) => state.selectedTemplateId);
   const attachmentCount = useAuiState((state) => state.composer.attachments.length);
+  const attachments = useAuiState((state) => state.composer.attachments) as readonly SlotAttachment[];
   const composerText = useAuiState((state) => state.composer.text);
+  const structuredSubjectIds = useImage2Mode((state) => state.structuredSubjectIds);
   const template = getMonoImage2Template(selectedTemplateId);
   if (!active) return null;
 
+  if (template?.structuredMode) {
+    const filled = mapSlots(attachments).filter(Boolean).length
+      + structuredSubjectIds.filter(Boolean).length;
+    if (filled >= 2) return null;
+    const sceneLabel = template.structuredMode === "replace-product" ? "场景参考图" : "穿戴参考图";
+    return (
+      <div className="px-2 text-xs">
+        <p className="text-muted-foreground">
+          还需要上传产品图和{sceneLabel}，两张都齐了才能生成（当前 {filled}/2）。
+        </p>
+      </div>
+    );
+  }
+
   const subjectCount = countSubjectDirectives(composerText);
   const totalReferences = attachmentCount + subjectCount;
-  const tooMany = !template?.structuredMode && totalReferences > 6;
+  const tooMany = totalReferences > 6;
   if (!tooMany) return null;
 
   return (

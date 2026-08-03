@@ -3,7 +3,7 @@
 import type * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ImageIcon, MessagesSquare, SettingsIcon } from "lucide-react";
+import { CheckIcon, ImageIcon, LogOutIcon, MessagesSquare, SettingsIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -14,8 +14,15 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { ThreadList } from "@/components/assistant-ui/thread-list";
 import { CONN_STATE_LABEL, StatusDot } from "@/components/workbench/backend-select";
+import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 import {
   hermesConnState,
   useAgentStatus,
@@ -59,10 +66,10 @@ export function ThreadListSidebar({
                   </div>
                   <div className="aui-sidebar-header-heading me-6 flex flex-col gap-0.5 leading-none">
                     <span className="aui-sidebar-header-title font-semibold">
-                      Mono
+                      Workbench
                     </span>
                     <span className="text-muted-foreground text-xs">
-                      Agent 工作台
+                      AI 创作工作台
                     </span>
                   </div>
                 </a>
@@ -74,10 +81,10 @@ export function ThreadListSidebar({
       <SidebarContent className="aui-sidebar-content px-2">
         <SidebarMenu className="mb-2">
           <SidebarMenuItem>
-            <SidebarMenuButton asChild isActive={isImage2} tooltip="Image2 图像生成">
+            <SidebarMenuButton asChild isActive={isImage2} tooltip="生成图片">
               <Link href="/?mode=image2">
                 <ImageIcon />
-                <span>Image2 图像生成</span>
+                <span>生成图片</span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -95,12 +102,69 @@ export function ThreadListSidebar({
       <SidebarFooter className="aui-sidebar-footer">
         <SidebarMenu>
           <SidebarMenuItem>
+            <AccountFooterMenu onOpenSettings={onOpenSettings} />
+          </SidebarMenuItem>
+          <SidebarMenuItem>
             <SettingsFooterButton onClick={onOpenSettings} />
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
+  );
+}
+
+/**
+ * 侧边栏永远可达（移动端通过顶部触发器打开为抽屉），所以账号/工作区切换
+ * 放在这里而不是仅在桌面头部展示——否则窄屏下退出登录会完全没有入口。
+ */
+function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) {
+  const { session, signOut, switchWorkspace } = useWorkbenchSession();
+
+  const selectWorkspace = async (workspaceId: string) => {
+    if (workspaceId === session.workspace.id) return;
+    await switchWorkspace(workspaceId);
+    window.location.reload();
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <SidebarMenuButton size="lg" aria-label="账号与工作区">
+          <div className="bg-muted text-muted-foreground flex aspect-square size-8 items-center justify-center rounded-lg border text-sm font-medium">
+            {session.actor.displayName.slice(0, 1)}
+          </div>
+          <div className="flex min-w-0 flex-col gap-0.5 leading-none">
+            <span className="truncate font-medium">{session.actor.displayName}</span>
+            <span className="text-muted-foreground truncate text-xs">
+              {session.workspace.name}
+            </span>
+          </div>
+        </SidebarMenuButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" side="top" className="min-w-52 rounded-xl">
+        <p className="text-muted-foreground px-2 py-1.5 text-xs">
+          {session.actor.displayName}
+        </p>
+        {session.workspaces.map((workspace) => (
+          <DropdownMenuItem
+            key={workspace.id}
+            onSelect={() => void selectWorkspace(workspace.id)}
+            className="justify-between rounded-lg"
+          >
+            <span className="truncate">{workspace.name}</span>
+            {workspace.id === session.workspace.id && <CheckIcon className="size-4" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuItem onSelect={() => onOpenSettings?.()} className="rounded-lg">
+          员工与工作区
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void signOut()} className="rounded-lg">
+          <LogOutIcon className="size-4" />
+          退出登录
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

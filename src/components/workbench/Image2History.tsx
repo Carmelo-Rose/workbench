@@ -209,7 +209,7 @@ export function Image2HistorySheet({ open, onOpenChange }: {
             <p className="text-muted-foreground py-8 text-sm">历史加载失败，请稍后重试。</p>
           ) : jobs.length === 0 ? (
             <p className="text-muted-foreground py-8 text-sm">
-              {favoriteOnly ? "还没有收藏的生成任务。点击任务右上角的星标即可收藏。" : "还没有生成记录。在对话里用「创建图片」生成的任务会出现在这里。"}
+              {favoriteOnly ? "还没有收藏的生成任务。点击任务右上角的星标即可收藏。" : "还没有生成记录。在对话里用「生成图片」生成的任务会出现在这里。"}
             </p>
           ) : (
             jobs.map((job) => (

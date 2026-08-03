@@ -19,6 +19,9 @@ import {
   BackendPicker,
   MessageBackendBadge,
 } from "@/components/workbench/backend-select";
+import { useBackendChoice } from "@/lib/agent-status";
+import { translateChatError } from "@/lib/chat-error";
+import { pickWelcomeCopy } from "@/lib/workbench/welcome-copy";
 import {
   ComposerQuotePreview,
   QuoteBlock,
@@ -62,6 +65,9 @@ import {
 import { emitSendBurst } from "@/components/workbench/send-burst";
 import { useTilt } from "@/components/workbench/use-tilt";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ScrollFadeRow } from "@/components/assistant-ui/scroll-edge-fade";
 import { cn } from "@/lib/utils";
 import { useImage2Mode } from "@/lib/image2-mode";
 import { useVideoGenerationMode } from "@/lib/video-generation-mode";
@@ -124,13 +130,11 @@ import {
   UsersIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import {
-  CapabilityActionsProvider,
-  useCapabilityActions,
-} from "@/components/workbench/CapabilityActions";
+import { useCapabilityActions } from "@/components/workbench/CapabilityActions";
 import {
   CAPABILITY_GROUPS,
   SLASH_CAPABILITIES,
+  type CapabilityOption,
 } from "@/lib/workbench/capabilities";
 import {
   createContext,
@@ -194,7 +198,6 @@ export const Thread: FC<ThreadProps> = ({ components = EMPTY_COMPONENTS }) => {
 
 const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
-  const image2Active = useImage2Mode((state) => state.active);
   const videoGenerationActive = useVideoGenerationMode((state) => state.active);
   const hasVideoTurn = Boolean(useCurrentVideoJobId());
 
@@ -210,7 +213,6 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
       }}
     >
       <ThreadBackdrop active={isEmpty && !hasVideoTurn} />
-      <CapabilityActionsProvider>
       <ThreadPrimitive.Viewport
         turnAnchor="top"
         data-slot="aui_thread-viewport"
@@ -241,19 +243,15 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
           <ThreadScrollToBottom />
           <Composer />
           {isEmpty && !videoGenerationActive && !hasVideoTurn ? (
+            // 能力入口曾经在 composer.isEmpty 时才渲染——用户刚打第一个字就
+            // 整块消失，恰好是最该发现工具的时刻。与 image2Active 分支保持一致，
+            // 只要还在欢迎屏（isEmpty）就一直可达。
             <div className="aui-thread-welcome-suggestions-shell min-h-19">
-              {image2Active ? (
-                <ThreadSuggestions />
-              ) : (
-                <AuiIf condition={(s) => s.composer.isEmpty}>
-                  <ThreadSuggestions />
-                </AuiIf>
-              )}
+              <ThreadSuggestions />
             </div>
           ) : null}
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
-      </CapabilityActionsProvider>
 
       <SelectionToolbar />
     </ThreadPrimitive.Root>
@@ -275,7 +273,7 @@ const ThreadScrollToBottom: FC = () => {
   return (
     <ThreadPrimitive.ScrollToBottom asChild>
       <TooltipIconButton
-        tooltip="Scroll to bottom"
+        tooltip="滚动到底部"
         variant="outline"
         className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent absolute -top-12 z-10 self-center rounded-full p-4 disabled:invisible"
       >
@@ -286,6 +284,7 @@ const ThreadScrollToBottom: FC = () => {
 };
 
 const ThreadWelcome: FC = () => {
+  const [greeting] = useState(pickWelcomeCopy);
   return (
     // The greeting sits only 24px above the composer, so an upward trigger
     // popover would always cover it; this marks it as an obstacle the popover
@@ -295,14 +294,14 @@ const ThreadWelcome: FC = () => {
       className="aui-thread-welcome-root mx-auto mb-6 flex w-full max-w-(--thread-max-width) flex-col items-center px-4 text-center"
     >
       <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-semibold duration-200">
-        今天想让 Mono 做什么？
+        {greeting}
       </h1>
     </div>
   );
 };
 
-// 图标键 → lucide 组件：欢迎页分组 chip 与 `/` 命令共用（数据在 capabilities.ts）。
-const capabilityIconMap: Record<string, FC<{ className?: string }>> = {
+// 图标键 → lucide 组件：欢迎页分组 chip、`/` 命令与 ⌘K 面板共用（数据在 capabilities.ts）。
+export const capabilityIconMap: Record<string, FC<{ className?: string }>> = {
   sparkles: SparklesIcon,
   chart: ChartColumnIcon,
   bot: BotIcon,
@@ -331,6 +330,46 @@ const CapabilityIcon: FC<{ iconKey?: string; className?: string }> = ({
 const suggestionChipClass =
   "aui-thread-welcome-suggestion text-foreground hover:bg-muted bg-background/60 border-border/60 h-auto gap-1.5 rounded-full border px-3.5 py-1.5 text-sm font-normal whitespace-nowrap backdrop-blur-[2px] transition-colors [&_svg]:size-4";
 
+/**
+ * 留口子的能力收进一个尾部信息 chip：路线图依然可见（点开 Popover 才展开
+ * 具体条目），但常驻界面上只占一个位置，而不是每条都摆一个灰掉的死 chip。
+ */
+const ComingSoonChip: FC<{ options: CapabilityOption[] }> = ({ options }) => {
+  if (options.length === 0) return null;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          className={cn(
+            suggestionChipClass,
+            "text-muted-foreground border-dashed",
+          )}
+        >
+          即将上线 · {options.length}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 p-1.5">
+        <ul className="flex flex-col">
+          {options.map((option) => (
+            <li
+              key={option.id}
+              className="text-muted-foreground flex items-center justify-between rounded-lg px-2 py-1.5 text-sm"
+            >
+              {option.label}
+              {option.badge && (
+                <span className="border-border/60 rounded-full border px-1.5 py-px text-[10px] leading-none">
+                  {option.badge}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
+  );
+};
+
 const ThreadSuggestions: FC = () => {
   const { run } = useCapabilityActions();
   const image2Active = useImage2Mode((state) => state.active);
@@ -344,7 +383,7 @@ const ThreadSuggestions: FC = () => {
 
   return (
     <div className="aui-thread-welcome-suggestions flex w-full flex-col gap-2 px-4">
-      <div className="w-full scrollbar-none overflow-x-auto">
+      <ScrollFadeRow className="w-full">
         <div className="mx-auto flex w-max items-center gap-2">
           {CAPABILITY_GROUPS.map((group) => (
             <Button
@@ -364,44 +403,52 @@ const ThreadSuggestions: FC = () => {
             </Button>
           ))}
         </div>
-      </div>
+      </ScrollFadeRow>
       {expandedGroup && (
-        <div
+        <ScrollFadeRow
           key={expandedGroup.id}
-          className="fade-in slide-in-from-top-1 animate-in w-full scrollbar-none overflow-x-auto duration-200"
+          className="fade-in slide-in-from-top-1 animate-in w-full duration-200"
         >
           <div className="mx-auto flex w-max items-center gap-2">
-            {expandedGroup.options.map((option) =>
-              // 留口子的能力：可见（传达路线图）但不可点（别把做不了的活派给模型）。
-              option.disabled ? (
-                <span
-                  key={option.id}
-                  className={cn(
-                    suggestionChipClass,
-                    "text-muted-foreground pointer-events-none inline-flex cursor-default items-center opacity-50",
-                  )}
-                >
-                  {option.label}
-                  {option.badge ? (
-                    <span className="border-border/60 ms-1 rounded-full border px-1.5 py-px text-[10px] leading-none">
-                      {option.badge}
-                    </span>
-                  ) : null}
-                </span>
-              ) : (
-                <Button
-                  key={option.id}
-                  variant="ghost"
-                  {...tilt}
-                  className={suggestionChipClass}
-                  onClick={() => run({ action: option.action, prompt: option.prompt })}
-                >
-                  {option.label}
-                </Button>
-              ),
-            )}
+            {expandedGroup.options
+              .filter((option) => !option.disabled)
+              .map((option) => {
+                // slash 能力真的会调用工具（花钱、写文件、切模式）；没有 slash
+                // 的分组（Agent 能力/创作/分析/头脑风暴）只是把示例提示词填进
+                // 输入框，交给模型自己判断——同一种 chip 外观会让用户误以为
+                // 两者点了都一样，所以给真工具配图标 + hover 提示，示例提示词
+                // 加「示例」标记 + 虚线边框区分。
+                const chip = (
+                  <Button
+                    key={option.id}
+                    variant="ghost"
+                    {...tilt}
+                    className={cn(
+                      suggestionChipClass,
+                      !option.slash && "border-dashed text-muted-foreground",
+                    )}
+                    onClick={() => run({ action: option.action, prompt: option.prompt })}
+                  >
+                    {option.slash ? <CapabilityIcon iconKey={option.iconKey} /> : null}
+                    {option.label}
+                    {!option.slash ? (
+                      <span className="text-muted-foreground/70 text-[10px] font-normal">
+                        示例
+                      </span>
+                    ) : null}
+                  </Button>
+                );
+                if (!option.hint) return chip;
+                return (
+                  <Tooltip key={option.id}>
+                    <TooltipTrigger asChild>{chip}</TooltipTrigger>
+                    <TooltipContent side="bottom">{option.hint}</TooltipContent>
+                  </Tooltip>
+                );
+              })}
+            <ComingSoonChip options={expandedGroup.options.filter((o) => o.disabled)} />
           </div>
-        </div>
+        </ScrollFadeRow>
       )}
     </div>
   );
@@ -578,7 +625,7 @@ const Composer: FC = () => {
               directivePluginProps={{ onDirectiveSelect: openSubjectLibraryFromDirective }}
               placeholder={videoGenerationActive
                 ? "描述画面、动作和镜头语言（图生视频可留空）"
-                : "Send a message... (@ to mention, / for commands)"}
+                : "发送消息…（@ 提及，/ 使用命令）"}
               className="aui-composer-input [&_.aui-lexical-placeholder]:text-muted-foreground/80 relative max-h-32 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none [&_.aui-directive-chip]:inline-flex [&_.aui-directive-chip]:items-baseline [&_.aui-directive-chip]:gap-1 [&_.aui-directive-chip]:rounded-md [&_.aui-directive-chip]:bg-blue-100 [&_.aui-directive-chip]:px-1.5 [&_.aui-directive-chip]:py-0.5 [&_.aui-directive-chip]:text-[13px] [&_.aui-directive-chip]:leading-none [&_.aui-directive-chip]:font-medium [&_.aui-directive-chip]:text-blue-700 dark:[&_.aui-directive-chip]:bg-blue-900/50 dark:[&_.aui-directive-chip]:text-blue-300 [&_.aui-directive-chip-icon]:self-center [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:right-0 [&_.aui-lexical-placeholder]:left-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1"
             />
             <ComposerAction />
@@ -591,7 +638,7 @@ const Composer: FC = () => {
           <ComposerTriggerPopover
             char="/"
             {...slash}
-            emptyItemsLabel="No matching commands"
+            emptyItemsLabel="没有匹配的命令"
           />
         )}
         <SubjectLibrarySheet />
@@ -655,7 +702,7 @@ const ComposerPlusMenu: FC = () => {
           }}
         >
           <SparklesIcon />
-          创建图片
+          生成图片
           {image2Active ? <CheckIcon className="ml-auto" /> : null}
         </DropdownMenuItem>
         <DropdownMenuItem
@@ -663,7 +710,7 @@ const ComposerPlusMenu: FC = () => {
           onSelect={enterVideoGeneration}
         >
           <FilmIcon />
-          创建视频
+          生成视频
           {videoGenerationActive ? <CheckIcon className="ml-auto" /> : null}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => openSubjectLibrary()}>
@@ -682,7 +729,7 @@ const ComposerCancelAction: FC = () => (
       variant="default"
       size="icon"
       className="aui-composer-cancel size-7 rounded-full"
-      aria-label="Stop generating"
+      aria-label="停止生成"
     >
       <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
     </Button>
@@ -711,13 +758,13 @@ const ComposerAction: FC = () => {
           <AuiIf condition={(s) => s.composer.dictation == null}>
             <ComposerPrimitive.Dictate asChild>
               <TooltipIconButton
-                tooltip="Voice input"
+                tooltip="语音输入"
                 side="bottom"
                 type="button"
                 variant="ghost"
                 size="icon"
                 className="aui-composer-dictate size-7 rounded-full"
-                aria-label="Start voice input"
+                aria-label="开始语音输入"
               >
                 <MicIcon className="aui-composer-dictate-icon size-4" />
               </TooltipIconButton>
@@ -726,13 +773,13 @@ const ComposerAction: FC = () => {
           <AuiIf condition={(s) => s.composer.dictation != null}>
             <ComposerPrimitive.StopDictation asChild>
               <TooltipIconButton
-                tooltip="Stop dictation"
+                tooltip="停止听写"
                 side="bottom"
                 type="button"
                 variant="ghost"
                 size="icon"
                 className="aui-composer-stop-dictation text-destructive size-7 rounded-full"
-                aria-label="Stop voice input"
+                aria-label="停止语音输入"
               >
                 <SquareIcon className="aui-composer-stop-dictation-icon size-3.5 animate-pulse fill-current" />
               </TooltipIconButton>
@@ -753,13 +800,13 @@ const ComposerAction: FC = () => {
             <AuiIf condition={(s) => !s.thread.isRunning}>
               <ComposerPrimitive.Send asChild>
                 <TooltipIconButton
-                  tooltip="Send message"
+                  tooltip="发送消息"
                   side="bottom"
                   type="button"
                   variant="default"
                   size="icon"
                   className="aui-composer-send size-7 rounded-full"
-                  aria-label="Send message"
+                  aria-label="发送消息"
                   disabled={image2SendBlocked}
                   onClick={(e) => emitSendBurst(e.currentTarget)}
                 >
@@ -778,10 +825,60 @@ const ComposerAction: FC = () => {
 };
 
 const MessageError: FC = () => {
+  const rawError = useAuiState((s) =>
+    s.message.status?.type === "incomplete" && s.message.status.reason === "error"
+      ? (s.message.status.error ?? "发生未知错误")
+      : undefined,
+  );
+  const aui = useAui();
+  const backend = useBackendChoice((s) => s.backend);
+  const setBackend = useBackendChoice((s) => s.setBackend);
+  const [expanded, setExpanded] = useState(false);
+
+  if (rawError === undefined) return null;
+  const { title, detail } = translateChatError(rawError);
+
   return (
     <MessagePrimitive.Error>
-      <ErrorPrimitive.Root className="aui-message-error-root border-destructive bg-destructive/10 text-destructive dark:bg-destructive/5 mt-2 rounded-md border p-3 text-sm dark:text-red-200">
-        <ErrorPrimitive.Message className="aui-message-error-message line-clamp-2" />
+      <ErrorPrimitive.Root className="aui-message-error-root border-destructive bg-destructive/10 text-destructive dark:bg-destructive/5 mt-2 space-y-2 rounded-md border p-3 text-sm dark:text-red-200">
+        <div className="aui-message-error-message wrap-break-word">{title}</div>
+        {detail !== title && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="text-xs underline opacity-70 hover:opacity-100"
+          >
+            {expanded ? "收起详情" : "查看详情"}
+          </button>
+        )}
+        {expanded && (
+          <div className="wrap-break-word text-xs opacity-70">{detail}</div>
+        )}
+        <div className="flex gap-2 pt-1">
+          {backend === "hermes" && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 rounded-full text-xs"
+              onClick={() => {
+                setBackend("direct");
+                aui.message().reload();
+              }}
+            >
+              切换到直连并重试
+            </Button>
+          )}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-full text-xs"
+            onClick={() => aui.message().reload()}
+          >
+            重试
+          </Button>
+        </div>
       </ErrorPrimitive.Root>
     </MessagePrimitive.Error>
   );
@@ -796,7 +893,7 @@ const AssistantWorkingIndicator: FC = () => {
         className="text-muted-foreground inline-flex items-center gap-2 align-middle"
       >
         <DotMatrix state="connecting" aria-hidden />
-        <span className="text-sm">Connecting</span>
+        <span className="text-sm">连接中</span>
       </span>
     );
   }
@@ -804,7 +901,7 @@ const AssistantWorkingIndicator: FC = () => {
     <span
       data-slot="aui_assistant-message-indicator"
       className="animate-pulse font-sans"
-      aria-label="Assistant is working"
+      aria-label="助手正在处理"
     >
       {"●"}
     </span>
@@ -912,7 +1009,7 @@ const AssistantActionBar: FC = () => {
       className="aui-assistant-action-bar-root text-muted-foreground animate-in fade-in col-start-3 row-start-2 -ms-1 flex gap-1 duration-200"
     >
       <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="Copy">
+        <TooltipIconButton tooltip="复制">
           <AuiIf condition={(s) => s.message.isCopied}>
             <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
           </AuiIf>
@@ -922,14 +1019,14 @@ const AssistantActionBar: FC = () => {
         </TooltipIconButton>
       </ActionBarPrimitive.Copy>
       <ActionBarPrimitive.Reload asChild>
-        <TooltipIconButton tooltip="Refresh">
+        <TooltipIconButton tooltip="重试">
           <RefreshCwIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.Reload>
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger asChild>
           <TooltipIconButton
-            tooltip="More"
+            tooltip="更多"
             className="data-[state=open]:bg-accent"
           >
             <MoreHorizontalIcon />
@@ -944,7 +1041,7 @@ const AssistantActionBar: FC = () => {
           <ActionBarPrimitive.ExportMarkdown asChild>
             <ActionBarMorePrimitive.Item className="aui-action-bar-more-item hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none select-none">
               <DownloadIcon className="size-4" />
-              Export as Markdown
+              导出为 Markdown
             </ActionBarMorePrimitive.Item>
           </ActionBarPrimitive.ExportMarkdown>
         </ActionBarMorePrimitive.Content>
@@ -993,7 +1090,7 @@ const UserActionBar: FC = () => {
       className="aui-user-action-bar-root flex flex-col items-end"
     >
       <ActionBarPrimitive.Edit asChild>
-        <TooltipIconButton tooltip="Edit" className="aui-user-action-edit">
+        <TooltipIconButton tooltip="编辑" className="aui-user-action-edit">
           <PencilIcon />
         </TooltipIconButton>
       </ActionBarPrimitive.Edit>
@@ -1021,12 +1118,12 @@ const EditComposer: FC = () => {
                 size="sm"
                 className="h-8 rounded-full px-3.5"
               >
-                Cancel
+                取消
               </Button>
             </ComposerPrimitive.Cancel>
             <ComposerPrimitive.Send asChild>
               <Button size="sm" className="h-8 rounded-full px-3.5">
-                Update
+                保存
               </Button>
             </ComposerPrimitive.Send>
           </div>
@@ -1050,7 +1147,7 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
       {...rest}
     >
       <BranchPickerPrimitive.Previous asChild>
-        <TooltipIconButton tooltip="Previous">
+        <TooltipIconButton tooltip="上一条">
           <ChevronLeftIcon />
         </TooltipIconButton>
       </BranchPickerPrimitive.Previous>
@@ -1058,7 +1155,7 @@ const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
         <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
       </span>
       <BranchPickerPrimitive.Next asChild>
-        <TooltipIconButton tooltip="Next">
+        <TooltipIconButton tooltip="下一条">
           <ChevronRightIcon />
         </TooltipIconButton>
       </BranchPickerPrimitive.Next>

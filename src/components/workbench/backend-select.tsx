@@ -15,6 +15,7 @@ import {
   type ConnState,
 } from "@/lib/agent-status";
 import { BACKENDS, isBackendId, type BackendId } from "@/lib/backends";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { getCurrentImage2ChatConfig } from "@/lib/image2-mode";
 import { getCurrentProductPipelineConfig } from "@/lib/product-pipeline-run";
@@ -155,15 +156,22 @@ export const HeaderBackendStatus: FC<{ onClick?: () => void }> = ({
     backend === "hermes" ? hermesConnState(status) : directConnState(status);
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={`${BACKENDS[backend].name} · ${CONN_STATE_LABEL[state]} — 点击查看连接详情`}
-      className="text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring/50 flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors outline-none focus-visible:ring-2"
-    >
-      <StatusDot state={state} />
-      <span className="max-w-28 truncate">{BACKENDS[backend].name}</span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={onClick}
+          aria-label={`${BACKENDS[backend].name} · ${CONN_STATE_LABEL[state]} — 点击查看连接详情`}
+          className="text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring/50 flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors outline-none focus-visible:ring-2"
+        >
+          <StatusDot state={state} />
+          <span className="max-w-28 truncate">{BACKENDS[backend].name}</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {BACKENDS[backend].name} · {CONN_STATE_LABEL[state]} — 点击查看连接详情
+      </TooltipContent>
+    </Tooltip>
   );
 };
 
@@ -179,7 +187,7 @@ export const MessageBackendBadge: FC = () => {
 
   if (!source) return null;
   if (source === "image2") {
-    return <span data-slot="message-backend-badge" className="text-muted-foreground flex items-center gap-1 rounded-md p-1 text-xs"><SparklesIcon className="size-3.5" />Mono Image2</span>;
+    return <span data-slot="message-backend-badge" className="text-muted-foreground flex items-center gap-1 rounded-md p-1 text-xs"><SparklesIcon className="size-3.5" />生成图片</span>;
   }
   const Icon = source === "hermes" ? BotIcon : ZapIcon;
 

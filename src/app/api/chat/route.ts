@@ -406,7 +406,7 @@ function image2Response({
     }
   }
   const input: MonoImageGenerationInput = {
-    prompt: prompt.trim() || template?.prompt || "请根据参考图创建图片",
+    prompt: prompt.trim() || template?.prompt || "请根据参考图生成图片",
     templateId: config.templateId,
     // 模板参考图在前端以普通附件进入消息，服务端不再重复注入。
     templateReferencesEnabled: false,

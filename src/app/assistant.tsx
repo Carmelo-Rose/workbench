@@ -11,16 +11,18 @@ import { useChatRuntime } from "@assistant-ui/react-ai-sdk";
 import {
   CheckIcon,
   ChevronDownIcon,
+  DownloadIcon,
   LogOutIcon,
   MonitorIcon,
   MoonIcon,
-  ShareIcon,
+  MoreHorizontalIcon,
   SunIcon,
 } from "lucide-react";
 import { useEffect, useState, type FC, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { ThreadListSidebar } from "@/components/assistant-ui/threadlist-sidebar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI";
 import {
   VideoEnhanceToolUI,
@@ -54,6 +56,8 @@ import {
   SettingsDialog,
   type SettingsSection,
 } from "@/components/workbench/settings-dialog";
+import { CommandPalette } from "@/components/workbench/command-palette";
+import { CapabilityActionsProvider } from "@/components/workbench/CapabilityActions";
 import {
   THREAD_STYLES,
   loadThreadStyle,
@@ -62,7 +66,6 @@ import {
 } from "@/components/workbench/thread-styles";
 import {
   CompanionLayer,
-  CompanionPicker,
   loadCompanion,
   saveCompanion,
   type CompanionId,
@@ -150,7 +153,11 @@ export const Assistant = () => {
       <Image2ModeSync />
       <VideoGenerationModeSync />
       <ThreadTitleSync />
-      <AssistantShell />
+      {/* 提到这一层而不是 Thread 内部：CommandPalette 与非 base 的样式变体
+          (ChatGPT/Grok/Gemini) 都要能拿到同一份 run()，不只是默认样式。 */}
+      <CapabilityActionsProvider>
+        <AssistantShell />
+      </CapabilityActionsProvider>
     </AssistantRuntimeProvider>
   );
 };
@@ -357,38 +364,112 @@ const WorkspaceMenu: FC<{ onOpenSettings: () => void }> = ({ onOpenSettings }) =
   };
 
   return (
+    <Tooltip>
+      <DropdownMenu>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-foreground hidden h-8 max-w-40 gap-1.5 rounded-full px-2.5 font-normal sm:flex"
+            >
+              <span className="truncate">{session.workspace.name}</span>
+              <ChevronDownIcon className="text-muted-foreground size-3.5 shrink-0" />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <DropdownMenuContent align="end" className="min-w-52 rounded-xl">
+          <p className="text-muted-foreground px-2 py-1.5 text-xs">
+            {session.actor.displayName}
+          </p>
+          {session.workspaces.map((workspace) => (
+            <DropdownMenuItem
+              key={workspace.id}
+              onSelect={() => void selectWorkspace(workspace.id)}
+              className="justify-between rounded-lg"
+            >
+              <span className="truncate">{workspace.name}</span>
+              {workspace.id === session.workspace.id && <CheckIcon className="size-4" />}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuItem onSelect={onOpenSettings} className="rounded-lg">
+            员工与工作区
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => void signOut()} className="rounded-lg">
+            <LogOutIcon className="size-4" />
+            退出登录
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <TooltipContent side="bottom">{session.workspace.name}</TooltipContent>
+    </Tooltip>
+  );
+};
+
+const MESSAGE_ROLE_LABEL: Record<string, string> = {
+  user: "你",
+  assistant: "助手",
+  system: "系统",
+};
+
+function messageMarkdownBlock(message: {
+  role: string;
+  content: readonly { type: string; text?: string }[];
+}): string | null {
+  const text = message.content
+    .filter((part) => part.type === "text" && typeof part.text === "string")
+    .map((part) => part.text as string)
+    .join("\n\n")
+    .trim();
+  if (!text) return null;
+  return `**${MESSAGE_ROLE_LABEL[message.role] ?? message.role}**\n\n${text}`;
+}
+
+function downloadTextFile(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+/** 头部原「分享 · 即将上线」占位换成的会话操作菜单；真正的分享链接做完再进这里。 */
+const SessionActionsMenu: FC = () => {
+  const title = useAuiState(
+    (s) => s.threads.threadItems.find((t) => t.id === s.threads.mainThreadId)?.title,
+  );
+  const messages = useAuiState((s) => s.thread.messages);
+
+  const exportMarkdown = () => {
+    const blocks = messages
+      .map((message) => messageMarkdownBlock(message))
+      .filter((block): block is string => block !== null);
+    if (blocks.length === 0) return;
+    const heading = title || "新会话";
+    const markdown = `# ${heading}\n\n${blocks.join("\n\n---\n\n")}\n`;
+    const safeName = heading.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+    downloadTextFile(`${safeName}.md`, markdown, "text/markdown;charset=utf-8");
+  };
+
+  return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
+        <TooltipIconButton
           variant="ghost"
-          size="sm"
-          className="text-foreground hidden h-8 max-w-40 gap-1.5 rounded-full px-2.5 font-normal sm:flex"
-          title={session.workspace.name}
+          size="icon"
+          tooltip="更多"
+          side="bottom"
+          className="size-8 rounded-full data-[state=open]:bg-accent"
         >
-          <span className="truncate">{session.workspace.name}</span>
-          <ChevronDownIcon className="text-muted-foreground size-3.5 shrink-0" />
-        </Button>
+          <MoreHorizontalIcon className="size-4" />
+        </TooltipIconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-52 rounded-xl">
-        <p className="text-muted-foreground px-2 py-1.5 text-xs">
-          {session.actor.displayName}
-        </p>
-        {session.workspaces.map((workspace) => (
-          <DropdownMenuItem
-            key={workspace.id}
-            onSelect={() => void selectWorkspace(workspace.id)}
-            className="justify-between rounded-lg"
-          >
-            <span className="truncate">{workspace.name}</span>
-            {workspace.id === session.workspace.id && <CheckIcon className="size-4" />}
-          </DropdownMenuItem>
-        ))}
-        <DropdownMenuItem onSelect={onOpenSettings} className="rounded-lg">
-          员工与工作区
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void signOut()} className="rounded-lg">
-          <LogOutIcon className="size-4" />
-          退出登录
+        <DropdownMenuItem onSelect={exportMarkdown} className="rounded-lg">
+          <DownloadIcon className="size-4" />
+          导出当前会话为 Markdown
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -411,7 +492,11 @@ const AssistantShell: FC = () => {
   const status = useAgentStatus((s) => s.status);
   const adoptServerDefault = useBackendChoice((s) => s.adoptServerDefault);
   useEffect(() => {
-    if (status) adoptServerDefault(status.defaultBackend);
+    if (!status) return;
+    // 服务端默认值若不健康（网关未启动等），不采纳它——用户不该被静默丢进一个已知打不通的模式。
+    const defaultHealthy =
+      status.defaultBackend === "hermes" ? status.hermes.ok : status.direct.configured;
+    adoptServerDefault(defaultHealthy ? status.defaultBackend : "direct");
   }, [status, adoptServerDefault]);
 
   // 应用主题偏好，"跟随系统"时响应系统切换。
@@ -471,21 +556,7 @@ const AssistantShell: FC = () => {
             <WorkspaceMenu onOpenSettings={() => openSettings("workspace")} />
             <HeaderBackendStatus onClick={() => openSettings("connections")} />
             <ThemeToggle value={themePref} onChange={handleThemeChange} />
-            <CompanionPicker
-              value={companion}
-              onChange={handleCompanionChange}
-            />
-            {/* 原生 disabled 不派发指针事件、tooltip 永不出现，改用 aria-disabled 占位。 */}
-            <TooltipIconButton
-              variant="ghost"
-              size="icon"
-              tooltip="分享 · 即将上线"
-              side="bottom"
-              aria-disabled="true"
-              className="size-8 cursor-default rounded-full opacity-50 hover:bg-transparent active:scale-100"
-            >
-              <ShareIcon className="size-4" />
-            </TooltipIconButton>
+            <SessionActionsMenu />
           </div>
         </header>
         <main className="min-h-0 flex-1 overflow-hidden">
@@ -498,6 +569,7 @@ const AssistantShell: FC = () => {
         </main>
       </SidebarInset>
       <CompanionLayer companion={companion} isWorking={isWorking} />
+      <CommandPalette onOpenSettings={openSettings} />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

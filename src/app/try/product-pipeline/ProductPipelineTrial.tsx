@@ -30,6 +30,8 @@ type TrialPayload = {
   modelPairs?: ModelPair[];
   job?: MonoJob;
   error?: string;
+  rootReachable?: boolean;
+  root?: string;
 };
 
 type SlotMeta = { id: string; kind: "model" | "fixed" | "tiled" | "detail" };
@@ -113,6 +115,9 @@ export function ProductPipelineTrial() {
   const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string>();
+  const [rootReachable, setRootReachable] = useState(true);
+  const [root, setRoot] = useState<string>();
+  const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -128,13 +133,15 @@ export function ProductPipelineTrial() {
           setSelectedFolderId((current) => current && nextFolders.some((folder) => folder.id === current) ? current : undefined);
           setSelectedWorkflowId((current) => current && nextWorkflows.some((workflow) => workflow.id === current) ? current : nextWorkflows[0]?.id);
           setSelectedModelPairId((current) => current && nextPairs.some((pair) => pair.id === current) ? current : nextPairs[0]?.id);
+          setRootReachable(payload.rootReachable ?? true);
+          setRoot(payload.root);
           setError(undefined);
         })
         .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取商品文件夹"))
         .finally(() => setLoadingFolders(false));
     }, 180);
     return () => window.clearTimeout(timer);
-  }, [query]);
+  }, [query, retryToken]);
 
   const currentJobId = job?.id;
   const currentJobStatus = job?.status;
@@ -259,8 +266,23 @@ export function ProductPipelineTrial() {
                   <span className="block truncate text-sm font-medium">{folder.name}</span>
                   <span className="text-muted-foreground mt-1 block text-xs">{folderStatus(folder)}</span>
                 </button>
-              )) : (
-                <p className="text-muted-foreground px-3 py-8 text-center text-sm">没有匹配的商品文件夹</p>
+              )) : !rootReachable ? (
+                <div className="text-muted-foreground px-3 py-8 text-center text-sm">
+                  <p className="text-foreground font-medium">共享盘不可达</p>
+                  <p className="mt-1">连不上 {root ?? "商品原图目录"}，请检查网络或确认共享盘已挂载</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => setRetryToken((token) => token + 1)}
+                  >
+                    重试
+                  </Button>
+                </div>
+              ) : query ? (
+                <p className="text-muted-foreground px-3 py-8 text-center text-sm">没有匹配「{query}」的商品文件夹，换个关键词试试</p>
+              ) : (
+                <p className="text-muted-foreground px-3 py-8 text-center text-sm">目录下暂无商品，请让摄影师先上传原图</p>
               )}
             </div>
           </div>

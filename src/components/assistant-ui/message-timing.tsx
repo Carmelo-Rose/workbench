@@ -48,7 +48,7 @@ export const MessageTiming: FC<{
         <button
           type="button"
           data-slot="message-timing-trigger"
-          aria-label="Message timing"
+          aria-label="响应耗时"
           className={cn(
             "text-muted-foreground hover:bg-accent hover:text-accent-foreground flex items-center rounded-md p-1 font-mono text-xs tabular-nums transition-colors",
             className,

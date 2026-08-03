@@ -203,9 +203,9 @@ export function VideoGenerationModeControl() {
   return (
     <span className="bg-muted flex h-7 max-w-full items-center overflow-x-auto rounded-full text-xs font-medium scrollbar-none">
       <Popover>
-        <PopoverTrigger asChild><button type="button" className="hover:bg-muted-foreground/10 flex h-7 shrink-0 items-center gap-1.5 rounded-l-full pl-2.5 pr-2 transition-colors"><FilmIcon className="size-3.5" /><span>创建视频</span></button></PopoverTrigger>
+        <PopoverTrigger asChild><button type="button" className="hover:bg-muted-foreground/10 flex h-7 shrink-0 items-center gap-1.5 rounded-l-full pl-2.5 pr-2 transition-colors"><FilmIcon className="size-3.5" /><span>生成视频</span></button></PopoverTrigger>
         <PopoverContent side="top" align="start" className="w-72 p-2">
-          <div className="mb-2 px-1"><strong className="block text-sm">创建视频</strong><p className="text-muted-foreground mt-0.5 text-xs">{capabilities?.configured ? `当前 provider：${capabilities.provider}` : capabilities?.message ?? error ?? "正在读取能力…"}</p></div>
+          <div className="mb-2 px-1"><strong className="block text-sm">生成视频</strong><p className="text-muted-foreground mt-0.5 text-xs">{capabilities?.configured ? `当前 provider：${capabilities.provider}` : capabilities?.message ?? error ?? "正在读取能力…"}</p></div>
           {capabilities?.configured ? <>
             <div className="mb-2 grid grid-cols-2 gap-1 rounded-lg bg-muted/70 p-1">
               {modes.map((kind) => <button key={kind} type="button" onClick={() => setKind(kind)} className={cn("rounded-md px-2 py-1.5 text-xs", draft.kind === kind ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground")}>{kindLabels[kind]}</button>)}
@@ -226,7 +226,7 @@ export function VideoGenerationModeControl() {
       <VideoQuickOption label="清晰度" value={draft.resolution} options={capabilities?.resolutions ?? videoResolutions} onChange={setResolution} />
       <span className="bg-muted-foreground/20 h-3.5 w-px shrink-0" />
       <VideoQuickOption label="生成数量" value={draft.variants} options={capabilities?.variants ?? [1]} display={`${draft.variants} 条`} onChange={setVariants} />
-      <button type="button" onClick={exit} aria-label="退出创建视频模式" title="退出创建视频模式" className="text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground mx-1 flex size-5 shrink-0 items-center justify-center rounded-full"><XIcon className="size-3" /></button>
+      <button type="button" onClick={exit} aria-label="退出生成视频模式" title="退出生成视频模式" className="text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground mx-1 flex size-5 shrink-0 items-center justify-center rounded-full"><XIcon className="size-3" /></button>
     </span>
   );
 }
@@ -313,7 +313,7 @@ async function createVideoJob(draft: VideoGenerationDraft, prompt: string): Prom
     };
     const response = await fetch("/api/workbench/mono/generate/video", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
     const payload = await response.json().catch(() => ({})) as { job?: MonoJob; error?: string };
-    if (!response.ok || !payload.job) throw new Error(payload.error ?? "创建视频任务失败");
+    if (!response.ok || !payload.job) throw new Error(payload.error ?? "生成视频任务失败");
     return payload.job;
   } catch (error) {
     await cleanupUploadedAssets(uploaded);
@@ -346,7 +346,7 @@ export async function submitVideoGeneration(aui: Aui, threadId: string, burstTar
     aui.composer().setText("");
     if (burstTarget) emitSendBurst(burstTarget);
   } catch (error) {
-    useVideoGenerationMode.getState().showNotice(error instanceof Error ? error.message : "创建视频任务失败");
+    useVideoGenerationMode.getState().showNotice(error instanceof Error ? error.message : "生成视频任务失败");
   } finally {
     useVideoGenerationMode.getState().setSubmitting(false);
   }
