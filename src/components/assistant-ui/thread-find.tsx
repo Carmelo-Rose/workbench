@@ -165,60 +165,76 @@ export const ThreadFindBar: FC = () => {
   // 卸载/关闭都要清场：高亮是全局注册表，留着会侵入下一次打开的样式变体。
   useEffect(() => () => clearHighlights(), [clearHighlights]);
 
-  if (!open) return null;
+  // ::highlight() 走运行时 <style> 注入，不进 globals.css——这条 Turbopack 打包时用的
+  // CSS 解析器还不认识这个较新的伪元素语法，写进构建期样式表会直接编译失败。
+  const highlightStyles = (
+    <style>{`
+      ::highlight(${HIGHLIGHT_ALL}) {
+        background-color: color-mix(in oklab, var(--foreground) 22%, transparent);
+      }
+      ::highlight(${HIGHLIGHT_ACTIVE}) {
+        background-color: color-mix(in oklab, orange 55%, transparent);
+      }
+    `}</style>
+  );
+
+  if (!open) return highlightStyles;
 
   return (
-    <div
-      role="search"
-      aria-label="会话内查找"
-      data-thread-find-skip
-      className="bg-popover text-popover-foreground fade-in slide-in-from-top-1 animate-in absolute start-1/2 top-3 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border py-1 pe-1.5 ps-3 shadow-lg backdrop-blur-sm duration-150"
-    >
-      <Input
-        ref={inputRef}
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            goTo(event.shiftKey ? -1 : 1);
-          }
-        }}
-        placeholder="在本会话中查找…"
-        className="h-7 w-40 rounded-full border-none bg-transparent px-0 text-sm shadow-none focus-visible:ring-0"
-      />
-      <span className="text-muted-foreground w-12 shrink-0 text-center text-xs tabular-nums">
-        {matchCount ? `${activeIndex + 1}/${matchCount}` : "0/0"}
-      </span>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-6 rounded-full"
-        disabled={!matchCount}
-        onClick={() => goTo(-1)}
-        aria-label="上一个"
+    <>
+      {highlightStyles}
+      <div
+        role="search"
+        aria-label="会话内查找"
+        data-thread-find-skip
+        className="bg-popover text-popover-foreground fade-in slide-in-from-top-1 animate-in absolute start-1/2 top-3 z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border py-1 pe-1.5 ps-3 shadow-lg backdrop-blur-sm duration-150"
       >
-        <ChevronUpIcon className="size-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-6 rounded-full"
-        disabled={!matchCount}
-        onClick={() => goTo(1)}
-        aria-label="下一个"
-      >
-        <ChevronDownIcon className="size-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-6 rounded-full"
-        onClick={close}
-        aria-label="关闭查找"
-      >
-        <XIcon className="size-3.5" />
-      </Button>
-    </div>
+        <Input
+          ref={inputRef}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              goTo(event.shiftKey ? -1 : 1);
+            }
+          }}
+          placeholder="在本会话中查找…"
+          className="h-7 w-40 rounded-full border-none bg-transparent px-0 text-sm shadow-none focus-visible:ring-0"
+        />
+        <span className="text-muted-foreground w-12 shrink-0 text-center text-xs tabular-nums">
+          {matchCount ? `${activeIndex + 1}/${matchCount}` : "0/0"}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6 rounded-full"
+          disabled={!matchCount}
+          onClick={() => goTo(-1)}
+          aria-label="上一个"
+        >
+          <ChevronUpIcon className="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6 rounded-full"
+          disabled={!matchCount}
+          onClick={() => goTo(1)}
+          aria-label="下一个"
+        >
+          <ChevronDownIcon className="size-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6 rounded-full"
+          onClick={close}
+          aria-label="关闭查找"
+        >
+          <XIcon className="size-3.5" />
+        </Button>
+      </div>
+    </>
   );
 };

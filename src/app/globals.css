@@ -144,15 +144,6 @@ html {
   font-size: calc(16px * var(--wb-density-scale));
 }
 
-/* ⌘F 会话内查找：CSS Custom Highlight API，不落 DOM 结构，与 React 重渲染互不干扰 */
-::highlight(thread-find-all) {
-  background-color: color-mix(in oklab, var(--foreground) 22%, transparent);
-}
-
-::highlight(thread-find-active) {
-  background-color: color-mix(in oklab, orange 55%, transparent);
-}
-
 @layer base {
   * {
     @apply border-border outline-ring/50;
