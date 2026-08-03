@@ -23,6 +23,7 @@ import {
 } from "@/lib/agent-status";
 import { BACKENDS } from "@/lib/backends";
 import { useImage2Mode } from "@/lib/image2-mode";
+import { useVideoGenerationMode } from "@/lib/video-generation-mode";
 
 export function ThreadListSidebar({
   onOpenSettings,
@@ -33,9 +34,16 @@ export function ThreadListSidebar({
   const router = useRouter();
   const searchParams = useSearchParams();
   const resetImage2 = useImage2Mode((state) => state.reset);
+  const resetVideoGeneration = useVideoGenerationMode((state) => state.reset);
   const isImage2 = searchParams.get("mode") === "image2";
-  const exitImage2 = () => {
-    resetImage2();
+  const isVideo = searchParams.get("mode") === "video";
+  // New Thread / picking another thread both leave the current conversation,
+  // so any composer mode tied to "this" conversation needs to drop too —
+  // otherwise the video/image2 composer (and, for video, its job pointer)
+  // rides along into a thread that never opted into it.
+  const exitMode = () => {
+    if (isImage2) resetImage2();
+    if (isVideo) resetVideoGeneration();
     router.push("/");
   };
   return (
@@ -76,12 +84,12 @@ export function ThreadListSidebar({
         </SidebarMenu>
         <div
           onClickCapture={(event) => {
-            if (isImage2 && (event.target as HTMLElement).closest("[data-slot='aui_thread-list-item-trigger']")) {
-              exitImage2();
+            if ((isImage2 || isVideo) && (event.target as HTMLElement).closest("[data-slot='aui_thread-list-item-trigger']")) {
+              exitMode();
             }
           }}
         >
-          <ThreadList onNewThread={isImage2 ? exitImage2 : undefined} />
+          <ThreadList onNewThread={isImage2 || isVideo ? exitMode : undefined} />
         </div>
       </SidebarContent>
       <SidebarFooter className="aui-sidebar-footer">

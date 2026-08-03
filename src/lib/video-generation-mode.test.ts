@@ -1,11 +1,26 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createVideoGenerationDraft,
   useVideoGenerationMode,
   validateVideoGenerationDraft,
 } from "@/lib/video-generation-mode";
 
-afterEach(() => useVideoGenerationMode.getState().reset());
+afterEach(() => {
+  useVideoGenerationMode.getState().reset();
+  vi.unstubAllGlobals();
+});
+
+/** Minimal window.localStorage stand-in — this suite runs under the "node" vitest environment. */
+function stubLocalStorage() {
+  const store = new Map<string, string>();
+  vi.stubGlobal("window", {
+    localStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    },
+  });
+}
 
 describe("video generation mode", () => {
   it("keeps only a real-job-ready draft as local state", () => {
@@ -65,5 +80,43 @@ describe("video generation mode", () => {
       firstFrameAssetId: "asset_11111111-1111-1111-1111-111111111111",
       lastFrameAssetId: "asset_22222222-2222-2222-2222-222222222222",
     });
+  });
+
+  it("scopes the current-job pointer per thread, not just per workspace", () => {
+    stubLocalStorage();
+    const mode = useVideoGenerationMode.getState();
+
+    mode.setCurrentJob("ws_1", "thread_a", "job_a");
+    expect(useVideoGenerationMode.getState().currentJob).toEqual({ threadId: "thread_a", jobId: "job_a" });
+
+    // A different thread in the same workspace must not see thread A's job —
+    // this is the bug: it used to be keyed by workspace alone, so any thread
+    // (new or existing) restored whatever job was last written anywhere.
+    mode.restoreCurrentJob("ws_1", "thread_b");
+    expect(useVideoGenerationMode.getState().currentJob).toBeUndefined();
+
+    // Switching back to thread A restores its own job.
+    mode.restoreCurrentJob("ws_1", "thread_a");
+    expect(useVideoGenerationMode.getState().currentJob).toEqual({ threadId: "thread_a", jobId: "job_a" });
+
+    // Clearing thread A's job doesn't touch thread B's (absence of) one.
+    mode.setCurrentJob("ws_1", "thread_a", undefined);
+    mode.restoreCurrentJob("ws_1", "thread_a");
+    expect(useVideoGenerationMode.getState().currentJob).toBeUndefined();
+  });
+
+  it("keeps the thread id on the pointer so a stale card can be refused", () => {
+    stubLocalStorage();
+    const mode = useVideoGenerationMode.getState();
+
+    // "New Thread" reuses the same `__LOCALID_*` until a message materialises
+    // the thread, and a video job never sends one — so storage scoping alone
+    // can't tell the two apart. The pointer therefore carries its own thread
+    // id and consumers compare it against the thread on screen.
+    mode.setCurrentJob("ws_1", "__LOCALID_1", "job_a");
+    expect(useVideoGenerationMode.getState().currentJob?.threadId).toBe("__LOCALID_1");
+
+    mode.reset();
+    expect(useVideoGenerationMode.getState().currentJob).toBeUndefined();
   });
 });

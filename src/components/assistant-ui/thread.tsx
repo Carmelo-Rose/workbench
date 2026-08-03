@@ -52,6 +52,7 @@ import {
 import {
   adoptComposerImageAsVideoFrame,
   submitVideoGeneration,
+  useCurrentVideoJobId,
   VideoGenerationJobTurn,
   VideoGenerationModeControl,
   VideoGenerationNotice,
@@ -195,7 +196,7 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
   const { Welcome = ThreadWelcome } = useContext(ThreadComponentsContext);
   const image2Active = useImage2Mode((state) => state.active);
   const videoGenerationActive = useVideoGenerationMode((state) => state.active);
-  const hasVideoTurn = Boolean(useVideoGenerationMode((state) => state.currentJobId));
+  const hasVideoTurn = Boolean(useCurrentVideoJobId());
 
   return (
     <ThreadPrimitive.Root
@@ -286,7 +287,13 @@ const ThreadScrollToBottom: FC = () => {
 
 const ThreadWelcome: FC = () => {
   return (
-    <div className="aui-thread-welcome-root mx-auto mb-6 flex w-full max-w-(--thread-max-width) flex-col items-center px-4 text-center">
+    // The greeting sits only 24px above the composer, so an upward trigger
+    // popover would always cover it; this marks it as an obstacle the popover
+    // must stay clear of (see composer-trigger-popover).
+    <div
+      data-composer-popover-avoid
+      className="aui-thread-welcome-root mx-auto mb-6 flex w-full max-w-(--thread-max-width) flex-col items-center px-4 text-center"
+    >
       <h1 className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-semibold duration-200">
         今天想让 Mono 做什么？
       </h1>
@@ -437,6 +444,7 @@ function DirectiveChip(props: DirectiveChipProps) {
 
 const Composer: FC = () => {
   const aui = useAui();
+  const threadId = useAuiState((state) => state.threads.mainThreadId);
   const openSubjectLibrary = useImage2Mode((state) => state.openSubjectLibrary);
   const videoGenerationActive = useVideoGenerationMode((state) => state.active);
   const subjects = useMonoSubjectCatalog((state) => state.subjects);
@@ -564,7 +572,7 @@ const Composer: FC = () => {
                 ) return;
                 event.preventDefault();
                 event.stopPropagation();
-                void submitVideoGeneration(aui);
+                void submitVideoGeneration(aui, threadId);
               }}
               directiveChip={DirectiveChip}
               directivePluginProps={{ onDirectiveSelect: openSubjectLibraryFromDirective }}

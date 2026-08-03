@@ -45,15 +45,25 @@ export function validateVideoGenerationDraft(draft: VideoGenerationDraft, prompt
   return undefined;
 }
 
-function storageKey(workspaceId: string): string {
-  return `workbench:video-generation:current:${workspaceId}`;
+/** Scoped per thread, not just per workspace — a workspace-only key made every thread show the last job generated anywhere in it. */
+function storageKey(workspaceId: string, threadId: string): string {
+  return `workbench:video-generation:current:${workspaceId}:${threadId}`;
 }
+
+/**
+ * The pointer carries its own thread id so a consumer can refuse to render a
+ * card that belongs to another conversation. Keying only the storage slot was
+ * not enough: `switchToNewThread()` reuses the same `__LOCALID_*` until the
+ * thread is materialised by a sent message, and a video job never sends one —
+ * so "New Thread" could land back on the very id the last job was stored under.
+ */
+export type VideoGenerationJobPointer = { threadId: string; jobId: string };
 
 type VideoGenerationModeState = {
   active: boolean;
   submitting: boolean;
   draft: VideoGenerationDraft;
-  currentJobId?: string;
+  currentJob?: VideoGenerationJobPointer;
   notice?: string;
   activate: () => void;
   deactivate: () => void;
@@ -65,8 +75,8 @@ type VideoGenerationModeState = {
   setVariants: (variants: number) => void;
   setModel: (model: string) => void;
   setFrame: (slot: "firstFrame" | "lastFrame", file?: File) => void;
-  setCurrentJob: (workspaceId: string, jobId?: string) => void;
-  restoreCurrentJob: (workspaceId: string) => void;
+  setCurrentJob: (workspaceId: string, threadId: string, jobId?: string) => void;
+  restoreCurrentJob: (workspaceId: string, threadId: string) => void;
   restoreFromInput: (input: Record<string, unknown>) => string | undefined;
   showNotice: (notice: string) => void;
   clearNotice: () => void;
@@ -79,7 +89,7 @@ export const useVideoGenerationMode = create<VideoGenerationModeState>((set) => 
   draft: initialDraft(),
   activate: () => set({ active: true }),
   deactivate: () => set({ active: false }),
-  reset: () => set({ active: false, submitting: false, draft: initialDraft(), currentJobId: undefined, notice: undefined }),
+  reset: () => set({ active: false, submitting: false, draft: initialDraft(), currentJob: undefined, notice: undefined }),
   setKind: (kind) => set((state) => ({
     draft: {
       ...state.draft,
@@ -99,17 +109,17 @@ export const useVideoGenerationMode = create<VideoGenerationModeState>((set) => 
       ...(slot === "firstFrame" ? { firstFrameAssetId: undefined } : { lastFrameAssetId: undefined }),
     },
   })),
-  setCurrentJob: (workspaceId, jobId) => {
+  setCurrentJob: (workspaceId, threadId, jobId) => {
     if (typeof window !== "undefined") {
-      if (jobId) window.localStorage.setItem(storageKey(workspaceId), jobId);
-      else window.localStorage.removeItem(storageKey(workspaceId));
+      if (jobId) window.localStorage.setItem(storageKey(workspaceId, threadId), jobId);
+      else window.localStorage.removeItem(storageKey(workspaceId, threadId));
     }
-    set({ currentJobId: jobId });
+    set({ currentJob: jobId ? { threadId, jobId } : undefined });
   },
-  restoreCurrentJob: (workspaceId) => {
+  restoreCurrentJob: (workspaceId, threadId) => {
     if (typeof window === "undefined") return;
-    const currentJobId = window.localStorage.getItem(storageKey(workspaceId)) ?? undefined;
-    set({ currentJobId });
+    const jobId = window.localStorage.getItem(storageKey(workspaceId, threadId)) ?? undefined;
+    set({ currentJob: jobId ? { threadId, jobId } : undefined });
   },
   restoreFromInput: (input) => {
     const kind = input.mode === "text-to-video" ? "text-to-video" : "image-to-video";

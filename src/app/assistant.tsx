@@ -158,17 +158,23 @@ export const Assistant = () => {
 const Image2ModeSync: FC = () => {
   const searchParams = useSearchParams();
   const aui = useAui();
-  const active = useImage2Mode((state) => state.active);
   const activate = useImage2Mode((state) => state.activate);
   const deactivate = useImage2Mode((state) => state.deactivate);
   const pendingComposer = useImage2Mode((state) => state.pendingComposer);
   const consumePendingComposer = useImage2Mode((state) => state.consumePendingComposer);
   const requested = searchParams.get("mode") === "image2";
 
+  // `requested` (the URL) is the only dependency on purpose: exit handlers
+  // (useExitImage2Mode) flip `active` off directly for instant feedback, then
+  // navigate. If `active` were also a dependency here, that direct flip would
+  // re-run this effect before the URL update lands, see stale `requested`
+  // still true, and immediately reactivate — the exit never sticks. Reading
+  // `active` via getState() (not the subscribed hook) keeps this a one-way
+  // URL-to-store sync instead of a second writer fighting the exit handler.
   useEffect(() => {
-    if (requested && !active) activate();
-    if (!requested && active) deactivate();
-  }, [active, activate, deactivate, requested]);
+    if (requested && !useImage2Mode.getState().active) activate();
+    if (!requested && useImage2Mode.getState().active) deactivate();
+  }, [activate, deactivate, requested]);
 
   // 消息树深处的卡片（反推结果、生图结果）拿不到 composer 的 ambient scope，
   // 它们只往 store 里落一份待写入内容，由这个顶层组件代为写进真正的 composer。
@@ -200,24 +206,36 @@ const Image2ModeSync: FC = () => {
 const VideoGenerationModeSync: FC = () => {
   const searchParams = useSearchParams();
   const aui = useAui();
-  const active = useVideoGenerationMode((state) => state.active);
   const activate = useVideoGenerationMode((state) => state.activate);
   const deactivate = useVideoGenerationMode((state) => state.deactivate);
-  const image2Active = useImage2Mode((state) => state.active);
-  const resetImage2 = useImage2Mode((state) => state.reset);
+  const restoreCurrentJob = useVideoGenerationMode((state) => state.restoreCurrentJob);
   const requested = searchParams.get("mode") === "video";
+  const { session } = useWorkbenchSession();
+  const threadId = useAuiState((s) => s.threads.mainThreadId);
 
+  // `requested` is the only dependency on purpose — see the matching comment
+  // in Image2ModeSync for why `active` can't also be one (it would re-fight
+  // useExitVideoGenerationMode's direct deactivate()).
   useEffect(() => {
     if (requested) {
-      if (image2Active) resetImage2();
-      if (!active) {
+      if (useImage2Mode.getState().active) useImage2Mode.getState().reset();
+      if (!useVideoGenerationMode.getState().active) {
         activate();
         void adoptComposerImageAsVideoFrame(aui);
       }
       return;
     }
-    if (active) deactivate();
-  }, [active, activate, aui, deactivate, image2Active, requested, resetImage2]);
+    if (useVideoGenerationMode.getState().active) deactivate();
+  }, [activate, aui, deactivate, requested]);
+
+  // The finished-video card is a per-thread record, not a global one — redo
+  // this lookup for whichever thread is open now so a new or different
+  // thread can't show another thread's result (independent of `requested`:
+  // the card renders even after exiting the video composer, see
+  // VideoGenerationJobTurn).
+  useEffect(() => {
+    restoreCurrentJob(session.workspace.id, threadId);
+  }, [restoreCurrentJob, session.workspace.id, threadId]);
 
   return null;
 };

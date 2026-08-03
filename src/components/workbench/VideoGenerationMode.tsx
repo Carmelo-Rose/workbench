@@ -86,7 +86,12 @@ function useVideoCapabilities(enabled: boolean) {
   return { value, error, refresh };
 }
 
-/** Exiting only changes the composer route; the durable current-job pointer stays in browser storage. */
+/**
+ * The finished-video card belongs to the video composer, so leaving the mode
+ * has to hide it too — otherwise "exit" only swaps the input row and the page
+ * still doesn't look like the home screen. The pointer itself stays in browser
+ * storage, so re-entering video mode on the same thread brings the card back.
+ */
 export function useExitVideoGenerationMode() {
   const router = useRouter();
   const aui = useAui();
@@ -96,6 +101,19 @@ export function useExitVideoGenerationMode() {
     aui.composer().setText("");
     router.replace("/");
   };
+}
+
+/**
+ * The job pointer is only ever this thread's, and only while the video
+ * composer is on. Both guards matter: the pointer survives a thread switch
+ * until the restore effect catches up, and it survives exiting the mode.
+ */
+export function useCurrentVideoJobId(): string | undefined {
+  const threadId = useAuiState((state) => state.threads.mainThreadId);
+  const active = useVideoGenerationMode((state) => state.active);
+  const currentJob = useVideoGenerationMode((state) => state.currentJob);
+  if (!active || currentJob?.threadId !== threadId) return undefined;
+  return currentJob.jobId;
 }
 
 function VideoQuickOption<T extends string | number>({
@@ -160,16 +178,12 @@ export function VideoGenerationModeControl() {
   const setResolution = useVideoGenerationMode((state) => state.setResolution);
   const setVariants = useVideoGenerationMode((state) => state.setVariants);
   const setModel = useVideoGenerationMode((state) => state.setModel);
-  const restoreCurrentJob = useVideoGenerationMode((state) => state.restoreCurrentJob);
   const restoreFromInput = useVideoGenerationMode((state) => state.restoreFromInput);
   const { value, error } = useVideoCapabilities(active);
   const aui = useAui();
   const exit = useExitVideoGenerationMode();
   const capabilities = value?.capabilities;
 
-  useEffect(() => {
-    if (value) restoreCurrentJob(value.workspaceId);
-  }, [restoreCurrentJob, value]);
   useEffect(() => {
     if (!capabilities?.configured) return;
     if (!capabilities.modes.includes(draft.kind)) setKind(capabilities.modes[0] ?? "text-to-video");
@@ -308,7 +322,7 @@ async function createVideoJob(draft: VideoGenerationDraft, prompt: string): Prom
 }
 
 /** The only video submit path, shared by the button and the Enter key. */
-export async function submitVideoGeneration(aui: Aui, burstTarget?: HTMLElement): Promise<void> {
+export async function submitVideoGeneration(aui: Aui, threadId: string, burstTarget?: HTMLElement): Promise<void> {
   const mode = useVideoGenerationMode.getState();
   if (mode.submitting) return;
   const prompt = aui.composer().getState().text;
@@ -328,7 +342,7 @@ export async function submitVideoGeneration(aui: Aui, burstTarget?: HTMLElement)
       throw new Error(capability.capabilities?.message ?? "视频生成未配置");
     }
     const job = await createVideoJob(draft, prompt);
-    useVideoGenerationMode.getState().setCurrentJob(capability.workspaceId, job.id);
+    useVideoGenerationMode.getState().setCurrentJob(capability.workspaceId, threadId, job.id);
     aui.composer().setText("");
     if (burstTarget) emitSendBurst(burstTarget);
   } catch (error) {
@@ -340,13 +354,15 @@ export async function submitVideoGeneration(aui: Aui, burstTarget?: HTMLElement)
 
 export function VideoGenerationSendButton() {
   const aui = useAui();
+  const threadId = useAuiState((state) => state.threads.mainThreadId);
   const threadRunning = useAuiState((state) => state.thread.isRunning);
   const submitting = useVideoGenerationMode((state) => state.submitting);
-  return <TooltipIconButton tooltip={submitting ? "正在提交视频任务" : "生成视频"} side="bottom" type="button" variant="default" size="icon" className="aui-composer-send size-7 rounded-full" aria-label={submitting ? "正在提交视频任务" : "生成视频"} disabled={submitting || threadRunning} onClick={(event) => void submitVideoGeneration(aui, event.currentTarget)}>{submitting ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : <FilmIcon className="size-3.5" />}</TooltipIconButton>;
+  return <TooltipIconButton tooltip={submitting ? "正在提交视频任务" : "生成视频"} side="bottom" type="button" variant="default" size="icon" className="aui-composer-send size-7 rounded-full" aria-label={submitting ? "正在提交视频任务" : "生成视频"} disabled={submitting || threadRunning} onClick={(event) => void submitVideoGeneration(aui, threadId, event.currentTarget)}>{submitting ? <LoaderCircleIcon className="size-3.5 animate-spin" /> : <FilmIcon className="size-3.5" />}</TooltipIconButton>;
 }
 
 function VideoJobContent({ job }: { job: MonoJob }) {
   const aui = useAui();
+  const threadId = useAuiState((state) => state.threads.mainThreadId);
   const restoreFromInput = useVideoGenerationMode((state) => state.restoreFromInput);
   const setCurrentJob = useVideoGenerationMode((state) => state.setCurrentJob);
   const showNotice = useVideoGenerationMode((state) => state.showNotice);
@@ -358,12 +374,12 @@ function VideoJobContent({ job }: { job: MonoJob }) {
   const reuse = () => { const prompt = restoreFromInput(job.input); if (prompt !== undefined) aui.composer().setText(prompt); };
   const regenerate = async () => {
     setMutating(true);
-    try { const generated = await createVideoJob({ ...useVideoGenerationMode.getState().draft, firstFrame: undefined, lastFrame: undefined, firstFrameAssetId: typeof job.input.firstFrameAssetId === "string" ? job.input.firstFrameAssetId : undefined, lastFrameAssetId: typeof job.input.lastFrameAssetId === "string" ? job.input.lastFrameAssetId : undefined }, typeof job.input.prompt === "string" ? job.input.prompt : ""); setCurrentJob(job.workspaceId, generated.id); }
+    try { const generated = await createVideoJob({ ...useVideoGenerationMode.getState().draft, firstFrame: undefined, lastFrame: undefined, firstFrameAssetId: typeof job.input.firstFrameAssetId === "string" ? job.input.firstFrameAssetId : undefined, lastFrameAssetId: typeof job.input.lastFrameAssetId === "string" ? job.input.lastFrameAssetId : undefined }, typeof job.input.prompt === "string" ? job.input.prompt : ""); setCurrentJob(job.workspaceId, threadId, generated.id); }
     catch (error) { showNotice(error instanceof Error ? error.message : "重新生成失败"); }
     finally { setMutating(false); }
   };
   const favorite = async () => { setMutating(true); try { await fetch(`/api/workbench/mono/jobs/${encodeURIComponent(job.id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ favorite: !job.favorite }) }); } finally { setMutating(false); } };
-  const purge = async () => { setMutating(true); try { const response = await fetch(`/api/workbench/mono/jobs/${encodeURIComponent(job.id)}?purge=true`, { method: "DELETE" }); if (!response.ok) throw new Error("删除失败"); setCurrentJob(job.workspaceId); } catch (error) { showNotice(error instanceof Error ? error.message : "删除失败"); } finally { setMutating(false); } };
+  const purge = async () => { setMutating(true); try { const response = await fetch(`/api/workbench/mono/jobs/${encodeURIComponent(job.id)}?purge=true`, { method: "DELETE" }); if (!response.ok) throw new Error("删除失败"); setCurrentJob(job.workspaceId, threadId); } catch (error) { showNotice(error instanceof Error ? error.message : "删除失败"); } finally { setMutating(false); } };
   if (active) return <div className="space-y-2"><div className="flex items-center gap-2 text-sm"><LoaderCircleIcon className="size-4 animate-spin" /><span>{job.status === "queued" ? "正在排队" : result?.stage === "downloading" ? "正在归档视频" : "正在生成视频"}</span></div><div className="bg-muted h-1.5 overflow-hidden rounded-full"><div className="bg-foreground h-full w-1/3 animate-pulse rounded-full" /></div><p className="text-muted-foreground text-xs">仅展示 provider 的真实阶段；当前没有可用百分比。</p></div>;
   if (job.status === "succeeded" && assetUrl) return <div className="space-y-3"><div className="bg-muted/50 overflow-hidden rounded-xl border"><video controls preload="metadata" className="mx-auto max-h-80 w-full bg-black object-contain" src={assetUrl}>当前浏览器不支持视频预览。</video></div><div className="text-muted-foreground flex flex-wrap gap-x-2 gap-y-1 text-xs"><span>{result?.provider}</span><span>·</span><span>{result?.model}</span><span>·</span><span>{typeof job.input.durationSeconds === "number" ? `${job.input.durationSeconds} 秒` : ""}</span><span>·</span><span>{job.completedAt ? `耗时 ${Math.max(1, Math.round((job.completedAt - job.createdAt) / 1000))} 秒` : ""}</span></div><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" size="xs" onClick={() => void document.querySelector<HTMLVideoElement>(`video[src='${assetUrl}']`)?.play()}><PlayIcon />播放</Button><Button asChild variant="outline" size="xs"><a href={assetUrl} download="generated-video.mp4"><DownloadIcon />下载</a></Button><Button type="button" variant="outline" size="xs" onClick={reuse}><RefreshCwIcon />复用参数</Button><Button type="button" variant="outline" size="xs" disabled={mutating} onClick={() => void regenerate()}><FilmIcon />重新生成</Button><Button type="button" variant="ghost" size="xs" disabled={mutating} onClick={() => void favorite()}><HeartIcon className={job.favorite ? "fill-current" : undefined} />收藏</Button><Button type="button" variant="ghost" size="xs" className="text-muted-foreground" disabled={mutating} onClick={() => void purge()}><Trash2Icon />删除</Button></div></div>;
   return <div className="space-y-3"><p className="text-sm">{job.error ?? slot?.error ?? (job.status === "cancelled" ? "任务已取消。" : "视频任务未能完成。")}</p><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" size="xs" onClick={reuse}><RefreshCwIcon />复用参数</Button><Button type="button" variant="outline" size="xs" disabled={mutating} onClick={() => void regenerate()}><FilmIcon />重新生成</Button>{job.status !== "queued" && job.status !== "running" ? <Button type="button" variant="ghost" size="xs" disabled={mutating} onClick={() => void purge()}><Trash2Icon />删除</Button> : null}</div></div>;
@@ -371,7 +387,7 @@ function VideoJobContent({ job }: { job: MonoJob }) {
 
 /** Rendered below the conversation, but backed exclusively by a real Mono job. */
 export function VideoGenerationJobTurn() {
-  const jobId = useVideoGenerationMode((state) => state.currentJobId);
+  const jobId = useCurrentVideoJobId();
   const [job, setJob] = useState<MonoJob>();
   useEffect(() => {
     if (!jobId) return undefined;

@@ -1,6 +1,14 @@
 "use client";
 
-import { memo, useRef, type ComponentPropsWithoutRef, type FC } from "react";
+import {
+  memo,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentPropsWithoutRef,
+  type CSSProperties,
+  type FC,
+} from "react";
 import {
   ComposerPrimitive,
   unstable_defaultDirectiveFormatter,
@@ -223,6 +231,87 @@ const Items: FC<ItemsProps> = ({
   );
 };
 
+/** Roomy but never full-screen: a taller list scrolls instead of growing. */
+const MAX_POPOVER_HEIGHT = 320;
+/** Below this a flipped popover is more annoying than a scrolling one. */
+const MIN_POPOVER_HEIGHT = 160;
+const POPOVER_GAP = 8;
+
+type Placement = { side: "top" | "bottom"; maxHeight: number };
+
+/**
+ * Places the popover above the composer (the default), but flips it below and
+ * always bounds its height so it can't run off-screen or bury the content it
+ * is standing in front of.
+ *
+ * "Bounded by the window" alone isn't enough on the centered welcome screen:
+ * the greeting sits just above the composer, so anything opening upward covers
+ * it. Elements marked `data-composer-popover-avoid` act as a ceiling — the
+ * popover fits itself into the gap above the composer and below them, and only
+ * when that gap is too small does it drop under the composer instead.
+ */
+function usePopoverPlacement(): {
+  ref: (node: HTMLDivElement | null) => void;
+  placement: Placement;
+} {
+  const [node, setNode] = useState<HTMLDivElement | null>(null);
+  const [placement, setPlacement] = useState<Placement>({
+    side: "top",
+    maxHeight: MAX_POPOVER_HEIGHT,
+  });
+
+  useLayoutEffect(() => {
+    if (!node) return undefined;
+    const anchor = (node.offsetParent ?? node.parentElement) as HTMLElement | null;
+    if (!anchor) return undefined;
+
+    const measure = () => {
+      const anchorRect = anchor.getBoundingClientRect();
+      const obstacle = document
+        .querySelector<HTMLElement>("[data-composer-popover-avoid]")
+        ?.getBoundingClientRect();
+      // Only obstacles actually sitting above the composer constrain us.
+      const ceiling =
+        obstacle && obstacle.top < anchorRect.top
+          ? obstacle.top - POPOVER_GAP
+          : POPOVER_GAP;
+
+      const above = anchorRect.top - POPOVER_GAP - ceiling;
+      const below =
+        window.innerHeight - anchorRect.bottom - POPOVER_GAP * 2;
+      // scrollHeight is the unclipped content height, so it stays stable no
+      // matter what max-height we applied on the previous pass.
+      const needed = node.scrollHeight;
+      const side: Placement["side"] =
+        above >= Math.min(needed, MIN_POPOVER_HEIGHT) || above >= below
+          ? "top"
+          : "bottom";
+      const maxHeight = Math.max(
+        MIN_POPOVER_HEIGHT,
+        Math.min(MAX_POPOVER_HEIGHT, side === "top" ? above : below),
+      );
+
+      setPlacement((current) =>
+        current.side === side && current.maxHeight === maxHeight
+          ? current
+          : { side, maxHeight },
+      );
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    observer.observe(anchor);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [node]);
+
+  return { ref: setNode, placement };
+}
+
 /**
  * Pre-built popover UI for a trigger-driven picker (mentions, slash commands, etc).
  * Pass exactly one of `directive` (inserts a chip) or `action` (fires a handler).
@@ -236,11 +325,13 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
   loadingLabel = "Loading…",
   onActionItem,
   className,
+  style,
   directive,
   action,
   char,
   ...props
 }) => {
+  const { ref, placement } = usePopoverPlacement();
   const warnedRef = useRef(false);
   if (
     process.env.NODE_ENV !== "production" &&
@@ -255,11 +346,15 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
 
   return (
     <ComposerPrimitive.Unstable_TriggerPopover
+      ref={ref}
       data-slot="composer-trigger-popover"
+      data-side={placement.side}
       className={cn(
-        "aui-composer-trigger-popover bg-popover text-popover-foreground absolute start-0 bottom-full z-50 mb-2 w-64 overflow-hidden rounded-xl border shadow-lg",
+        "aui-composer-trigger-popover bg-popover text-popover-foreground absolute start-0 z-50 w-64 overflow-y-auto rounded-xl border shadow-lg",
+        placement.side === "top" ? "bottom-full mb-2" : "top-full mt-2",
         className,
       )}
+      style={{ maxHeight: placement.maxHeight, ...style } as CSSProperties}
       char={char}
       {...props}
     >
