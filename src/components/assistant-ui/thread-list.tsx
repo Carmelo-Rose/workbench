@@ -8,6 +8,7 @@ import {
   ThreadListItemMorePrimitive,
   ThreadListItemPrimitive,
   ThreadListPrimitive,
+  useAui,
   useAuiState,
 } from "@assistant-ui/react";
 import {
@@ -15,6 +16,9 @@ import {
   ArchiveRestoreIcon,
   ChevronRightIcon,
   MoreHorizontalIcon,
+  PencilIcon,
+  PinIcon,
+  PinOffIcon,
   PlusIcon,
   SearchIcon,
   TrashIcon,
@@ -22,7 +26,9 @@ import {
 import {
   forwardRef,
   Fragment,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentPropsWithoutRef,
   type FC,
@@ -118,6 +124,11 @@ const dateGroupLabel = (
 
 type ThreadListGroup = { label: string; indices: number[] };
 
+/** `custom` 字段在这之前完全没被用过，置顶是它的第一个消费者。 */
+type ThreadCustom = { pinned?: boolean };
+const isPinned = (custom: unknown): boolean =>
+  !!(custom as ThreadCustom | undefined)?.pinned;
+
 const ThreadListItemGroups: FC<{ query?: string }> = ({ query = "" }) => {
   const threadIds = useAuiState((s) => s.threads.threadIds);
   const threadItems = useAuiState((s) => s.threads.threadItems);
@@ -150,11 +161,20 @@ const ThreadListItemGroups: FC<{ query?: string }> = ({ query = "" }) => {
     ).getTime();
     const time = (index: number) =>
       dates[index]?.getTime() ?? Number.MAX_SAFE_INTEGER;
-    const indices = threadIds
-      .map((_, index) => index)
+
+    const allIndices = threadIds.map((_, index) => index);
+    const pinnedIndices = allIndices
+      .filter((index) => isPinned(itemsById.get(threadIds[index]!)?.custom))
+      .sort((a, b) => time(b) - time(a));
+    const pinnedSet = new Set(pinnedIndices);
+    const indices = allIndices
+      .filter((index) => !pinnedSet.has(index))
       .sort((a, b) => time(b) - time(a));
 
     const result: ThreadListGroup[] = [];
+    if (pinnedIndices.length > 0) {
+      result.push({ label: "置顶", indices: pinnedIndices });
+    }
     for (const index of indices) {
       const label = dateGroupLabel(dates[index], startOfToday);
       const lastGroup = result[result.length - 1];
@@ -288,24 +308,79 @@ const ThreadListSkeleton: FC = () => {
   );
 };
 
+/** 重命名时原地替换 Trigger 的输入框；Enter/失焦提交，Esc 放弃。 */
+const RenameInput: FC<{ onDone: () => void }> = ({ onDone }) => {
+  const aui = useAui();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [value, setValue] = useState(
+    () => aui.threadListItem().getState().title ?? "",
+  );
+  const submittedRef = useRef(false);
+
+  useEffect(() => {
+    // rAF：菜单关闭时 Radix 会把焦点还给触发按钮，晚一帧抢回来才不会被冲掉。
+    const raf = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const submit = () => {
+    if (submittedRef.current) return;
+    submittedRef.current = true;
+    const title = value.trim();
+    if (title) aui.threadListItem().rename(title);
+    onDone();
+  };
+
+  return (
+    <input
+      ref={inputRef}
+      data-slot="aui_thread-list-item-rename-input"
+      value={value}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={submit}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submit();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          submittedRef.current = true;
+          onDone();
+        }
+      }}
+      className="focus-visible:ring-ring/50 h-full min-w-0 flex-1 rounded-md bg-transparent px-2.5 text-sm outline-none focus-visible:ring-[3px]"
+    />
+  );
+};
+
 export const ThreadListItem: FC = () => {
+  const [renaming, setRenaming] = useState(false);
+
   return (
     <ThreadListItemPrimitive.Root
       data-slot="aui_thread-list-item"
       className="group hover:bg-muted focus-visible:bg-muted data-active:bg-muted has-focus-visible:bg-muted has-data-[state=open]:bg-muted relative flex h-8 items-center rounded-md transition-colors focus-visible:outline-none"
     >
-      <ThreadListItemPrimitive.Trigger
-        data-slot="aui_thread-list-item-trigger"
-        className="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center rounded-md px-2.5 text-start text-sm outline-none group-hover:pe-9 group-has-focus-visible:pe-9 group-has-data-[state=open]:pe-9 group-data-active:pe-9 focus-visible:ring-[3px]"
-      >
-        <span
-          data-slot="aui_thread-list-item-title"
-          className="min-w-0 flex-1 truncate"
+      {renaming ? (
+        <RenameInput onDone={() => setRenaming(false)} />
+      ) : (
+        <ThreadListItemPrimitive.Trigger
+          data-slot="aui_thread-list-item-trigger"
+          className="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center rounded-md px-2.5 text-start text-sm outline-none group-hover:pe-9 group-has-focus-visible:pe-9 group-has-data-[state=open]:pe-9 group-data-active:pe-9 focus-visible:ring-[3px]"
         >
-          <ThreadListItemPrimitive.Title fallback="新会话" />
-        </span>
-      </ThreadListItemPrimitive.Trigger>
-      <ThreadListItemMore />
+          <span
+            data-slot="aui_thread-list-item-title"
+            className="min-w-0 flex-1 truncate"
+          >
+            <ThreadListItemPrimitive.Title fallback="新会话" />
+          </span>
+        </ThreadListItemPrimitive.Trigger>
+      )}
+      <ThreadListItemMore onRename={() => setRenaming(true)} />
     </ThreadListItemPrimitive.Root>
   );
 };
@@ -350,7 +425,40 @@ const DeleteMenuItem: FC = () => {
   );
 };
 
-const ThreadListItemMore: FC = () => {
+/** `custom` 之前完全没被用过，置顶是它的第一个消费者——读写都走 threadListItem() 的 scoped 访问器。 */
+const PinMenuItem: FC = () => {
+  const aui = useAui();
+  const pinned = useAuiState((s) => isPinned(s.threadListItem.custom));
+
+  const toggle = () => {
+    const current = aui.threadListItem().getState().custom as
+      | ThreadCustom
+      | undefined;
+    aui.threadListItem().updateCustom({ ...current, pinned: !pinned });
+  };
+
+  return (
+    <ThreadListItemMorePrimitive.Item
+      data-slot="aui_thread-list-item-more-item"
+      onSelect={toggle}
+      className={moreItemClass}
+    >
+      {pinned ? (
+        <>
+          <PinOffIcon className="size-4" />
+          取消置顶
+        </>
+      ) : (
+        <>
+          <PinIcon className="size-4" />
+          置顶
+        </>
+      )}
+    </ThreadListItemMorePrimitive.Item>
+  );
+};
+
+const ThreadListItemMore: FC<{ onRename: () => void }> = ({ onRename }) => {
   return (
     <ThreadListItemMorePrimitive.Root sharedFocusGroup>
       <ThreadListItemMorePrimitive.Trigger asChild>
@@ -371,6 +479,15 @@ const ThreadListItemMore: FC = () => {
         data-slot="aui_thread-list-item-more-content"
         className={moreContentClass}
       >
+        <ThreadListItemMorePrimitive.Item
+          data-slot="aui_thread-list-item-more-item"
+          onSelect={onRename}
+          className={moreItemClass}
+        >
+          <PencilIcon className="size-4" />
+          重命名
+        </ThreadListItemMorePrimitive.Item>
+        <PinMenuItem />
         <ThreadListItemPrimitive.Archive asChild>
           <ThreadListItemMorePrimitive.Item
             data-slot="aui_thread-list-item-more-item"

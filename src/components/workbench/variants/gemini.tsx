@@ -67,9 +67,15 @@ export const Gemini: FC = () => {
       </AuiIf>
 
       <AuiIf condition={(s) => s.thread.messages.length > 0}>
-        <ThreadPrimitive.Viewport className="flex grow flex-col overflow-y-scroll pt-12">
+        <ThreadPrimitive.Viewport
+          data-slot="aui_thread-viewport"
+          className="flex grow flex-col overflow-y-scroll pt-12"
+        >
           <ThreadPrimitive.Messages components={{ Message: ChatMessage }} />
-          <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mt-auto flex w-full flex-col items-center gap-1.5 bg-[#fdfcfc] px-4 pb-3 dark:bg-[#0c0c0c]">
+          <ThreadPrimitive.ViewportFooter
+            data-thread-find-skip
+            className="sticky bottom-0 mt-auto flex w-full flex-col items-center gap-1.5 bg-[#fdfcfc] px-4 pb-3 dark:bg-[#0c0c0c]"
+          >
             <Composer />
             <p className="text-center text-xs text-[#5e6063] dark:text-[#9aa0a6]">
               Gemini can make mistakes, so double-check it.

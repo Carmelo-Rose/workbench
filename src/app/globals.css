@@ -57,6 +57,7 @@
 }
 
 :root {
+  --wb-density-scale: 1;
   --radius: 0.625rem;
   --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
@@ -125,6 +126,31 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.552 0.016 285.938);
+}
+
+/*
+ * 密度：绝大多数间距/字号都走 Tailwind 的 rem 单位，缩放根 font-size
+ * 就能连带缩放全站，不必逐个组件改类名。紧凑/宽松各挪半级，标准即浏览器默认。
+ */
+:root[data-density="compact"] {
+  --wb-density-scale: 0.9375;
+}
+
+:root[data-density="comfortable"] {
+  --wb-density-scale: 1.0625;
+}
+
+html {
+  font-size: calc(16px * var(--wb-density-scale));
+}
+
+/* ⌘F 会话内查找：CSS Custom Highlight API，不落 DOM 结构，与 React 重渲染互不干扰 */
+::highlight(thread-find-all) {
+  background-color: color-mix(in oklab, var(--foreground) 22%, transparent);
+}
+
+::highlight(thread-find-active) {
+  background-color: color-mix(in oklab, orange 55%, transparent);
 }
 
 @layer base {

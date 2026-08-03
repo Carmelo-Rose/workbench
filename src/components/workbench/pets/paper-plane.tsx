@@ -7,6 +7,7 @@ import {
   type RGB,
 } from "@/components/workbench/pets/canvas-color";
 import { createComposerZone } from "@/components/workbench/pets/composer-zone";
+import { prefersReducedMotion } from "@/components/workbench/use-prefers-reduced-motion";
 
 /**
  * 纸飞机 — 一只极简折纸飞机在视口上半部慢速滑翔巡航。
@@ -38,7 +39,6 @@ export const PaperPlanePet: FC = () => {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     const zone = createComposerZone();
     let dpr = 1;
     let ink: RGB = [30, 30, 35];
@@ -264,7 +264,7 @@ export const PaperPlanePet: FC = () => {
     applyTheme();
     draw(performance.now());
 
-    if (!reduced.matches) {
+    if (!prefersReducedMotion()) {
       window.addEventListener("resize", resize);
       themeObserver.observe(document.documentElement, {
         attributes: true,

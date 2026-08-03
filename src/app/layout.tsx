@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { THEME_INIT_SCRIPT } from "@/lib/theme";
+import { DENSITY_INIT_SCRIPT } from "@/lib/density";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,6 +34,8 @@ export default function RootLayout({
       <body className="flex min-h-full flex-col">
         {/* 首帧前套用主题偏好，避免明暗闪烁 */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        {/* 首帧前套用密度偏好，避免加载后跳一下的布局抖动 */}
+        <script dangerouslySetInnerHTML={{ __html: DENSITY_INIT_SCRIPT }} />
         <TooltipProvider>{children}</TooltipProvider>
       </body>
     </html>

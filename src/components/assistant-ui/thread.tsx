@@ -234,6 +234,7 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
         </div>
 
         <ThreadPrimitive.ViewportFooter
+          data-thread-find-skip
           className={cn(
             "aui-thread-viewport-footer mx-auto flex w-full max-w-(--thread-max-width) flex-col gap-4 overflow-visible pb-4 md:pb-6",
             (!isEmpty || hasVideoTurn) &&

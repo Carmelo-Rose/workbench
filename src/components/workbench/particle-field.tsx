@@ -2,6 +2,10 @@
 
 import { useEffect, useRef } from "react";
 import type { FC } from "react";
+import {
+  prefersReducedMotion,
+  watchPrefersReducedMotion,
+} from "@/components/workbench/use-prefers-reduced-motion";
 
 /**
  * Mono ink field — a GPU particle sea rendered behind the empty-thread
@@ -230,7 +234,7 @@ const createEngine = (canvas: HTMLCanvasElement): Engine | null => {
 
   const proj = new Float32Array(16);
   const view = new Float32Array(16);
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let reducedMotion = prefersReducedMotion();
 
   let dpr = 1;
   let aspect = 1;
@@ -275,7 +279,7 @@ const createEngine = (canvas: HTMLCanvasElement): Engine | null => {
     const now = performance.now();
     const dt = lastNow === null ? 0 : Math.min((now - lastNow) / 1000, 0.1);
     lastNow = now;
-    if (!reducedMotion.matches) time += dt;
+    if (!reducedMotion) time += dt;
 
     // ease opacity / pointer
     const fade = active ? 1 : 0;
@@ -326,10 +330,10 @@ const createEngine = (canvas: HTMLCanvasElement): Engine | null => {
   };
 
   const shouldRun = () =>
-    !document.hidden && (active || opacity > 0.01) && !reducedMotion.matches;
+    !document.hidden && (active || opacity > 0.01) && !reducedMotion;
 
   const sync = () => {
-    if (reducedMotion.matches) {
+    if (reducedMotion) {
       // static alternative: single frame, no loop, instant opacity
       stop();
       opacity = active ? 1 : 0;
@@ -399,7 +403,10 @@ const createEngine = (canvas: HTMLCanvasElement): Engine | null => {
   window.addEventListener("pointermove", onPointerMove, { passive: true });
   window.addEventListener("pointerleave", onPointerLeave);
   document.addEventListener("visibilitychange", sync);
-  reducedMotion.addEventListener("change", sync);
+  const unwatchReducedMotion = watchPrefersReducedMotion((next) => {
+    reducedMotion = next;
+    sync();
+  });
   canvas.addEventListener("webglcontextlost", onContextLost);
   canvas.addEventListener("webglcontextrestored", onContextRestored);
 
@@ -419,7 +426,7 @@ const createEngine = (canvas: HTMLCanvasElement): Engine | null => {
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerleave", onPointerLeave);
       document.removeEventListener("visibilitychange", sync);
-      reducedMotion.removeEventListener("change", sync);
+      unwatchReducedMotion();
       canvas.removeEventListener("webglcontextlost", onContextLost);
       canvas.removeEventListener("webglcontextrestored", onContextRestored);
       // Intentionally no loseContext(): StrictMode remounts reuse this

@@ -1,5 +1,7 @@
 "use client";
 
+import { prefersReducedMotion } from "@/components/workbench/use-prefers-reduced-motion";
+
 /**
  * A restrained puff of ink dots from the send button — fired on click,
  * removed when the last dot finishes. Skipped entirely under
@@ -7,7 +9,7 @@
  */
 export const emitSendBurst = (origin: HTMLElement) => {
   if (typeof window === "undefined") return;
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (prefersReducedMotion()) return;
   if (typeof origin.animate !== "function") return;
 
   const rect = origin.getBoundingClientRect();

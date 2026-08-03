@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import { prefersReducedMotion } from "@/components/workbench/use-prefers-reduced-motion";
 
 /**
  * Pointer-following 3D tilt for small interactive surfaces (suggestion
@@ -14,7 +15,7 @@ export const useTilt = (maxDeg = 6) => {
     const enabled = () =>
       typeof window !== "undefined" &&
       window.matchMedia("(pointer: fine)").matches &&
-      !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      !prefersReducedMotion();
 
     const onPointerMove = (e: ReactPointerEvent<HTMLElement>) => {
       if (!enabled()) return;

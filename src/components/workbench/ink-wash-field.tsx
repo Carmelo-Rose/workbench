@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, FC } from "react";
+import {
+  prefersReducedMotion,
+  watchPrefersReducedMotion,
+} from "@/components/workbench/use-prefers-reduced-motion";
 
 /**
  * Mono ink wash —— 浅色主题下空会话欢迎屏的"墨迹擦除"背景。
@@ -306,8 +310,7 @@ const createEngine = (canvas: HTMLCanvasElement): Engine | null => {
 /** 静态降级：reduced-motion 或无 hover 能力的触屏设备 */
 const matchDegraded = () =>
   typeof window !== "undefined" &&
-  (window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
-    window.matchMedia("(hover: none)").matches);
+  (prefersReducedMotion() || window.matchMedia("(hover: none)").matches);
 
 export const InkWashField: FC<{ active: boolean }> = ({ active }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -315,14 +318,13 @@ export const InkWashField: FC<{ active: boolean }> = ({ active }) => {
   const [degraded, setDegraded] = useState(matchDegraded);
 
   useEffect(() => {
-    const queries = [
-      window.matchMedia("(prefers-reduced-motion: reduce)"),
-      window.matchMedia("(hover: none)"),
-    ];
-    const update = () => setDegraded(queries.some((q) => q.matches));
-    for (const q of queries) q.addEventListener("change", update);
+    const hoverQuery = window.matchMedia("(hover: none)");
+    const update = () => setDegraded(matchDegraded());
+    const unwatchReducedMotion = watchPrefersReducedMotion(update);
+    hoverQuery.addEventListener("change", update);
     return () => {
-      for (const q of queries) q.removeEventListener("change", update);
+      unwatchReducedMotion();
+      hoverQuery.removeEventListener("change", update);
     };
   }, []);
 

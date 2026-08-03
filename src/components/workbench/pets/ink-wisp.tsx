@@ -7,6 +7,7 @@ import {
   type RGB,
 } from "@/components/workbench/pets/canvas-color";
 import { createComposerZone } from "@/components/workbench/pets/composer-zone";
+import { prefersReducedMotion } from "@/components/workbench/use-prefers-reduced-motion";
 
 /**
  * 墨点精灵 — Mono 原生桌宠。一小团墨点组成的生物，慵懒地尾随光标，
@@ -44,7 +45,6 @@ export const InkWispPet: FC = () => {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     const zone = createComposerZone();
     let dpr = 1;
     let ink: RGB = [30, 30, 35];
@@ -336,7 +336,7 @@ export const InkWispPet: FC = () => {
     applyTheme();
     draw(performance.now());
 
-    if (!reduced.matches) {
+    if (!prefersReducedMotion()) {
       window.addEventListener("mousemove", onMouseMove, { passive: true });
       window.addEventListener("resize", resize);
       themeObserver.observe(document.documentElement, {

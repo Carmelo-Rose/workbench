@@ -52,6 +52,7 @@ import {
 } from "@/lib/agent-status";
 import { BACKENDS, type BackendId } from "@/lib/backends";
 import { type ThemePref } from "@/lib/theme";
+import { type DensityPref } from "@/lib/density";
 import { cn } from "@/lib/utils";
 import { WorkspaceSettings } from "@/components/workbench/workspace-settings";
 
@@ -86,6 +87,8 @@ type SettingsDialogProps = {
   onCompanionChange: (id: CompanionId) => void;
   themePref: ThemePref;
   onThemeChange: (pref: ThemePref) => void;
+  densityPref: DensityPref;
+  onDensityChange: (pref: DensityPref) => void;
 };
 
 export const SettingsDialog: FC<SettingsDialogProps> = ({
@@ -538,6 +541,12 @@ const THEME_OPTIONS: { id: ThemePref; name: string; icon: ReactNode }[] = [
   { id: "dark", name: "深色", icon: <MoonIcon /> },
 ];
 
+const DENSITY_OPTIONS: { id: DensityPref; name: string }[] = [
+  { id: "compact", name: "紧凑" },
+  { id: "standard", name: "标准" },
+  { id: "comfortable", name: "宽松" },
+];
+
 const AppearanceSection: FC<{
   styleId: ThreadStyleId;
   onStyleChange: (id: ThreadStyleId) => void;
@@ -545,6 +554,8 @@ const AppearanceSection: FC<{
   onCompanionChange: (id: CompanionId) => void;
   themePref: ThemePref;
   onThemeChange: (pref: ThemePref) => void;
+  densityPref: DensityPref;
+  onDensityChange: (pref: DensityPref) => void;
 }> = ({
   styleId,
   onStyleChange,
@@ -552,6 +563,8 @@ const AppearanceSection: FC<{
   onCompanionChange,
   themePref,
   onThemeChange,
+  densityPref,
+  onDensityChange,
 }) => {
   // 主题状态提升到 AssistantShell，与头部快切按钮共用一份。
   return (
@@ -573,6 +586,28 @@ const AppearanceSection: FC<{
               )}
             >
               {opt.icon}
+              {opt.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <SectionTitle sub="调整全站间距与字号，选择即时生效。">密度</SectionTitle>
+        <div className="flex gap-2">
+          {DENSITY_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => onDensityChange(opt.id)}
+              aria-pressed={densityPref === opt.id}
+              className={cn(
+                "hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring/50 rounded-full border px-3.5 py-1.5 text-sm transition-colors outline-none focus-visible:ring-2",
+                densityPref === opt.id
+                  ? "bg-accent text-accent-foreground border-ring/60 font-medium"
+                  : "text-muted-foreground",
+              )}
+            >
               {opt.name}
             </button>
           ))}

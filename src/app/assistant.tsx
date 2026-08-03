@@ -57,6 +57,9 @@ import {
   type SettingsSection,
 } from "@/components/workbench/settings-dialog";
 import { CommandPalette } from "@/components/workbench/command-palette";
+import { ThreadFindBar } from "@/components/assistant-ui/thread-find";
+import { DraftPersistence } from "@/components/workbench/draft-persistence";
+import { GlobalShortcuts } from "@/components/workbench/global-shortcuts";
 import { CapabilityActionsProvider } from "@/components/workbench/CapabilityActions";
 import {
   THREAD_STYLES,
@@ -100,6 +103,11 @@ import {
   saveThemePref,
   type ThemePref,
 } from "@/lib/theme";
+import {
+  loadDensityPref,
+  saveDensityPref,
+  type DensityPref,
+} from "@/lib/density";
 import { serverThreadListAdapter } from "@/lib/server-threads";
 import { createHistoryProvider } from "@/lib/thread-history";
 import { useImage2Mode } from "@/lib/image2-mode";
@@ -480,6 +488,7 @@ const AssistantShell: FC = () => {
   const [styleId, setStyleId] = useState<ThreadStyleId>(loadThreadStyle);
   const [companion, setCompanion] = useState<CompanionId>(loadCompanion);
   const [themePref, setThemePref] = useState<ThemePref>(loadThemePref);
+  const [densityPref, setDensityPref] = useState<DensityPref>(loadDensityPref);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("connections");
@@ -525,6 +534,11 @@ const AssistantShell: FC = () => {
     saveThemePref(pref);
   };
 
+  const handleDensityChange = (pref: DensityPref) => {
+    setDensityPref(pref);
+    saveDensityPref(pref);
+  };
+
   const openSettings = (section: SettingsSection) => {
     setSettingsSection(section);
     setSettingsOpen(true);
@@ -559,17 +573,20 @@ const AssistantShell: FC = () => {
             <SessionActionsMenu />
           </div>
         </header>
-        <main className="min-h-0 flex-1 overflow-hidden">
+        <main className="relative min-h-0 flex-1 overflow-hidden">
           <div
             key={styleId}
             className="fade-in animate-in h-full duration-200"
           >
             <ActiveThread />
           </div>
+          <ThreadFindBar />
         </main>
       </SidebarInset>
       <CompanionLayer companion={companion} isWorking={isWorking} />
       <CommandPalette onOpenSettings={openSettings} />
+      <DraftPersistence />
+      <GlobalShortcuts />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -581,6 +598,8 @@ const AssistantShell: FC = () => {
         onCompanionChange={handleCompanionChange}
         themePref={themePref}
         onThemeChange={handleThemeChange}
+        densityPref={densityPref}
+        onDensityChange={handleDensityChange}
       />
     </SidebarProvider>
   );

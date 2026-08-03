@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import type { FC } from "react";
 import { resolveThemeColor, type RGB } from "@/components/workbench/pets/canvas-color";
+import { prefersReducedMotion } from "@/components/workbench/use-prefers-reduced-motion";
 
 /**
  * 灵感刻度尺：工作时逐格上升，输入时短促跃迁，空闲时慢慢回落。
@@ -30,7 +31,6 @@ export const InspirationGaugePet: FC<{ isWorking: boolean }> = ({
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
     let dpr = 1;
     let ink: RGB = [28, 28, 34];
     let accent: RGB = [82, 94, 255];
@@ -182,7 +182,7 @@ export const InspirationGaugePet: FC<{ isWorking: boolean }> = ({
     applyTheme();
     draw(performance.now());
 
-    if (!reduced.matches) {
+    if (!prefersReducedMotion()) {
       window.addEventListener("keydown", bump);
       window.addEventListener("pointerdown", bump, { passive: true });
       window.addEventListener("resize", resize);

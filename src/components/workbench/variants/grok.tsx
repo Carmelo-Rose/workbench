@@ -52,7 +52,10 @@ export const Grok: FC = () => {
       </AuiIf>
 
       <AuiIf condition={(s) => s.thread.isEmpty === false}>
-        <ThreadPrimitive.Viewport className="flex grow flex-col overflow-y-scroll pt-16">
+        <ThreadPrimitive.Viewport
+          data-slot="aui_thread-viewport"
+          className="flex grow flex-col overflow-y-scroll pt-16"
+        >
           <ThreadPrimitive.Messages>
             {() => <ChatMessage />}
           </ThreadPrimitive.Messages>

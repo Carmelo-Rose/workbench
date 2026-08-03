@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { FC } from "react";
+import { prefersReducedMotion } from "@/components/workbench/use-prefers-reduced-motion";
 
 /**
  * 像素小猫挂件 — oneko.js 的 TypeScript/React 移植（行为强化版）。
@@ -225,7 +226,7 @@ export const NekoPet: FC = () => {
     place();
     setSprite("idle", 0);
 
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (prefersReducedMotion()) {
       return;
     }
 

@@ -50,7 +50,10 @@ export const ChatGPT: FC = () => {
       </AuiIf>
 
       <AuiIf condition={(s) => !s.thread.isEmpty}>
-        <ThreadPrimitive.Viewport className="flex grow flex-col gap-8 overflow-y-scroll pt-16">
+        <ThreadPrimitive.Viewport
+          data-slot="aui_thread-viewport"
+          className="flex grow flex-col gap-8 overflow-y-scroll pt-16"
+        >
           <ThreadPrimitive.Messages>
             {({ message }) => {
               if (message.composer.isEditing) return <EditComposer />;
@@ -59,7 +62,10 @@ export const ChatGPT: FC = () => {
             }}
           </ThreadPrimitive.Messages>
 
-          <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto mt-auto flex w-full max-w-3xl flex-col gap-2 overflow-visible rounded-t-3xl bg-white pb-2 dark:bg-black">
+          <ThreadPrimitive.ViewportFooter
+            data-thread-find-skip
+            className="sticky bottom-0 mx-auto mt-auto flex w-full max-w-3xl flex-col gap-2 overflow-visible rounded-t-3xl bg-white pb-2 dark:bg-black"
+          >
             <ThreadScrollToBottom />
             <Composer placeholder="Ask anything" />
             <p className="text-center text-xs text-[#5d5d5d] dark:text-[#afafaf]">
