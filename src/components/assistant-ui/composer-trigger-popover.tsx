@@ -2,6 +2,7 @@
 
 import {
   memo,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -96,40 +97,80 @@ type CategoriesProps = {
   emptyLabel: string;
 };
 
-const Categories: FC<CategoriesProps> = ({
-  iconMap,
-  fallbackIcon,
-  emptyLabel,
-}) => (
+/** 悬停多久才展开二级菜单：太短的话鼠标扫过就会误开。 */
+const HOVER_OPEN_DELAY_MS = 150;
+/**
+ * 刚从二级返回时的静默期。点「返回」后光标多半还压在某个分组行上，
+ * 没有这段静默，一点点抖动就会立刻又被吸进去，出不来。
+ */
+const REOPEN_GRACE_MS = 300;
+
+/**
+ * 一级分组列表。鼠标停在分组上就自动展开二级（不用点），用 mousemove
+ * 而不是 mouseenter 触发：视图切换后光标没动就不该有反应。
+ */
+const CategoryList: FC<
+  CategoriesProps & { categories: readonly { id: string; label: string }[] }
+> = ({ categories, iconMap, fallbackIcon, emptyLabel }) => {
+  const { selectCategory } = unstable_useTriggerPopoverScopeContext();
+  const shownAtRef = useRef(Date.now());
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRef = useRef<string | null>(null);
+
+  const cancelOpen = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    pendingRef.current = null;
+  };
+  useEffect(() => cancelOpen, []);
+
+  const scheduleOpen = (categoryId: string) => {
+    // 同一行的连续 mousemove 不重排定时器，否则鼠标一直微动就永远开不了。
+    if (pendingRef.current === categoryId) return;
+    cancelOpen();
+    if (Date.now() - shownAtRef.current < REOPEN_GRACE_MS) return;
+    pendingRef.current = categoryId;
+    timerRef.current = setTimeout(() => {
+      pendingRef.current = null;
+      selectCategory(categoryId);
+    }, HOVER_OPEN_DELAY_MS);
+  };
+
+  return (
+    <div
+      data-slot="composer-trigger-popover-categories"
+      className="flex flex-col py-1"
+      onMouseLeave={cancelOpen}
+    >
+      {categories.map((cat) => {
+        const Icon = resolveIcon(cat.id, iconMap, fallbackIcon);
+        return (
+          <ComposerPrimitive.Unstable_TriggerPopoverCategoryItem
+            key={cat.id}
+            categoryId={cat.id}
+            onMouseMove={() => scheduleOpen(cat.id)}
+            className="hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm transition-colors outline-none"
+          >
+            <span className="flex items-center gap-2">
+              <Icon className="text-muted-foreground size-4" />
+              {cat.label}
+            </span>
+            <ChevronRightIcon className="text-muted-foreground size-4" />
+          </ComposerPrimitive.Unstable_TriggerPopoverCategoryItem>
+        );
+      })}
+      {categories.length === 0 && (
+        <div className="text-muted-foreground px-3 py-2 text-sm">
+          {emptyLabel}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Categories: FC<CategoriesProps> = (props) => (
   <ComposerPrimitive.Unstable_TriggerPopoverCategories>
-    {(categories) => (
-      <div
-        data-slot="composer-trigger-popover-categories"
-        className="flex flex-col py-1"
-      >
-        {categories.map((cat) => {
-          const Icon = resolveIcon(cat.id, iconMap, fallbackIcon);
-          return (
-            <ComposerPrimitive.Unstable_TriggerPopoverCategoryItem
-              key={cat.id}
-              categoryId={cat.id}
-              className="hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm transition-colors outline-none"
-            >
-              <span className="flex items-center gap-2">
-                <Icon className="text-muted-foreground size-4" />
-                {cat.label}
-              </span>
-              <ChevronRightIcon className="text-muted-foreground size-4" />
-            </ComposerPrimitive.Unstable_TriggerPopoverCategoryItem>
-          );
-        })}
-        {categories.length === 0 && (
-          <div className="text-muted-foreground px-3 py-2 text-sm">
-            {emptyLabel}
-          </div>
-        )}
-      </div>
-    )}
+    {(categories) => <CategoryList categories={categories} {...props} />}
   </ComposerPrimitive.Unstable_TriggerPopoverCategories>
 );
 
