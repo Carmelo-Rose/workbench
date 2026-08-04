@@ -66,6 +66,12 @@ type ComposerTriggerPopoverBaseProps = Omit<
    * something inline (e.g. "create subject").
    */
   onActionItem?: (item: Unstable_TriggerItem) => void;
+  /**
+   * 传入分组条目的取数函数就切到二级联动布局：左列分组、右列跟着高亮的分组
+   * 铺开条目，鼠标移过去即可看到、直接点就能选。不传则保持单列钻取。
+   * 一般直接把 adapter 的 `categoryItems` 传进来。
+   */
+  categoryItems?: (categoryId: string) => readonly Unstable_TriggerItem[];
 };
 
 type ComposerTriggerPopoverProps = ComposerTriggerPopoverBaseProps &
@@ -95,73 +101,112 @@ type CategoriesProps = {
   iconMap: Record<string, IconComponent> | undefined;
   fallbackIcon: IconComponent;
   emptyLabel: string;
+  /**
+   * 给了就走二级联动布局：左列分组、右列直接铺开当前分组的条目。
+   * 不给则保持单列钻取（分组 → 点进去看条目 → 返回）。
+   */
+  categoryItems: ((categoryId: string) => readonly Unstable_TriggerItem[]) | undefined;
 };
 
-/** 悬停多久才展开二级菜单：太短的话鼠标扫过就会误开。 */
-const HOVER_OPEN_DELAY_MS = 150;
-/**
- * 刚从二级返回时的静默期。点「返回」后光标多半还压在某个分组行上，
- * 没有这段静默，一点点抖动就会立刻又被吸进去，出不来。
- */
-const REOPEN_GRACE_MS = 300;
+const ITEM_ROW_CLASS =
+  "hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-2 text-start transition-colors outline-none";
+
+/** 条目行的内容（图标/预览图 + 标题 + 说明），钻取列表与联动右列共用。 */
+const ItemContent: FC<{
+  item: Unstable_TriggerItem;
+  iconMap: Record<string, IconComponent> | undefined;
+  fallbackIcon: IconComponent;
+}> = ({ item, iconMap, fallbackIcon }) => {
+  const iconKey =
+    typeof item.metadata?.icon === "string" ? item.metadata.icon : undefined;
+  const Icon = resolveIcon(iconKey, iconMap, fallbackIcon);
+  const previewUrl =
+    typeof item.metadata?.previewUrl === "string"
+      ? item.metadata.previewUrl
+      : undefined;
+  return (
+    <>
+      <span className="flex items-center gap-2 text-sm font-medium">
+        {previewUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={previewUrl} alt="" className="size-6 rounded-md object-cover" />
+        ) : (
+          <Icon className="text-primary size-3.5" />
+        )}
+        {item.label}
+      </span>
+      {item.description && (
+        <span
+          className={cn(
+            "text-muted-foreground text-xs leading-tight",
+            previewUrl ? "ms-8" : "ms-5.5",
+          )}
+        >
+          {item.description}
+        </span>
+      )}
+    </>
+  );
+};
 
 /**
- * 一级分组列表。鼠标停在分组上就自动展开二级（不用点），用 mousemove
- * 而不是 mouseenter 触发：视图切换后光标没动就不该有反应。
+ * 一级分组列表。联动模式下右列跟着「当前高亮的分组」走 —— 鼠标扫过和方向键
+ * 都只是改高亮，所以移上去就能看到组里有什么，既不用点、也不会把分组列表顶掉。
+ * 点分组不再钻取（内容已经在右边了），键盘回车仍然钻取，进单列视图。
  */
 const CategoryList: FC<
   CategoriesProps & { categories: readonly { id: string; label: string }[] }
-> = ({ categories, iconMap, fallbackIcon, emptyLabel }) => {
-  const { selectCategory } = unstable_useTriggerPopoverScopeContext();
-  const shownAtRef = useRef(Date.now());
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRef = useRef<string | null>(null);
-
-  const cancelOpen = () => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = null;
-    pendingRef.current = null;
-  };
-  useEffect(() => cancelOpen, []);
-
-  const scheduleOpen = (categoryId: string) => {
-    // 同一行的连续 mousemove 不重排定时器，否则鼠标一直微动就永远开不了。
-    if (pendingRef.current === categoryId) return;
-    cancelOpen();
-    if (Date.now() - shownAtRef.current < REOPEN_GRACE_MS) return;
-    pendingRef.current = categoryId;
-    timerRef.current = setTimeout(() => {
-      pendingRef.current = null;
-      selectCategory(categoryId);
-    }, HOVER_OPEN_DELAY_MS);
-  };
+> = ({ categories, iconMap, fallbackIcon, emptyLabel, categoryItems }) => {
+  const { highlightedIndex, selectItem } = unstable_useTriggerPopoverScopeContext();
+  const activeCategory = categoryItems
+    ? (categories[highlightedIndex] ?? categories[0])
+    : undefined;
+  const activeItems =
+    categoryItems && activeCategory ? categoryItems(activeCategory.id) : [];
 
   return (
     <div
       data-slot="composer-trigger-popover-categories"
-      className="flex flex-col py-1"
-      onMouseLeave={cancelOpen}
+      className={cn("flex", categoryItems ? "items-stretch" : "flex-col py-1")}
     >
-      {categories.map((cat) => {
-        const Icon = resolveIcon(cat.id, iconMap, fallbackIcon);
-        return (
-          <ComposerPrimitive.Unstable_TriggerPopoverCategoryItem
-            key={cat.id}
-            categoryId={cat.id}
-            onMouseMove={() => scheduleOpen(cat.id)}
-            className="hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm transition-colors outline-none"
-          >
-            <span className="flex items-center gap-2">
-              <Icon className="text-muted-foreground size-4" />
-              {cat.label}
-            </span>
-            <ChevronRightIcon className="text-muted-foreground size-4" />
-          </ComposerPrimitive.Unstable_TriggerPopoverCategoryItem>
-        );
-      })}
-      {categories.length === 0 && (
-        <div className="text-muted-foreground px-3 py-2 text-sm">
-          {emptyLabel}
+      <div className={cn("flex flex-col py-1", categoryItems && "w-36 shrink-0")}>
+        {categories.map((cat) => {
+          const Icon = resolveIcon(cat.id, iconMap, fallbackIcon);
+          return (
+            <ComposerPrimitive.Unstable_TriggerPopoverCategoryItem
+              key={cat.id}
+              categoryId={cat.id}
+              // 联动模式下点击不钻取：右列已经是这一组的内容，塌成单列反而是倒退。
+              onClick={categoryItems ? (event) => event.preventDefault() : undefined}
+              className="hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm transition-colors outline-none"
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <Icon className="text-muted-foreground size-4 shrink-0" />
+                <span className="truncate">{cat.label}</span>
+              </span>
+              <ChevronRightIcon className="text-muted-foreground size-4 shrink-0" />
+            </ComposerPrimitive.Unstable_TriggerPopoverCategoryItem>
+          );
+        })}
+        {categories.length === 0 && (
+          <div className="text-muted-foreground px-3 py-2 text-sm">
+            {emptyLabel}
+          </div>
+        )}
+      </div>
+
+      {categoryItems && categories.length > 0 && (
+        <div className="min-w-0 flex-1 border-s py-1">
+          {activeItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={ITEM_ROW_CLASS}
+              onClick={() => selectItem(item)}
+            >
+              <ItemContent item={item} iconMap={iconMap} fallbackIcon={fallbackIcon} />
+            </button>
+          ))}
         </div>
       )}
     </div>
@@ -222,14 +267,6 @@ const Items: FC<ItemsProps> = ({
 
           <div className="py-1">
             {items.map((item, index) => {
-              const iconKey =
-                typeof item.metadata?.icon === "string"
-                  ? item.metadata.icon
-                  : undefined;
-              const Icon = resolveIcon(iconKey, iconMap, fallbackIcon);
-              const previewUrl = typeof item.metadata?.previewUrl === "string"
-                ? item.metadata.previewUrl
-                : undefined;
               const actionOnly = item.metadata?.actionOnly === true;
               return (
                 <ComposerPrimitive.Unstable_TriggerPopoverItem
@@ -243,20 +280,9 @@ const Items: FC<ItemsProps> = ({
                     event.preventDefault();
                     runAction(item);
                   } : undefined}
-                  className="hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-2 text-start transition-colors outline-none"
+                  className={ITEM_ROW_CLASS}
                 >
-                  <span className="flex items-center gap-2 text-sm font-medium">
-                    {previewUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={previewUrl} alt="" className="size-6 rounded-md object-cover" />
-                    ) : <Icon className="text-primary size-3.5" />}
-                    {item.label}
-                  </span>
-                  {item.description && (
-                    <span className={cn("text-muted-foreground text-xs leading-tight", previewUrl ? "ms-8" : "ms-5.5")}>
-                      {item.description}
-                    </span>
-                  )}
+                  <ItemContent item={item} iconMap={iconMap} fallbackIcon={fallbackIcon} />
                 </ComposerPrimitive.Unstable_TriggerPopoverItem>
               );
             })}
@@ -365,6 +391,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
   emptyItemsLabel = "没有匹配项",
   loadingLabel = "加载中…",
   onActionItem,
+  categoryItems,
   className,
   style,
   directive,
@@ -391,7 +418,9 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
       data-slot="composer-trigger-popover"
       data-side={placement.side}
       className={cn(
-        "aui-composer-trigger-popover bg-popover text-popover-foreground absolute start-0 z-50 w-64 overflow-y-auto rounded-xl border shadow-lg",
+        "aui-composer-trigger-popover bg-popover text-popover-foreground absolute start-0 z-50 overflow-y-auto rounded-xl border shadow-lg",
+        // 二级联动要并排放两列，单列钻取维持原来的窄面板。
+        categoryItems ? "w-[27rem] max-w-[calc(100vw-2rem)]" : "w-64",
         placement.side === "top" ? "bottom-full mb-2" : "top-full mt-2",
         className,
       )}
@@ -415,6 +444,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
         iconMap={iconMap}
         fallbackIcon={fallbackIcon}
         emptyLabel={emptyCategoriesLabel}
+        categoryItems={categoryItems}
       />
       <Items
         triggerChar={char}

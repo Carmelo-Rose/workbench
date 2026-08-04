@@ -632,6 +632,7 @@ const Composer: FC = () => {
           <ComposerTriggerPopover
             char="/"
             {...slash}
+            categoryItems={slash.adapter.categoryItems}
             emptyItemsLabel="没有匹配的命令"
           />
         )}
