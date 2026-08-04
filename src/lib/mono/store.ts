@@ -225,16 +225,23 @@ export function listMonoJobAssets(
 export function listGeneratedMonoAssets(
   actor: Pick<MonoActor, "workspaceId">,
   limit = 24,
+  beforeCreatedAt?: number,
 ): Array<MonoJobAsset & Pick<MonoAsset, "mimeType" | "name">> {
+  const conditions = ["link.workspace_id = ?", "link.role <> 'image-reference'"];
+  const params: (string | number)[] = [actor.workspaceId];
+  if (beforeCreatedAt) {
+    conditions.push("link.created_at < ?");
+    params.push(beforeCreatedAt);
+  }
   const rows = getDb().prepare(
     `SELECT link.job_id, link.workspace_id, link.asset_id, link.role, link.slot_key, link.created_at,
             asset.mime_type, asset.name
      FROM mono_job_assets AS link
      JOIN mono_assets AS asset ON asset.id = link.asset_id
-     WHERE link.workspace_id = ? AND link.role <> 'image-reference'
+     WHERE ${conditions.join(" AND ")}
      ORDER BY link.created_at DESC
      LIMIT ?`,
-  ).all(actor.workspaceId, Math.min(Math.max(limit, 1), 100)) as Array<JobAssetRow & {
+  ).all(...params, Math.min(Math.max(limit, 1), 100)) as Array<JobAssetRow & {
     mime_type: string | null;
     name: string | null;
   }>;
@@ -473,11 +480,14 @@ export function createProductPipelineMonoJob(
 
 export function listMonoJobs(
   actor: MonoActor,
-  options: { kind?: MonoJobKind; favoriteOnly?: boolean; limit?: number } = {},
+  options: { kind?: MonoJobKind; kinds?: MonoJobKind[]; favoriteOnly?: boolean; limit?: number } = {},
 ): MonoJob[] {
   const conditions = ["workspace_id = ?"];
   const params: (string | number)[] = [actor.workspaceId];
-  if (options.kind) {
+  if (options.kinds?.length) {
+    conditions.push(`kind IN (${options.kinds.map(() => "?").join(",")})`);
+    params.push(...options.kinds);
+  } else if (options.kind) {
     conditions.push("kind = ?");
     params.push(options.kind);
   }

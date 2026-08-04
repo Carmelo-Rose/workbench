@@ -12,7 +12,6 @@ import {
   CheckIcon,
   ChevronDownIcon,
   DownloadIcon,
-  LogOutIcon,
   MonitorIcon,
   MoonIcon,
   MoreHorizontalIcon,
@@ -22,7 +21,6 @@ import { useEffect, useState, type FC, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { ThreadListSidebar } from "@/components/assistant-ui/threadlist-sidebar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI";
 import {
   VideoEnhanceToolUI,
@@ -48,10 +46,7 @@ import {
   LuopanSnapshotToolUI,
   LuopanTrendToolUI,
 } from "@/components/workbench/CollectorToolUI";
-import {
-  BackendModelContext,
-  HeaderBackendStatus,
-} from "@/components/workbench/backend-select";
+import { BackendModelContext } from "@/components/workbench/backend-select";
 import {
   SettingsDialog,
   type SettingsSection,
@@ -60,6 +55,8 @@ import { CommandPalette } from "@/components/workbench/command-palette";
 import { ThreadFindBar } from "@/components/assistant-ui/thread-find";
 import { DraftPersistence } from "@/components/workbench/draft-persistence";
 import { GlobalShortcuts } from "@/components/workbench/global-shortcuts";
+import { JobCenterSheet } from "@/components/workbench/JobCenterSheet";
+import { useJobCenterPolling } from "@/lib/mono/job-center";
 import { CapabilityActionsProvider } from "@/components/workbench/CapabilityActions";
 import {
   THREAD_STYLES,
@@ -362,58 +359,6 @@ const ThemeToggle: FC<{
   );
 };
 
-const WorkspaceMenu: FC<{ onOpenSettings: () => void }> = ({ onOpenSettings }) => {
-  const { session, signOut, switchWorkspace } = useWorkbenchSession();
-
-  const selectWorkspace = async (workspaceId: string) => {
-    if (workspaceId === session.workspace.id) return;
-    await switchWorkspace(workspaceId);
-    window.location.reload();
-  };
-
-  return (
-    <Tooltip>
-      <DropdownMenu>
-        <TooltipTrigger asChild>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-foreground hidden h-8 max-w-40 gap-1.5 rounded-full px-2.5 font-normal sm:flex"
-            >
-              <span className="truncate">{session.workspace.name}</span>
-              <ChevronDownIcon className="text-muted-foreground size-3.5 shrink-0" />
-            </Button>
-          </DropdownMenuTrigger>
-        </TooltipTrigger>
-        <DropdownMenuContent align="end" className="min-w-52 rounded-xl">
-          <p className="text-muted-foreground px-2 py-1.5 text-xs">
-            {session.actor.displayName}
-          </p>
-          {session.workspaces.map((workspace) => (
-            <DropdownMenuItem
-              key={workspace.id}
-              onSelect={() => void selectWorkspace(workspace.id)}
-              className="justify-between rounded-lg"
-            >
-              <span className="truncate">{workspace.name}</span>
-              {workspace.id === session.workspace.id && <CheckIcon className="size-4" />}
-            </DropdownMenuItem>
-          ))}
-          <DropdownMenuItem onSelect={onOpenSettings} className="rounded-lg">
-            员工与工作区
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void signOut()} className="rounded-lg">
-            <LogOutIcon className="size-4" />
-            退出登录
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <TooltipContent side="bottom">{session.workspace.name}</TooltipContent>
-    </Tooltip>
-  );
-};
-
 const MESSAGE_ROLE_LABEL: Record<string, string> = {
   user: "你",
   assistant: "助手",
@@ -498,6 +443,8 @@ const AssistantShell: FC = () => {
 
   // 双后端健康轮询；未手动选过模式时跟随服务端默认。
   useAgentStatusPolling();
+  // 任务中心角标：跨会话持续轮询，切换会话不丢正在跑的任务。
+  useJobCenterPolling();
   const status = useAgentStatus((s) => s.status);
   const adoptServerDefault = useBackendChoice((s) => s.adoptServerDefault);
   useEffect(() => {
@@ -567,8 +514,6 @@ const AssistantShell: FC = () => {
           <span className="text-border mx-1 hidden select-none md:block">·</span>
           <ThreadTitle />
           <div className="ml-auto flex items-center gap-1.5">
-            <WorkspaceMenu onOpenSettings={() => openSettings("workspace")} />
-            <HeaderBackendStatus onClick={() => openSettings("connections")} />
             <ThemeToggle value={themePref} onChange={handleThemeChange} />
             <SessionActionsMenu />
           </div>
@@ -587,6 +532,7 @@ const AssistantShell: FC = () => {
       <CommandPalette onOpenSettings={openSettings} />
       <DraftPersistence />
       <GlobalShortcuts />
+      <JobCenterSheet />
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

@@ -376,7 +376,7 @@ export function getJob(actor: MonoActor, jobId: string): MonoJob | null {
 
 export function listJobs(
   actor: MonoActor,
-  options: { kind?: MonoJobKind; favoriteOnly?: boolean; limit?: number } = {},
+  options: { kind?: MonoJobKind; kinds?: MonoJobKind[]; favoriteOnly?: boolean; limit?: number } = {},
 ): MonoJob[] {
   scheduleMonoWorker();
   return listMonoJobs(actor, options);
@@ -415,6 +415,7 @@ export function createVideoGenerationJob(actor: MonoActor, input: MonoVideoGener
 export function listGeneratedAssets(
   actor: MonoActor,
   limit = 24,
+  beforeCreatedAt?: number,
 ): Array<{
   assetId: string;
   jobId: string;
@@ -425,7 +426,7 @@ export function listGeneratedAssets(
   createdAt: number;
   previewUrl: string;
 }> {
-  return listGeneratedMonoAssets(actor, limit).map((item) => ({
+  return listGeneratedMonoAssets(actor, limit, beforeCreatedAt).map((item) => ({
     assetId: item.assetId,
     jobId: item.jobId,
     role: item.role,

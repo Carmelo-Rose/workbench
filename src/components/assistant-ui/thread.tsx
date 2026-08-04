@@ -43,6 +43,7 @@ import {
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ThreadBackdrop } from "@/components/workbench/thread-backdrop";
 import { SubjectLibrarySheet } from "@/components/workbench/SubjectLibrary";
+import { AssetLibrarySheet } from "@/components/workbench/AssetLibrarySheet";
 import {
   Image2ComposerContext,
   Image2ModeControl,
@@ -70,6 +71,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ScrollFadeRow } from "@/components/assistant-ui/scroll-edge-fade";
 import { cn } from "@/lib/utils";
 import { useImage2Mode } from "@/lib/image2-mode";
+import { useAssetLibrary } from "@/lib/mono/asset-library";
 import { useVideoGenerationMode } from "@/lib/video-generation-mode";
 import {
   ActionBarMorePrimitive,
@@ -109,6 +111,7 @@ import {
   EraserIcon,
   FilmIcon,
   ImageIcon,
+  ImagesIcon,
   ScissorsIcon,
   SearchIcon,
   SparklesIcon,
@@ -643,6 +646,7 @@ const Composer: FC = () => {
           />
         )}
         <SubjectLibrarySheet />
+        <AssetLibrarySheet />
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
@@ -659,6 +663,7 @@ const ComposerPlusMenu: FC = () => {
   const activateImage2 = useImage2Mode((state) => state.activate);
   const exitImage2Mode = useExitImage2Mode();
   const openSubjectLibrary = useImage2Mode((state) => state.openSubjectLibrary);
+  const openAssetLibrary = useAssetLibrary((state) => state.openLibrary);
   const videoGenerationActive = useVideoGenerationMode((state) => state.active);
   const activateVideoGeneration = useVideoGenerationMode((state) => state.activate);
   const resetVideoGeneration = useVideoGenerationMode((state) => state.reset);
@@ -717,6 +722,10 @@ const ComposerPlusMenu: FC = () => {
         <DropdownMenuItem onSelect={() => openSubjectLibrary()}>
           <UsersIcon />
           主体库
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openAssetLibrary()}>
+          <ImagesIcon />
+          作品库
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

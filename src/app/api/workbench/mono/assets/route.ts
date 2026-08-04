@@ -13,7 +13,11 @@ export async function GET(request: Request) {
       return Response.json({ assets: [] });
     }
     return Response.json({
-      assets: listGeneratedAssets(actor, Number(url.searchParams.get("limit")) || 24),
+      assets: listGeneratedAssets(
+        actor,
+        Number(url.searchParams.get("limit")) || 24,
+        Number(url.searchParams.get("before")) || undefined,
+      ),
     });
   } catch (error) {
     return monoErrorResponse(error);

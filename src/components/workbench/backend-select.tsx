@@ -15,7 +15,6 @@ import {
   type ConnState,
 } from "@/lib/agent-status";
 import { BACKENDS, isBackendId, type BackendId } from "@/lib/backends";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { getCurrentImage2ChatConfig } from "@/lib/image2-mode";
 import { getCurrentProductPipelineConfig } from "@/lib/product-pipeline-run";
@@ -143,35 +142,6 @@ export const BackendPicker: FC = () => {
       size="sm"
       className="h-7 rounded-full"
     />
-  );
-};
-
-/** header 右侧的实时模式徽标，点击打开设置的连接页。 */
-export const HeaderBackendStatus: FC<{ onClick?: () => void }> = ({
-  onClick,
-}) => {
-  const backend = useBackendChoice((s) => s.backend);
-  const status = useAgentStatus((s) => s.status);
-  const state =
-    backend === "hermes" ? hermesConnState(status) : directConnState(status);
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          onClick={onClick}
-          aria-label={`${BACKENDS[backend].name} · ${CONN_STATE_LABEL[state]} — 点击查看连接详情`}
-          className="text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring/50 flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors outline-none focus-visible:ring-2"
-        >
-          <StatusDot state={state} />
-          <span className="max-w-28 truncate">{BACKENDS[backend].name}</span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {BACKENDS[backend].name} · {CONN_STATE_LABEL[state]} — 点击查看连接详情
-      </TooltipContent>
-    </Tooltip>
   );
 };
 

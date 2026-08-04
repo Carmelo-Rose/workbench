@@ -23,7 +23,7 @@ type JobCardProps = {
   inline?: boolean;
 };
 
-const JOB_TITLES: Record<MonoJob["kind"], string> = {
+export const JOB_TITLES: Record<MonoJob["kind"], string> = {
   image_generation: "图片生成",
   video_analysis: "视频分析",
   video_generation: "视频生成",
@@ -37,7 +37,7 @@ const terminalStatuses = new Set<MonoJob["status"]>([
   "cancelled",
 ]);
 
-const jobMeta: Record<MonoJob["status"], { label: string; tone: string }> = {
+export const jobMeta: Record<MonoJob["status"], { label: string; tone: string }> = {
   queued: { label: "已提交", tone: "text-muted-foreground" },
   running: { label: "正在处理", tone: "text-foreground" },
   succeeded: { label: "已完成", tone: "text-emerald-600 dark:text-emerald-400" },

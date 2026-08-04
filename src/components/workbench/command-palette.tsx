@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type FC } from "react";
 import {
   CableIcon,
   DatabaseIcon,
+  ImagesIcon,
   KeyRoundIcon,
   MessagesSquareIcon,
   PaletteIcon,
@@ -24,6 +25,7 @@ import { capabilityIconMap } from "@/components/assistant-ui/thread";
 import { SLASH_CAPABILITIES, type CapabilityOption } from "@/lib/workbench/capabilities";
 import { useCapabilityActions } from "@/components/workbench/CapabilityActions";
 import { useCommandPalette } from "@/lib/workbench/command-palette-store";
+import { useAssetLibrary } from "@/lib/mono/asset-library";
 import type { SettingsSection } from "@/components/workbench/settings-dialog";
 
 type ThreadSearchHit = {
@@ -42,6 +44,8 @@ const SETTINGS_ENTRIES: { id: SettingsSection; name: string; icon: FC<{ classNam
   { id: "appearance", name: "外观", icon: PaletteIcon },
   { id: "data", name: "数据", icon: DatabaseIcon },
 ];
+
+const TOOL_ENTRIES = [{ id: "asset-library", name: "作品库", icon: ImagesIcon }] as const;
 
 const RECENT_LIMIT = 5;
 const DEFAULT_CAPABILITY_LIMIT = 6;
@@ -74,6 +78,7 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
   const setOpen = useCommandPalette((s) => s.setOpen);
   const setQuery = useCommandPalette((s) => s.setQuery);
   const { run: runCapability } = useCapabilityActions();
+  const openAssetLibrary = useAssetLibrary((s) => s.openLibrary);
   const runtime = useAssistantRuntime();
   const threadIds = useAuiState((s) => s.threads.threadIds);
   const threadItems = useAuiState((s) => s.threads.threadItems);
@@ -139,6 +144,12 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
     return SETTINGS_ENTRIES.filter((entry) => includesQuery(entry.name, lower));
   }, [trimmedQuery]);
 
+  const matchedTools = useMemo(() => {
+    if (!trimmedQuery) return TOOL_ENTRIES;
+    const lower = trimmedQuery.toLowerCase();
+    return TOOL_ENTRIES.filter((entry) => includesQuery(entry.name, lower));
+  }, [trimmedQuery]);
+
   const close = () => setOpen(false);
 
   const goToThread = (threadId: string) => {
@@ -153,6 +164,11 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
 
   const openSettingsAndClose = (section: SettingsSection) => {
     onOpenSettings(section);
+    close();
+  };
+
+  const openAssetLibraryAndClose = () => {
+    openAssetLibrary();
     close();
   };
 
@@ -216,6 +232,23 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
                   </CommandItem>
                 );
               })}
+            </CommandGroup>
+          </>
+        )}
+        {matchedTools.length > 0 && (
+          <>
+            <CommandSeparator />
+            <CommandGroup heading="工具">
+              {matchedTools.map((entry) => (
+                <CommandItem
+                  key={entry.id}
+                  value={`tool-${entry.id}`}
+                  onSelect={openAssetLibraryAndClose}
+                >
+                  <entry.icon />
+                  {entry.name}
+                </CommandItem>
+              ))}
             </CommandGroup>
           </>
         )}

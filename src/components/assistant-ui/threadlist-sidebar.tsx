@@ -3,7 +3,7 @@
 import type * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckIcon, ImageIcon, LogOutIcon, MessagesSquare, SettingsIcon } from "lucide-react";
+import { CheckIcon, ImageIcon, ListTodoIcon, LogOutIcon, MessagesSquare, SettingsIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -29,6 +29,7 @@ import {
   useBackendChoice,
 } from "@/lib/agent-status";
 import { BACKENDS } from "@/lib/backends";
+import { useJobCenter, useJobCenterActiveCount } from "@/lib/mono/job-center";
 import { useImage2Mode } from "@/lib/image2-mode";
 import { useVideoGenerationMode } from "@/lib/video-generation-mode";
 
@@ -104,6 +105,7 @@ export function ThreadListSidebar({
           <SidebarMenuItem>
             <AccountFooterMenu onOpenSettings={onOpenSettings} />
           </SidebarMenuItem>
+          <JobCenterFooterItem />
           <SidebarMenuItem>
             <SettingsFooterButton onClick={onOpenSettings} />
           </SidebarMenuItem>
@@ -165,6 +167,26 @@ function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) 
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** 只在有正在跑/排队的任务时出现，避免长期占一格却永远没内容。 */
+function JobCenterFooterItem() {
+  const activeCount = useJobCenterActiveCount();
+  const openSheet = useJobCenter((s) => s.openSheet);
+  if (activeCount === 0) return null;
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton size="lg" onClick={openSheet} aria-label="打开任务中心">
+        <div className="flex aspect-square size-8 items-center justify-center rounded-lg border">
+          <ListTodoIcon className="size-4" />
+        </div>
+        <div className="flex min-w-0 flex-col gap-0.5 leading-none">
+          <span className="font-medium">任务中心</span>
+          <span className="text-muted-foreground truncate text-xs">{activeCount} 个任务进行中</span>
+        </div>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   );
 }
 

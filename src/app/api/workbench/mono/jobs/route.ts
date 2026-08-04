@@ -10,12 +10,19 @@ export async function GET(request: Request) {
   try {
     const actor = actorFromWorkbenchRequest(request);
     const url = new URL(request.url);
+    const kindsParam = url.searchParams.get("kinds");
+    const kinds = kindsParam
+      ? kindsParam
+          .split(",")
+          .map((value) => value.trim())
+          .filter((value): value is MonoJobKind => (monoJobKinds as readonly string[]).includes(value))
+      : undefined;
     const kindParam = url.searchParams.get("kind");
     const kind = (monoJobKinds as readonly string[]).includes(kindParam ?? "")
       ? (kindParam as MonoJobKind)
       : "image_generation";
     const jobs = listJobs(actor, {
-      kind,
+      ...(kinds?.length ? { kinds } : { kind }),
       favoriteOnly: url.searchParams.get("favorite") === "1",
       limit: Number(url.searchParams.get("limit")) || undefined,
     });
