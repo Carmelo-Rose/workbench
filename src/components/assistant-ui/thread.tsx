@@ -87,10 +87,8 @@ import {
   type ToolCallMessagePartComponent,
   unstable_defaultDirectiveFormatter,
   unstable_useMentionAdapter,
-  unstable_useSlashCommandAdapter,
   useAui,
   useAuiState,
-  type Unstable_SlashCommand,
   type Unstable_TriggerItem,
 } from "@assistant-ui/react";
 import {
@@ -136,9 +134,9 @@ import { useRouter } from "next/navigation";
 import { useCapabilityActions } from "@/components/workbench/CapabilityActions";
 import {
   CAPABILITY_GROUPS,
-  SLASH_CAPABILITIES,
   type CapabilityOption,
 } from "@/lib/workbench/capabilities";
+import { useSlashCapabilityAdapter } from "@/components/assistant-ui/slash-capability-adapter";
 import {
   createContext,
   useContext,
@@ -572,22 +570,14 @@ const Composer: FC = () => {
   const openSubjectLibraryFromDirective = (item: Unstable_TriggerItem) => {
     if (item.type === "subject-action") openSubjectLibrary();
   };
-  // `/` = 功能命令：取能力注册表里标记 slash 的真能力，execute 复用与欢迎 chip
-  // 同一套 run（填提示词 / 拉起选择器 / 开视频卡 / 切生图模式）。removeOnExecute
-  // 剥掉用户敲的 /xxx；fill 型用 setText 整体替换文本，本就不会残留。
-  const slashCommands = useMemo<Unstable_SlashCommand[]>(
-    () => videoGenerationActive ? [] : SLASH_CAPABILITIES.map((cap) => ({
-        id: cap.id,
-        label: cap.label,
-        description: cap.hint,
-        icon: cap.iconKey,
-        execute: () => runCapability({ action: cap.action, prompt: cap.prompt }),
-      })),
-    [runCapability, videoGenerationActive],
-  );
-  const slash = unstable_useSlashCommandAdapter({
-    commands: slashCommands,
-    removeOnExecute: true,
+  // `/` = 功能命令：两级菜单（先分组、再命令，敲字则跨组搜索），数据取能力注册表里
+  // 标记 slash 的真能力，选中后复用与欢迎 chip 同一套 run（填提示词 / 拉起选择器 /
+  // 开视频卡 / 切生图模式）。removeOnExecute 剥掉用户敲的 /xxx；fill 型用 setText
+  // 整体替换文本，本就不会残留。
+  const runSlashCapability = (option: CapabilityOption) =>
+    runCapability({ action: option.action, prompt: option.prompt });
+  const slash = useSlashCapabilityAdapter({
+    run: runSlashCapability,
     iconMap: capabilityIconMap,
     fallbackIcon: SlashIcon,
   });

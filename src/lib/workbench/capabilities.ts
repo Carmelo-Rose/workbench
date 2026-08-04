@@ -297,10 +297,31 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
   },
 ];
 
+export type SlashCapabilityGroup = {
+  id: string;
+  label: string;
+  iconKey: string;
+  options: CapabilityOption[];
+};
+
 /**
- * `/` 命令入口：本表中标记 slash 且已上线的真能力
+ * `/` 命令的两级菜单：一级是能力分组（创作工具 / 视频工具箱 / 电商数据），
+ * 二级是组内标记 slash 且已上线的真能力。只保留还有能力剩下的分组，
+ * 避免点进去是空的。用户接着敲字则跨组打平搜索，见 slash-capability-adapter.ts。
+ */
+export const SLASH_CAPABILITY_GROUPS: SlashCapabilityGroup[] = CAPABILITY_GROUPS.map(
+  (group) => ({
+    id: group.id,
+    label: group.label,
+    iconKey: group.iconKey,
+    options: group.options.filter((option) => option.slash && !option.disabled),
+  }),
+).filter((group) => group.options.length > 0);
+
+/**
+ * `/` 命令入口的打平视图：上面各分组的能力按注册顺序串起来
  * （反推/生成/分析视频/抠像/擦除/增强/榜单/轨迹/检索/导入）。
  */
-export const SLASH_CAPABILITIES: CapabilityOption[] = CAPABILITY_GROUPS.flatMap(
-  (group) => group.options.filter((option) => option.slash && !option.disabled),
+export const SLASH_CAPABILITIES: CapabilityOption[] = SLASH_CAPABILITY_GROUPS.flatMap(
+  (group) => group.options,
 );
