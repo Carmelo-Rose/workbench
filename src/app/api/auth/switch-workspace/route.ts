@@ -31,11 +31,16 @@ export async function POST(req: Request) {
     const response = NextResponse.json({
       actor: {
         userId: session.actor.userId,
+        account: session.actor.account,
         email: session.actor.email,
         displayName: session.actor.displayName,
+        department: session.actor.department,
         role: session.actor.role,
         organizationId: session.actor.organizationId,
         workspaceId: session.actor.workspaceId,
+        organizationRoles: session.actor.organizationRoles,
+        workspaceRoles: session.actor.workspaceRoles,
+        permissions: session.actor.permissions,
       },
       workspace: currentWorkspace(session.actor),
       workspaces: workspaceSummaries(session.actor.userId),

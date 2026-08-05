@@ -3,7 +3,7 @@
 import type * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckIcon, ImageIcon, ListTodoIcon, LogOutIcon, MessagesSquare, SettingsIcon } from "lucide-react";
+import { CheckIcon, ImageIcon, LayoutDashboardIcon, ListTodoIcon, LogOutIcon, MessagesSquare, SettingsIcon, ShieldCheckIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -111,7 +111,7 @@ export function ThreadListSidebar({
  * 放在这里而不是仅在桌面头部展示——否则窄屏下退出登录会完全没有入口。
  */
 function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) {
-  const { session, signOut, switchWorkspace } = useWorkbenchSession();
+  const { session, signOut, switchWorkspace, can } = useWorkbenchSession();
 
   const selectWorkspace = async (workspaceId: string) => {
     if (workspaceId === session.workspace.id) return;
@@ -148,6 +148,20 @@ function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) 
             {workspace.id === session.workspace.id && <CheckIcon className="size-4" />}
           </DropdownMenuItem>
         ))}
+        <DropdownMenuItem asChild className="rounded-lg">
+          <Link href="/security">
+            <ShieldCheckIcon className="size-4" />
+            账号安全
+          </Link>
+        </DropdownMenuItem>
+        {can("read", "Admin") && (
+          <DropdownMenuItem asChild className="rounded-lg">
+            <Link href="/admin">
+              <LayoutDashboardIcon className="size-4" />
+              管理后台
+            </Link>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={() => onOpenSettings?.()} className="rounded-lg">
           <SettingsIcon className="size-4" />
           设置

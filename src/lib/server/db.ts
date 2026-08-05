@@ -7,6 +7,7 @@ import {
   legacyUserId,
   legacyWorkspaceId,
 } from "./tenant-ids";
+import { systemRoleDefinitions } from "../authorization";
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS organizations (
@@ -19,7 +20,9 @@ CREATE TABLE IF NOT EXISTS organizations (
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  account TEXT UNIQUE COLLATE NOCASE,
   display_name TEXT NOT NULL,
+  department TEXT,
   password_hash TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','disabled')),
   created_at INTEGER NOT NULL,
@@ -59,6 +62,57 @@ CREATE TABLE IF NOT EXISTS workbench_sessions (
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS roles (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  scope TEXT NOT NULL CHECK (scope IN ('organization', 'workspace')),
+  role_key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  is_system INTEGER NOT NULL DEFAULT 0,
+  is_protected INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE (organization_id, scope, role_key),
+  UNIQUE (organization_id, scope, name)
+);
+CREATE TABLE IF NOT EXISTS role_permissions (
+  role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  permission TEXT NOT NULL,
+  PRIMARY KEY (role_id, permission)
+);
+CREATE TABLE IF NOT EXISTS organization_member_roles (
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (organization_id, user_id, role_id)
+);
+CREATE TABLE IF NOT EXISTS workspace_member_roles (
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (workspace_id, user_id, role_id)
+);
+CREATE TABLE IF NOT EXISTS admin_audit_log (
+  id TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  action TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT,
+  detail_json TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS login_attempts (
+  scope TEXT NOT NULL,
+  scope_key TEXT NOT NULL,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  window_started_at INTEGER NOT NULL,
+  locked_until INTEGER,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, scope_key)
 );
 CREATE TABLE IF NOT EXISTS threads (
   workspace_id TEXT NOT NULL,
@@ -238,6 +292,16 @@ CREATE INDEX IF NOT EXISTS workbench_sessions_token
   ON workbench_sessions(token_hash);
 CREATE INDEX IF NOT EXISTS workbench_sessions_expiry
   ON workbench_sessions(expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS users_account_unique
+  ON users(account COLLATE NOCASE) WHERE account IS NOT NULL;
+CREATE INDEX IF NOT EXISTS roles_organization_scope
+  ON roles(organization_id, scope);
+CREATE INDEX IF NOT EXISTS organization_member_roles_lookup
+  ON organization_member_roles(organization_id, user_id);
+CREATE INDEX IF NOT EXISTS workspace_member_roles_lookup
+  ON workspace_member_roles(workspace_id, user_id);
+CREATE INDEX IF NOT EXISTS admin_audit_organization_created
+  ON admin_audit_log(organization_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS threads_workspace_updated
   ON threads(workspace_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS messages_workspace_thread
@@ -565,11 +629,110 @@ function migrateProductModelLibraryToSubjects(db: DatabaseSync): void {
   }
 }
 
+/**
+ * Account/password authentication was introduced after email-based employee
+ * records existed in the field.  SQLite cannot add a NOT NULL column to an
+ * occupied table, so the account column is added first, deterministically
+ * populated from the historical email local part, then protected by a unique
+ * index.  No user id, password hash, membership, session, or business row is
+ * rebuilt during this migration.
+ */
+function migrateAccountsAndRoles(db: DatabaseSync): void {
+  const userColumns = columns(db, "users");
+  if (!userColumns.some((column) => column.name === "account")) {
+    db.exec("ALTER TABLE users ADD COLUMN account TEXT");
+  }
+  if (!userColumns.some((column) => column.name === "department")) {
+    db.exec("ALTER TABLE users ADD COLUMN department TEXT");
+  }
+
+  const users = db.prepare(
+    "SELECT id, email, account FROM users ORDER BY created_at ASC, id ASC",
+  ).all() as { id: string; email: string; account: string | null }[];
+  const used = new Set(
+    users.flatMap((user) => user.account ? [user.account.trim().toLowerCase()] : []),
+  );
+  const setAccount = db.prepare("UPDATE users SET account = ? WHERE id = ?");
+  for (const user of users) {
+    if (user.account?.trim()) continue;
+    const raw = user.email.split("@", 1)[0]?.toLowerCase() ?? "employee";
+    const base = raw.replace(/[^a-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "") || "employee";
+    let account = base;
+    let suffix = 2;
+    while (used.has(account)) account = `${base}-${suffix++}`;
+    used.add(account);
+    setAccount.run(account, user.id);
+  }
+
+  const now = Date.now();
+  const organizations = db.prepare("SELECT id FROM organizations").all() as { id: string }[];
+  const addRole = db.prepare(
+    `INSERT OR IGNORE INTO roles
+      (id, organization_id, scope, role_key, name, is_system, is_protected, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+  );
+  const addPermission = db.prepare(
+    "INSERT OR IGNORE INTO role_permissions (role_id, permission) VALUES (?, ?)",
+  );
+  for (const organization of organizations) {
+    for (const definition of systemRoleDefinitions) {
+      const roleId = `sys_${organization.id}_${definition.key}`;
+      addRole.run(
+        roleId,
+        organization.id,
+        definition.scope,
+        definition.key,
+        definition.name,
+        definition.protected ? 1 : 0,
+        now,
+        now,
+      );
+      for (const permission of definition.permissions) addPermission.run(roleId, permission);
+    }
+  }
+
+  const organizationAssignments = db.prepare(
+    `SELECT organization_id, user_id, role FROM organization_members`,
+  ).all() as { organization_id: string; user_id: string; role: string }[];
+  const addOrganizationRole = db.prepare(
+    `INSERT OR IGNORE INTO organization_member_roles
+      (organization_id, user_id, role_id, created_at) VALUES (?, ?, ?, ?)`,
+  );
+  for (const membership of organizationAssignments) {
+    const role = ["owner", "admin", "member"].includes(membership.role) ? membership.role : "member";
+    addOrganizationRole.run(
+      membership.organization_id,
+      membership.user_id,
+      `sys_${membership.organization_id}_organization-${role}`,
+      now,
+    );
+  }
+
+  const workspaceAssignments = db.prepare(
+    `SELECT wm.workspace_id, wm.user_id, wm.role, w.organization_id
+       FROM workspace_members wm JOIN workspaces w ON w.id = wm.workspace_id`,
+  ).all() as { workspace_id: string; user_id: string; role: string; organization_id: string }[];
+  const addWorkspaceRole = db.prepare(
+    `INSERT OR IGNORE INTO workspace_member_roles
+      (workspace_id, user_id, role_id, created_at) VALUES (?, ?, ?, ?)`,
+  );
+  for (const membership of workspaceAssignments) {
+    const role = ["owner", "admin", "member", "viewer"].includes(membership.role) ? membership.role : "member";
+    addWorkspaceRole.run(
+      membership.workspace_id,
+      membership.user_id,
+      `sys_${membership.organization_id}_workspace-${role}`,
+      now,
+    );
+  }
+}
+
 function ensureSchema(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(DDL);
   seedLegacyTenant(db);
+  migrateAccountsAndRoles(db);
   migrateThreads(db);
   migrateApiConfig(db);
   migrateProductModelLibraryToSubjects(db);
@@ -669,7 +832,7 @@ function ensureSchema(db: DatabaseSync): void {
     );
   `);
   db.exec(INDEX_DDL);
-  db.exec("PRAGMA user_version = 14");
+  db.exec("PRAGMA user_version = 15");
 }
 
 export function openWorkbenchDatabase(dbPath: string): DatabaseSync {

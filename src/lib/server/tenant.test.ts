@@ -250,4 +250,99 @@ describe("employee and workspace boundaries", () => {
     expect(observed).toEqual([owner.workspaceId, otherActor.workspaceId]);
     expect(context.tenantContext()).toBeNull();
   });
+
+  it("normalizes account login and revokes every session when a password changes", async () => {
+    const tenant = await import("./tenant");
+    const owner = tenant.ensureLocalWorkspaceActor();
+    const workspace = tenant.createWorkspace(owner, { name: `Session ${crypto.randomUUID()}` });
+    const workspaceOwner = tenant.workspaceActorForUser(owner.userId, workspace.id);
+    const invited = tenant.addWorkspaceMember(workspaceOwner, {
+      account: "E1001",
+      displayName: "账号测试员工",
+      role: "member",
+    });
+    expect(invited.temporaryPassword).toBe(tenant.DEFAULT_INITIAL_PASSWORD);
+    const first = tenant.login({ account: " e1001 ", password: "123456", workspaceId: workspace.id });
+    const second = tenant.login({ account: "E1001", password: "123456", workspaceId: workspace.id });
+    expect(first.actor.account).toBe("e1001");
+    const { getDb } = await import("./db");
+    const session = getDb().prepare("SELECT expires_at FROM workbench_sessions WHERE id IS NOT NULL ORDER BY created_at DESC LIMIT 1").get() as { expires_at: number };
+    expect(session.expires_at - Date.now()).toBeGreaterThan(89 * 24 * 60 * 60 * 1000);
+    tenant.changePassword(first.actor, { currentPassword: "123456", newPassword: "new-password" });
+    expect(getDb().prepare("SELECT COUNT(*) AS count FROM workbench_sessions WHERE user_id = ?").get(first.actor.userId)).toEqual({ count: 0 });
+    expect(() => tenant.login({ account: "e1001", password: "123456", workspaceId: workspace.id })).toThrow(tenant.TenantAccessError);
+    expect(tenant.login({ account: "e1001", password: "new-password", workspaceId: workspace.id }).actor.userId).toBe(second.actor.userId);
+  });
+
+  it("preflights imports transactionally and does not reset an existing password", async () => {
+    const tenant = await import("./tenant");
+    const owner = tenant.ensureLocalWorkspaceActor();
+    const workspace = tenant.createWorkspace(owner, { name: `Import ${crypto.randomUUID()}` });
+    const workspaceOwner = tenant.workspaceActorForUser(owner.userId, workspace.id);
+    const invalid = tenant.previewEmployeeImport(workspaceOwner, [
+      { account: "I1001", displayName: "有效行", row: 2 },
+      { account: "I1002", displayName: "无效角色", workspaceRole: "missing-role", row: 3 },
+    ]);
+    expect(invalid.valid).toBe(false);
+    expect(() => tenant.importEmployees(workspaceOwner, invalid.rows)).toThrow(tenant.TenantAccessError);
+    expect(tenant.listAdminAccounts(workspaceOwner, "I1001")).toHaveLength(0);
+
+    expect(tenant.importEmployees(workspaceOwner, [
+      { account: "I1001", displayName: "导入员工", department: "设计部", row: 2 },
+    ])).toEqual({ created: 1, updated: 0 });
+    const imported = tenant.login({ account: "i1001", password: "123456", workspaceId: workspace.id });
+    tenant.changePassword(imported.actor, { currentPassword: "123456", newPassword: "employee-password" });
+    expect(tenant.importEmployees(workspaceOwner, [
+      { account: "I1001", displayName: "已更新员工", department: "品牌部", row: 2 },
+    ])).toEqual({ created: 0, updated: 1 });
+    expect(tenant.login({ account: "i1001", password: "employee-password", workspaceId: workspace.id }).actor.displayName).toBe("已更新员工");
+  });
+
+  it("uses role permission unions and blocks a non-owner from creating a privilege escalation role", async () => {
+    const tenant = await import("./tenant");
+    const owner = tenant.ensureLocalWorkspaceActor();
+    const workspace = tenant.createWorkspace(owner, { name: `Roles ${crypto.randomUUID()}` });
+    const workspaceOwner = tenant.workspaceActorForUser(owner.userId, workspace.id);
+    const customRole = tenant.createAdminRole(workspaceOwner, {
+      scope: "workspace",
+      name: `Runtime manager ${crypto.randomUUID()}`,
+      permissions: ["runtime-config:manage"],
+    });
+    const members = tenant.listAdminRoles(workspaceOwner);
+    const organizationMember = members.find((role) => role.key === "organization-member")!;
+    const account = tenant.upsertAdminAccount(workspaceOwner, {
+      account: `role-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "权限测试员工",
+      organizationRoleIds: [organizationMember.id],
+      workspaceRoleIds: { [workspace.id]: [customRole.id] },
+    });
+    const actor = tenant.login({ account: account.account, password: "123456", workspaceId: workspace.id }).actor;
+    expect(tenant.hasPermission(actor, "runtime-config:manage")).toBe(true);
+    expect(() => tenant.createAdminRole(actor, {
+      scope: "workspace",
+      name: "越权角色",
+      permissions: ["workspace:members:manage"],
+    })).toThrow(tenant.TenantAccessError);
+  });
+
+  it("rate limits repeated account failures and emits an XLSX import template", async () => {
+    const tenant = await import("./tenant");
+    const account = `limited-${crypto.randomUUID().slice(0, 8)}`;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(() => tenant.login({ account, password: "wrong-password", ip: "203.0.113.100" })).toThrow(tenant.TenantAccessError);
+    }
+    try {
+      tenant.login({ account, password: "wrong-password", ip: "203.0.113.100" });
+      throw new Error("expected login to be rate limited");
+    } catch (error) {
+      expect(error).toMatchObject({ status: 429 });
+    }
+    const { GET } = await import("@/app/api/admin/employees/import/route");
+    const { parseXlsx } = await import("@/lib/collector/xlsx");
+    const response = await GET(new Request("http://localhost/api/admin/employees/import?format=xlsx"));
+    expect(response.headers.get("content-type")).toContain("spreadsheetml");
+    expect(parseXlsx(Buffer.from(await response.arrayBuffer()))[0]).toEqual([
+      "账号", "姓名", "部门", "组织角色", "工作区角色",
+    ]);
+  });
 });

@@ -10,6 +10,12 @@ import {
   type FormEvent,
   type PropsWithChildren,
 } from "react";
+import {
+  createWorkbenchAbility,
+  type AbilityAction,
+  type AbilitySubject,
+  type Permission,
+} from "@/lib/authorization";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -20,16 +26,33 @@ export type WorkbenchWorkspace = {
   name: string;
   slug: string;
   role: "owner" | "admin" | "member" | "viewer";
+  roles?: RoleSummary[];
+};
+
+export type RoleSummary = {
+  id: string;
+  key: string;
+  name: string;
+  scope: "organization" | "workspace";
+  system: boolean;
+  protected: boolean;
+  permissions: Permission[];
+  assignedCount?: number;
 };
 
 export type WorkbenchSession = {
   actor: {
     userId: string;
+    account: string;
     organizationId: string;
     workspaceId: string;
     email: string;
     displayName: string;
+    department: string | null;
     role: "owner" | "admin" | "member" | "viewer";
+    organizationRoles: RoleSummary[];
+    workspaceRoles: RoleSummary[];
+    permissions: Permission[];
   };
   workspace: WorkbenchWorkspace;
   workspaces: WorkbenchWorkspace[];
@@ -40,6 +63,7 @@ type SessionContextValue = {
   refresh: () => Promise<void>;
   switchWorkspace: (workspaceId: string) => Promise<void>;
   signOut: () => Promise<void>;
+  can: (action: AbilityAction, subject: AbilitySubject) => boolean;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -59,7 +83,7 @@ async function jsonOrError<T>(response: Response): Promise<T> {
 export function AuthGate({ children }: PropsWithChildren) {
   const [session, setSession] = useState<WorkbenchSession | null>(null);
   const [loading, setLoading] = useState(true);
-  const [email, setEmail] = useState("");
+  const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -73,6 +97,19 @@ export function AuthGate({ children }: PropsWithChildren) {
     const next = await jsonOrError<WorkbenchSession>(response);
     setSession(next);
   }, []);
+
+  // Refreshing this authenticated endpoint extends both the database expiry and
+  // the HttpOnly cookie. It covers a new tab, returning to a focused tab, and
+  // a day-long active session without exposing the session token to JavaScript.
+  useEffect(() => {
+    const refreshQuietly = () => { void refresh().catch(() => undefined); };
+    window.addEventListener("focus", refreshQuietly);
+    const interval = window.setInterval(refreshQuietly, 24 * 60 * 60 * 1000);
+    return () => {
+      window.removeEventListener("focus", refreshQuietly);
+      window.clearInterval(interval);
+    };
+  }, [refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,7 +140,7 @@ export function AuthGate({ children }: PropsWithChildren) {
       const response = await fetch("/api/auth/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ account, password }),
       });
       const next = await jsonOrError<WorkbenchSession>(response);
       setSession(next);
@@ -130,12 +167,17 @@ export function AuthGate({ children }: PropsWithChildren) {
     setSession(null);
   }, []);
 
+  const can = useCallback((action: AbilityAction, subject: AbilitySubject) => {
+    return !!session && createWorkbenchAbility(session.actor.permissions).can(action, subject);
+  }, [session]);
+
   const value = useMemo<SessionContextValue | null>(() => session ? {
     session,
     refresh,
     switchWorkspace,
     signOut,
-  } : null, [refresh, session, signOut, switchWorkspace]);
+    can,
+  } : null, [can, refresh, session, signOut, switchWorkspace]);
 
   if (loading) {
     return (
@@ -161,10 +203,10 @@ export function AuthGate({ children }: PropsWithChildren) {
             <label className="grid gap-1.5 text-sm font-medium">
               邮箱
               <Input
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="username"
+                placeholder="账号 / 工号"
+                value={account}
+                onChange={(event) => setAccount(event.target.value)}
                 required
               />
             </label>

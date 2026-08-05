@@ -684,7 +684,12 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
     organizationId: "",
     workspaceId: job.workspaceId,
     role: "member" as const,
+    account: "mono-worker",
     email: "",
+    department: null,
+    organizationRoles: [],
+    workspaceRoles: [],
+    permissions: [],
     displayName: "Mono 异步任务",
   };
   return runWithTenantContext(tenantActor, async () => {
