@@ -1,12 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, stat, readFile } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { loadEnvConfig } from "@next/env";
 
 loadEnvConfig(process.cwd());
-
-const { requestShadowBackdrop } = require("@/lib/mono/product-pipeline") as typeof import("@/lib/mono/product-pipeline");
 
 /**
  * One-off manual verification for the online shadow-backdrop switch: runs
@@ -18,6 +16,7 @@ const { requestShadowBackdrop } = require("@/lib/mono/product-pipeline") as type
  * Usage: npx tsx scripts/try-shadow-backdrop.ts "C:\path\to\folder" [model]
  */
 async function main(): Promise<void> {
+  const { requestShadowBackdrop } = await import("@/lib/mono/product-pipeline");
   const sourceDir = process.argv[2];
   const model = process.argv[3] || "gpt-image-2";
   if (!sourceDir) throw new Error("用法：npx tsx scripts/try-shadow-backdrop.ts <图片文件夹> [模型名]");

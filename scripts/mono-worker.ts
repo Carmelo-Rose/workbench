@@ -1,20 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { loadEnvConfig } from "@next/env";
-import type { MonoJobKind } from "@/lib/mono/contracts";
 
 // This standalone process is outside the Next runtime, so load the same
 // root-level .env files before importing services that read configuration.
 loadEnvConfig(process.cwd());
-
-// `tsx` runs this script as CommonJS in the current workspace.  A synchronous
-// require deliberately keeps service-module evaluation after `loadEnvConfig`.
-// Top-level await would make the standalone worker fail before it can heartbeat.
-const {
-  createEmptyWorkerInFlight,
-  reportStandaloneWorkerHeartbeat,
-  runStandaloneWorkerTick,
-} = require("@/lib/mono/service") as typeof import("@/lib/mono/service");
 
 /**
  * 独立 Mono Worker 进程（架构治理 Phase 4）。跟 Next.js web 进程共用同一个
@@ -29,6 +19,13 @@ const {
  * 超时仍在跑的任务不会丢——它们的租约到期后会被 reclaimExpiredLeases 收回，
  * 下一个 worker（可能是重启后的自己）会重新认领执行。
  */
+
+async function bootstrap(): Promise<void> {
+const {
+  createEmptyWorkerInFlight,
+  reportStandaloneWorkerHeartbeat,
+  runStandaloneWorkerTick,
+} = await import("@/lib/mono/service");
 
 const POLL_MS = Math.max(250, Number(process.env.MONO_WORKER_POLL_MS) || 1_500);
 const HEARTBEAT_MS = Math.max(POLL_MS, Number(process.env.MONO_WORKER_HEARTBEAT_MS) || 10_000);
@@ -96,3 +93,9 @@ log(`启动，DB=${process.env.WORKBENCH_DB_PATH ?? "(默认 data/workbench.db)"
 reportStandaloneWorkerHeartbeat(workerId, inFlight, startedAt);
 lastHeartbeatAt = Date.now();
 void loop();
+}
+
+void bootstrap().catch((error) => {
+  console.error("[mono-worker] startup failed", error);
+  process.exit(1);
+});

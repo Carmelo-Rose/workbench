@@ -36,7 +36,7 @@ const ROLE_LABEL: Record<WorkspaceMember["role"], string> = {
 };
 
 export function WorkspaceSettings() {
-  const { session, refresh, switchWorkspace } = useWorkbenchSession();
+  const { session, refresh, switchWorkspace, can } = useWorkbenchSession();
   const [workspaces, setWorkspaces] = useState<WorkbenchWorkspace[]>(session.workspaces);
   const [members, setMembers] = useState<WorkspaceMember[] | null>(null);
   const [memberName, setMemberName] = useState("");
@@ -47,7 +47,8 @@ export function WorkspaceSettings() {
   const [busy, setBusy] = useState<"member" | "workspace" | "switch" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const canManage = session.actor.role === "owner" || session.actor.role === "admin";
+  const canManage = can("manage", "WorkspaceMember");
+  const canAssignOwner = can("manage", "Organization");
 
   const load = async () => {
     const [workspaceData, memberData] = await Promise.all([
@@ -225,7 +226,7 @@ export function WorkspaceSettings() {
                 <option value="member">成员</option>
                 <option value="viewer">只读成员</option>
                 <option value="admin">管理员</option>
-                {session.actor.role === "owner" && <option value="owner">所有者</option>}
+                {canAssignOwner && <option value="owner">所有者</option>}
               </select>
             </label>
             <Button type="submit" size="sm" className="w-fit" disabled={busy === "member"}>
