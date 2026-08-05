@@ -218,7 +218,7 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
         turnAnchor="top"
         data-slot="aui_thread-viewport"
         className={cn(
-          "relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth px-4 pt-4",
+          "relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll px-4 pt-4",
           isEmpty && !hasVideoTurn && "justify-center",
         )}
       >

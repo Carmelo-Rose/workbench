@@ -316,9 +316,11 @@ function HistoryThumbnail({ jobId, index }: { jobId: string; index: number }) {
     <>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={`/api/workbench/mono/jobs/${encodeURIComponent(jobId)}/image/${index}`}
+        src={`/api/workbench/mono/jobs/${encodeURIComponent(jobId)}/image/${index}?w=160`}
         alt=""
         className="size-14 rounded-lg border object-cover"
+        loading="lazy"
+        decoding="async"
         onError={() => setFailed(true)}
       />
     </>

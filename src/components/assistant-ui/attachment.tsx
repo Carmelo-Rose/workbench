@@ -1,6 +1,12 @@
 "use client";
 
-import { type PropsWithChildren, useEffect, useState, type FC } from "react";
+import {
+  type PropsWithChildren,
+  useEffect,
+  useRef,
+  useState,
+  type FC,
+} from "react";
 import {
   XIcon,
   PlusIcon,
@@ -27,7 +33,7 @@ import {
   DialogContent,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 
@@ -64,6 +70,85 @@ const useAttachmentSrc = () => {
   );
 
   return useFileSrc(file) ?? src;
+};
+
+const ATTACHMENT_THUMB_SIZE = 192;
+
+/**
+ * Chat attachments can be camera originals even though the message tile is
+ * only 96px square. Decode a small bitmap for the tile so scrolling into an
+ * attachment never has to synchronously decode the original image.
+ */
+const useAttachmentThumbnail = (src: string | undefined) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let disposed = false;
+    const controller = new AbortController();
+    setReady(false);
+
+    if (!src || typeof createImageBitmap !== "function") {
+      return () => controller.abort();
+    }
+
+    const load = async () => {
+      try {
+        const response = await fetch(src, { signal: controller.signal });
+        if (!response.ok) throw new Error(`Attachment thumbnail HTTP ${response.status}`);
+        const bitmap = await createImageBitmap(await response.blob(), {
+          resizeWidth: ATTACHMENT_THUMB_SIZE,
+          resizeQuality: "medium",
+        });
+
+        if (disposed) {
+          bitmap.close();
+          return;
+        }
+
+        const canvas = canvasRef.current;
+        const context = canvas?.getContext("2d");
+        if (!canvas || !context) {
+          bitmap.close();
+          return;
+        }
+
+        canvas.width = ATTACHMENT_THUMB_SIZE;
+        canvas.height = ATTACHMENT_THUMB_SIZE;
+        const scale = Math.max(
+          ATTACHMENT_THUMB_SIZE / bitmap.width,
+          ATTACHMENT_THUMB_SIZE / bitmap.height,
+        );
+        const width = bitmap.width * scale;
+        const height = bitmap.height * scale;
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(
+          bitmap,
+          (ATTACHMENT_THUMB_SIZE - width) / 2,
+          (ATTACHMENT_THUMB_SIZE - height) / 2,
+          width,
+          height,
+        );
+        bitmap.close();
+        setReady(true);
+      } catch (error) {
+        if (!disposed && (error as Error).name !== "AbortError") {
+          // Keep the lightweight fallback for an attachment that cannot be
+          // fetched or decoded; the full source remains available in the
+          // preview dialog.
+          setReady(false);
+        }
+      }
+    };
+
+    void load();
+    return () => {
+      disposed = true;
+      controller.abort();
+    };
+  }, [src]);
+
+  return { canvasRef, ready };
 };
 
 type AttachmentPreviewProps = {
@@ -114,17 +199,24 @@ const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
 
 const AttachmentThumb: FC = () => {
   const src = useAttachmentSrc();
+  const { canvasRef, ready } = useAttachmentThumbnail(src);
 
   return (
     <Avatar className="aui-attachment-tile-avatar h-full w-full rounded-none">
-      <AvatarImage
-        src={src}
-        alt="Attachment preview"
-        className="aui-attachment-tile-image object-cover"
+      <canvas
+        ref={canvasRef}
+        role="img"
+        aria-label="Attachment preview"
+        className={cn(
+          "aui-attachment-tile-image size-full object-cover",
+          !ready && "hidden",
+        )}
       />
-      <AvatarFallback>
-        <FileText className="aui-attachment-tile-fallback-icon text-muted-foreground size-8" />
-      </AvatarFallback>
+      {!ready ? (
+        <AvatarFallback>
+          <FileText className="aui-attachment-tile-fallback-icon text-muted-foreground size-8" />
+        </AvatarFallback>
+      ) : null}
     </Avatar>
   );
 };

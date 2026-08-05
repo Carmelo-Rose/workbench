@@ -11,7 +11,6 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { preloadImageReference } from "@/lib/image-reference";
 import { monoImageGenerationResultSchema, type MonoImageGenerationResult, type MonoJob } from "@/lib/mono/contracts";
 
 export function imageBatchResult(job?: MonoJob): MonoImageGenerationResult | null {
@@ -33,6 +32,10 @@ function tileRatio(job: MonoJob): { ratio: number; css: string } {
 /** 结果图存在图片服务的域上，跨域时 <a download> 会被忽略，统一走同源代理下载。 */
 function downloadUrl(jobId: string, index: number): string {
   return `/api/workbench/mono/jobs/${encodeURIComponent(jobId)}/image/${index}`;
+}
+
+function thumbnailUrl(jobId: string, index: number): string {
+  return `${downloadUrl(jobId, index)}?w=640`;
 }
 
 export type MonoGalleryImage = {
@@ -61,12 +64,6 @@ export function MonoImageBatchGallery({
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [referencePendingIndex, setReferencePendingIndex] = useState<number | null>(null);
   const [referenceErrorIndex, setReferenceErrorIndex] = useState<number | null>(null);
-
-  useEffect(() => {
-    successful.forEach((slot) => {
-      preloadImageReference(downloadUrl(job.id, slot.index));
-    });
-  }, [job.id, successful]);
 
   const handleUseAsReference = async (image: MonoGalleryImage): Promise<boolean> => {
     if (!onUseAsReference || referencePendingIndex !== null) return false;
@@ -116,7 +113,7 @@ export function MonoImageBatchGallery({
                   style={{ aspectRatio: css }}
                 >
                   <ImageWithFallback
-                    src={downloadUrl(job.id, slot.index)}
+                    src={thumbnailUrl(job.id, slot.index)}
                     alt={`生成结果 ${slot.index + 1}`}
                     className="size-full object-contain"
                   />
@@ -201,8 +198,17 @@ function ImageWithFallback({ src, alt, className }: { src: string; alt: string; 
       </span>
     );
   }
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img src={src} alt={alt} className={className} onError={() => setFailed(true)} />;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 function ImageLightbox({
