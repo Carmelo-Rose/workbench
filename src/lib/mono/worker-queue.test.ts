@@ -172,6 +172,35 @@ describe("reclaimExpiredLeases", () => {
   });
 });
 
+describe("expired product-pipeline leases", () => {
+  it("become terminal instead of being silently requeued for another paid run", async () => {
+    const store = await import("./store");
+    const { newMonoActor } = await import("./service");
+    const actor = newMonoActor({ userId: "u1", workspaceId: `ws-product-${crypto.randomUUID()}` });
+    const expired = store.createProductPipelineMonoJob(
+      actor,
+      { folderId: "folder-a", workflowId: "hat-62604171-v1", folderRelativePath: "folder-a" },
+      "folder-a",
+    );
+    const active = store.createProductPipelineMonoJob(
+      actor,
+      { folderId: "folder-b", workflowId: "hat-62604171-v1", folderRelativePath: "folder-b" },
+      "folder-b",
+    );
+    store.claimMonoJob(expired.id, { workerId: "worker-a", leaseMs: -1_000 });
+    store.claimMonoJob(active.id, { workerId: "worker-a", leaseMs: 60_000 });
+
+    expect(store.failExpiredProductPipelineJobs("worker lost")).toBe(1);
+    expect(store.getMonoJob(actor, expired.id)).toMatchObject({
+      status: "failed",
+      error: "worker lost",
+      leaseOwner: null,
+      leaseExpiresAt: null,
+    });
+    expect(store.getMonoJob(actor, active.id)).toMatchObject({ status: "running" });
+  });
+});
+
 describe("failOrRetryMonoJob", () => {
   it("fails immediately once attempt_count reaches maxAttempts", async () => {
     const store = await import("./store");

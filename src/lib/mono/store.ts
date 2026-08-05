@@ -725,6 +725,38 @@ export function reclaimExpiredLeases(now: number = Date.now()): number {
   return Number(result.changes);
 }
 
+/**
+ * Re-running a product pipeline can submit a new paid image request for every
+ * slot. Unlike provider-backed video jobs, it has no remote task ID that can
+ * safely be resumed after the worker vanishes. Surface that interruption
+ * instead of silently requeueing a potentially billable duplicate run.
+ */
+export function failExpiredProductPipelineJobs(
+  error: string,
+  now: number = Date.now(),
+): number {
+  const db = getDb();
+  const candidates = db.prepare(
+    `SELECT id FROM mono_jobs
+     WHERE kind = 'product_pipeline' AND status = 'running'
+       AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`,
+  ).all(now) as { id: string }[];
+  const fail = db.prepare(
+    `UPDATE mono_jobs
+     SET status = 'failed', error = ?, updated_at = ?, completed_at = ?,
+         lease_owner = NULL, lease_expires_at = NULL
+     WHERE id = ? AND kind = 'product_pipeline' AND status = 'running'
+       AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`,
+  );
+  let failed = 0;
+  for (const { id } of candidates) {
+    if (fail.run(error, now, now, id, now).changes === 0) continue;
+    appendMonoJobEvent(id, "failed", { error, reason: "lease_expired" });
+    failed += 1;
+  }
+  return failed;
+}
+
 /** 长任务的心跳：还在正常跑就把租约续一段，避免被回收器当孤儿收走。 */
 export function renewMonoJobLease(jobId: string, workerId: string, leaseMs: number = DEFAULT_LEASE_MS): boolean {
   const now = Date.now();

@@ -59,6 +59,7 @@ import {
   createMonoSubject,
   deleteMonoSubject,
   deleteMonoAssetIfUnreferenced,
+  failExpiredProductPipelineJobs,
   failOrRetryMonoJob,
   getMonoAsset,
   getMonoJob,
@@ -137,6 +138,7 @@ const MONO_JOB_MAX_RETRY_BACKOFF_MS = Math.max(
 );
 const MONO_JOB_LEASE_MS = Math.max(30_000, Number(process.env.MONO_JOB_LEASE_MS) || 5 * 60 * 1000);
 const MONO_WORKER_VERSION = process.env.MONO_WORKER_VERSION ?? process.env.npm_package_version ?? "dev";
+const PRODUCT_PIPELINE_ORPHANED_ERROR = "商品套图执行服务已中断；为避免重复扣费，任务未自动重跑。已发布的 images 文件不受影响。";
 
 type WorkerState = { started: boolean; scheduled: boolean; inFlight: Record<MonoJobKind, number> };
 const emptyInFlight = (): Record<MonoJobKind, number> =>
@@ -370,6 +372,10 @@ function absoluteTemplateReference(path: string): string {
 }
 
 export function getJob(actor: MonoActor, jobId: string): MonoJob | null {
+  // Browser polling is the only reliable observer if a standalone worker has
+  // exited and no replacement was started. Product runs are terminalized,
+  // rather than requeued, because another attempt can incur duplicate charges.
+  failExpiredProductPipelineJobs(PRODUCT_PIPELINE_ORPHANED_ERROR);
   scheduleMonoWorker();
   return getMonoJob(actor, jobId);
 }
@@ -378,6 +384,9 @@ export function listJobs(
   actor: MonoActor,
   options: { kind?: MonoJobKind; kinds?: MonoJobKind[]; favoriteOnly?: boolean; limit?: number } = {},
 ): MonoJob[] {
+  if (options.kind === "product_pipeline" || options.kinds?.includes("product_pipeline")) {
+    failExpiredProductPipelineJobs(PRODUCT_PIPELINE_ORPHANED_ERROR);
+  }
   scheduleMonoWorker();
   return listMonoJobs(actor, options);
 }
