@@ -380,7 +380,7 @@ function createUserIfMissing(input: {
   const now = Date.now();
   getDb().prepare(
     `INSERT INTO users (id, account, email, display_name, department, password_hash, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?) ON CONFLICT(account) DO NOTHING`,
+     VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?) ON CONFLICT DO NOTHING`,
   ).run(input.id ?? stableUserId(account), account, email, input.displayName.trim(), input.department?.trim() || null, input.password ? hashPassword(input.password) : null, now, now);
   return getDb().prepare(
     "SELECT id, account, email, display_name, department, password_hash, status FROM users WHERE account = ?",
