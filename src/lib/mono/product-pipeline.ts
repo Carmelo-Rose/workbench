@@ -622,10 +622,20 @@ async function assertSourcesUnchanged(sources: SourceImage[]): Promise<void> {
 }
 
 async function requestCutout(source: SourceImage, folderKey: string, signal: AbortSignal): Promise<Buffer> {
+  return requestCutoutBytes(await readFile(source.path), source.name, folderKey, signal);
+}
+
+/**
+ * Cutout for bytes that are not a file on the share — the generated frame,
+ * whose article has to be located before it can be compared with the one that
+ * was photographed. Same queue and same per-folder fair share as the sources.
+ */
+async function requestCutoutBytes(bytes: Buffer, name: string, folderKey: string, signal: AbortSignal): Promise<Buffer> {
   return productCutoutScheduler.run(folderKey, async () => {
     const headers = gatewayHeaders();
-    const bytes = await readFile(source.path);
-    const uploaded = await fetch(`${gatewayBase()}/files/raw?name=${encodeURIComponent(source.name)}`, { method: "POST", headers: { ...headers, "content-type": "application/octet-stream" }, body: bytes, signal });
+    // Re-wrapped rather than passed straight through: `Buffer` is typed over
+    // ArrayBufferLike, which fetch does not accept as a body.
+    const uploaded = await fetch(`${gatewayBase()}/files/raw?name=${encodeURIComponent(name)}`, { method: "POST", headers: { ...headers, "content-type": "application/octet-stream" }, body: new Uint8Array(bytes), signal });
     if (!uploaded.ok) throw new Error(`product_cutout 上传失败：${uploaded.status}`);
     const file = await uploaded.json() as { file_id?: string };
     if (!file.file_id) throw new Error("product_cutout 未返回输入文件标识");
@@ -974,6 +984,14 @@ type MasterRenderLayers = {
   foreground: Buffer;
   skuForeground: Buffer;
   mainImage: Buffer;
+  /**
+   * Where the article sits inside `mainImage`, measured on that frame's own
+   * matte. Null when the matte came back empty, which drops 主图 onto the
+   * degraded framing in `composeSquareDeliverable`.
+   */
+  mainArticle: RelativeBox | null;
+  /** Anything about this frame a person should look at before it ships. */
+  warnings: string[];
 };
 
 /**
@@ -983,6 +1001,159 @@ type MasterRenderLayers = {
  * removes the seam.
  */
 const GENERATED_SWEEP_WHITE_FLOOR = 245;
+
+/**
+ * How far the generated frame's own aspect may drift from the source photo's
+ * before the run says so.
+ *
+ * `requestShadowBackdrop` asks for the source's exact ratio precisely so the
+ * generator edits the background of the shot it was given. A frame that comes
+ * back a different shape was re-composed instead, and a re-composed shot is
+ * where the article's own proportions are at risk — the one thing this
+ * pipeline cannot measure for itself, because the article was redrawn.
+ *
+ * Reported, not fatal, in line with the colour-presence gate above: it is a
+ * signal about a whole picture, and an unattended run must not stall on it.
+ * The message carries both sizes, which is also how the first real run
+ * answers "what does this service actually return?".
+ */
+const MAIN_FRAME_ASPECT_TOLERANCE = 0.02;
+
+/** Longest side of the probe the matte's bounding box is measured on. */
+const MATTE_PROBE_SIDE = 400;
+/** A matte pixel this opaque is the article rather than its feathered edge. */
+const MATTE_PRODUCT_ALPHA = 128;
+/**
+ * How far the article's width-to-height ratio may differ between the photograph
+ * and the frame the generator drew from it before the run says so.
+ *
+ * Wide enough that probe noise on a 400px matte cannot reach it, tight enough
+ * to catch the ~6% redraw this pipeline was once thought to be suffering from.
+ */
+const ARTICLE_PROPORTION_TOLERANCE = 0.05;
+
+/**
+ * Where the article a matte describes sits, and how wide it reads.
+ *
+ * `fit: "inside"` keeps the matte's own proportions, so the probe's pixels stay
+ * square and the box measured on it is already in the picture's real ones — no
+ * multiplying back by the full-size dimensions, and no dependence on what those
+ * dimensions were. The box comes back in fractions of the frame, which hold for
+ * the frame the matte was cut from whatever size it is.
+ *
+ * A matte is the only thing in this pipeline that can tell the article apart
+ * from the shadow it casts: on the generated frame both are simply non-white.
+ */
+export async function measureMatteBox(matte: Buffer): Promise<{ box: RelativeBox; aspect: number } | null> {
+  const meta = await sharp(matte).metadata();
+  const single = meta.hasAlpha
+    ? sharp(matte).extractChannel("alpha")
+    : sharp(matte).toColorspace("b-w");
+  const { data, info } = await single
+    .resize(MATTE_PROBE_SIDE, MATTE_PROBE_SIDE, { fit: "inside" })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  let minX = info.width, minY = info.height, maxX = -1, maxY = -1;
+  for (let y = 0; y < info.height; y += 1) {
+    for (let x = 0; x < info.width; x += 1) {
+      if (data[(y * info.width + x) * info.channels] < MATTE_PRODUCT_ALPHA) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return null;
+  const width = maxX - minX + 1;
+  const height = maxY - minY + 1;
+  return {
+    box: {
+      left: minX / info.width,
+      top: minY / info.height,
+      width: width / info.width,
+      height: height / info.height,
+    },
+    aspect: width / height,
+  };
+}
+
+/** Width-to-height ratio of the article a matte describes. */
+export async function measureMatteAspect(matte: Buffer): Promise<number | null> {
+  return (await measureMatteBox(matte))?.aspect ?? null;
+}
+
+/**
+ * Says whether the generator came back with an article shaped like the one that
+ * was photographed, and what to tell the operator when it did not.
+ *
+ * This used to stretch the frame back on one axis instead of reporting. The
+ * evidence for doing so turned out to be a measuring error: the probe that
+ * found the hat "6–7% too narrow" was counting the *photograph's* cast shadow
+ * as part of the hat and the generated frame's much lighter shadow as
+ * background, so it was comparing hat-plus-shadow against hat. Measured with a
+ * threshold that separates the two, the same pictures agree to within 0.5%, and
+ * the hat is the same width in both at matched height.
+ *
+ * The measurement stayed and the stretch went, because the two are not
+ * symmetric. A warning that fires on a bad reading costs someone a look at a
+ * good picture. A stretch that fires on a bad reading ships a deformed product
+ * photo and nothing downstream can tell — which is the complaint that started
+ * all of this.
+ */
+export function describeProportionDrift(
+  sourceName: string,
+  sourceAspect: number,
+  generatedAspect: number,
+): string | undefined {
+  const drift = Math.abs(generatedAspect / sourceAspect - 1);
+  if (drift <= ARTICLE_PROPORTION_TOLERANCE) return undefined;
+  return `${sourceName}：生成图里商品的长宽比 ${generatedAspect.toFixed(3)} 与原图 ${sourceAspect.toFixed(3)} 相差 `
+    + `${(drift * 100).toFixed(0)}%，模型可能改了商品形状，已按原样发布，请人工复核该张主图`;
+}
+
+/**
+ * Finds the article in the frame the generator drew, and checks it still has
+ * the shape it was photographed with.
+ *
+ * Locating it is the part 主图 cannot do without: nothing else in the frame
+ * separates the article from the shadow beside it, because both are simply
+ * non-white. Both mattes come from the same segmentation service, so the two
+ * readings are directly comparable.
+ */
+async function locateGeneratedArticle(
+  generated: Buffer,
+  sourceMatte: Buffer,
+  folderKey: string,
+  signal: AbortSignal,
+  sourceName: string,
+): Promise<{ article: RelativeBox | null; warning?: string }> {
+  const generatedMatte = await requestCutoutBytes(generated, `${sourceName}-generated.png`, folderKey, signal);
+  const measured = await measureMatteBox(generatedMatte);
+  if (!measured) {
+    return {
+      article: null,
+      warning: `${sourceName}：生成图抠图为空，主图取景改用整幅墨迹（阴影会把商品挤偏），请人工复核该张主图`,
+    };
+  }
+  const sourceAspect = await measureMatteAspect(sourceMatte);
+  if (!sourceAspect) {
+    return { article: measured.box, warning: `${sourceName}：原图抠图为空，无法核对主图里商品的长宽比` };
+  }
+  return { article: measured.box, warning: describeProportionDrift(sourceName, sourceAspect, measured.aspect) };
+}
+
+export async function describeReframing(source: SourceImage, generated: Buffer): Promise<string | undefined> {
+  const [sourceMeta, generatedMeta] = await Promise.all([
+    sharp(source.path).metadata(),
+    sharp(generated).metadata(),
+  ]);
+  if (!sourceMeta.width || !sourceMeta.height || !generatedMeta.width || !generatedMeta.height) return undefined;
+  const sourceAspect = sourceMeta.width / sourceMeta.height;
+  const generatedAspect = generatedMeta.width / generatedMeta.height;
+  if (Math.abs(generatedAspect - sourceAspect) / sourceAspect <= MAIN_FRAME_ASPECT_TOLERANCE) return undefined;
+  return `${source.name}：生成图比例 ${generatedMeta.width}×${generatedMeta.height} 与原图 ${sourceMeta.width}×${sourceMeta.height} 不一致，`
+    + "生图服务重新构图了，商品比例可能被改动，请人工复核该张主图";
+}
 
 async function makeWhiteMaster(
   source: SourceImage,
@@ -1003,12 +1174,18 @@ async function makeWhiteMaster(
     refineSkuForeground(rawForeground),
     requestShadowBackdrop(source, signal, workspaceId),
   ]);
+  const located = await locateGeneratedArticle(generated, cutout, folderKey, signal, source.name);
+  // Tone only. Nothing on the 主图 path resizes the generated frame on one
+  // axis, so the article reaches the square canvas at the proportions the
+  // generator drew it at, and `located.article` stays true of the picture.
   const mainImage = await sharp(generated)
     .linear(255 / GENERATED_SWEEP_WHITE_FLOOR, 0)
     .removeAlpha()
     .png()
     .toBuffer();
-  return { foreground, skuForeground, mainImage };
+  const warnings = [await describeReframing(source, generated), located.warning]
+    .filter((entry): entry is string => Boolean(entry));
+  return { foreground, skuForeground, mainImage, mainArticle: located.article, warnings };
 }
 
 /** Square 1:1 deliverable side, matching the hand-built reference set on the share. */
@@ -1016,28 +1193,26 @@ const SQUARE_CANVAS_SIZE = 800;
 /** Existing SKU framing: more white margin and no recovered shadow. */
 const SQUARE_SKU_CROP_PADDING = 0.04;
 const SQUARE_SKU_FILL_RATIO = 0.86;
-/** Tighter 主图 framing measured from the supplied before/after references. */
-const SQUARE_MAIN_CROP_PADDING = 0.02;
-/** Front views need more breathing room than a low, wide side view. */
-const SQUARE_COMPACT_FILL_RATIO = 0.87;
-const SQUARE_LANDSCAPE_FILL_RATIO = 0.96;
+/**
+ * How much of the 800px canvas the article itself spans on its longer axis.
+ *
+ * Measured off the hand-built reference sets on the share, where the article
+ * covers 69%–93% of the frame depending on how much of it is profile. Front
+ * views need more breathing room than a low, wide side view.
+ *
+ * These describe the *article*, not the article plus its cast shadow. The
+ * shadow reaches well past the hat on the lit side, so letting it into this
+ * budget both shrinks the article and makes its size swing shot to shot with
+ * whatever shadow the generator happened to draw.
+ */
+const SQUARE_COMPACT_FILL_RATIO = 0.78;
+const SQUARE_LANDSCAPE_FILL_RATIO = 0.9;
 
-async function squareFillRatio(foreground: Buffer, box: RelativeBox): Promise<number> {
-  const { width, height } = await sharp(foreground).metadata();
-  if (!width || !height) throw new Error("无法读取白底图尺寸");
-  const productAspect = (box.width * width) / Math.max(1, box.height * height);
-  const landscapeWeight = smoothStep(productAspect, 1, 1.35);
+function squareFillRatio(articleAspect: number): number {
+  const landscapeWeight = smoothStep(articleAspect, 1, 1.35);
   return SQUARE_COMPACT_FILL_RATIO
     + (SQUARE_LANDSCAPE_FILL_RATIO - SQUARE_COMPACT_FILL_RATIO) * landscapeWeight;
 }
-
-type CroppedRaster = {
-  buffer: Buffer;
-  relativeLeft: number;
-  relativeTop: number;
-  relativeRight: number;
-  relativeBottom: number;
-};
 
 /**
  * Pure-white ceiling for "this pixel is blank canvas, not content". The
@@ -1047,13 +1222,14 @@ type CroppedRaster = {
 const SQUARE_INK_MAX_CHANNEL = 250;
 
 /**
- * Bounding box of everything that is not blank canvas — the product *and* its
+ * Bounding box of everything that is not blank canvas — the article *and* its
  * cast shadow.
  *
- * The crop box handed to `composeSquareDeliverable` is measured on the white
- * master, which is a cutout flattened onto white and therefore carries no
- * shadow at all. Applied to the generated frame it describes the silhouette
- * only, so this fills in the part it cannot see.
+ * Only a fallback, for the frame whose matte came back empty. Framing on this
+ * box is what put the hat hard against one edge of every 主图 in the 1234 run:
+ * the shadow falls to one side, so centring article-plus-shadow leaves the
+ * article as far off centre as the shadow is long. Prefer the article box from
+ * the frame's own matte; reach for this only when there is not one.
  */
 async function measureInkBox(buffer: Buffer): Promise<RelativeBox | null> {
   const { data, info } = await sharp(buffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -1080,113 +1256,125 @@ async function measureInkBox(buffer: Buffer): Promise<RelativeBox | null> {
   };
 }
 
-/**
- * Canvas offset that lands `centre` (a source-relative coordinate) on the
- * middle of the square, given where the crop starts and ends in that same
- * space and how many pixels the crop occupies once resized.
- */
-function centredOffset(centre: number, cropStart: number, cropEnd: number, extent: number): number {
-  const span = cropEnd - cropStart;
-  if (span <= 0) return Math.round((SQUARE_CANVAS_SIZE - extent) / 2);
-  return Math.round(SQUARE_CANVAS_SIZE / 2 - ((centre - cropStart) / span) * extent);
-}
-
-function clampOffset(offset: number, extent: number): number {
-  return Math.min(Math.max(offset, 0), Math.max(0, SQUARE_CANVAS_SIZE - extent));
-}
-
-function unionBox(first: RelativeBox, second: RelativeBox): RelativeBox {
-  const left = Math.min(first.left, second.left);
-  const top = Math.min(first.top, second.top);
-  const right = Math.max(first.left + first.width, second.left + second.width);
-  const bottom = Math.max(first.top + first.height, second.top + second.height);
-  return { left, top, width: right - left, height: bottom - top };
-}
-
 /** Crops a raster buffer to a relative box plus padding, in pixel space. */
-async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number): Promise<CroppedRaster> {
+async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number): Promise<Buffer> {
   const { width, height } = await sharp(buffer).metadata();
   if (!width || !height) throw new Error("无法读取白底图尺寸");
   const left = Math.max(0, Math.round((box.left - padding) * width));
   const top = Math.max(0, Math.round((box.top - padding) * height));
   const right = Math.min(width, Math.round((box.left + box.width + padding) * width));
   const bottom = Math.min(height, Math.round((box.top + box.height + padding) * height));
-  const cropped = await sharp(buffer)
+  return sharp(buffer)
     .extract({ left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) })
     .png()
     .toBuffer();
-  return {
-    buffer: cropped,
-    relativeLeft: left / width,
-    relativeTop: top / height,
-    relativeRight: right / width,
-    relativeBottom: bottom / height,
-  };
 }
 
 /**
- * Renders the published 1:1 deliverable: the source cropped to its measured
- * box and centred on a white square. 主图 frames tighter than SKU and is fed
- * the generated frame, whose shadow is already part of the image; SKU is fed
- * the cutout. Nothing synthetic is generated from the product silhouette.
+ * Renders the published 1:1 deliverable. `box` says where the article is in
+ * `source`, and for both framings it is measured on the very picture being
+ * composed — the cutout for SKU, the generated frame's own matte for 主图.
  *
- * For 主图 the crop widens to whatever ink the frame actually carries, because
- * `box` is measured on a shadowless white master and would otherwise cut the
- * cast shadow off mid-gradient. The product, not the widened crop, is what
- * gets centred.
+ * The two framings differ in what else is in the picture. A SKU cutout is the
+ * article and nothing else, so cropping to the box and centring the crop puts
+ * the article in the middle. A generated 主图 frame also carries the shadow
+ * the generator drew, which is not centred on the article and is not the same
+ * size twice — so that one is framed on the article and lets the shadow fall
+ * where it falls, off the edge of the canvas if it reaches that far.
  *
- * `box` must come from measuring a photo framed the *same* way as this one
- * (`classification`'s per-shot box) — a mismatched box would crop the wrong
- * region. The generated frame qualifies: it is returned at the source photo's
- * own dimensions and composition.
+ * For 主图, `box` may be null when the frame's matte came back empty; framing
+ * then falls back to the whole frame's ink, which is the degraded path and
+ * puts the article off centre by however far the shadow reaches.
  */
 export async function composeSquareDeliverable(
   source: Buffer,
-  box: RelativeBox,
+  box: RelativeBox | null,
   output: string,
   options: { framing?: "main" | "sku" } = {},
 ): Promise<void> {
-  const isMainImage = options.framing === "main";
-  // 主图 crops the generated frame, whose cast shadow reaches well past the
-  // silhouette `box` describes. Cropping to the silhouette slices the shadow
-  // off along a dead-straight line — widening to cover the frame's own ink
-  // keeps it whole. SKU is fed the cutout, which has no shadow to lose.
-  const cropBox = isMainImage ? unionBox(box, (await measureInkBox(source)) ?? box) : box;
-  const cropped = await cropBufferToBox(
-    source,
-    cropBox,
-    isMainImage ? SQUARE_MAIN_CROP_PADDING : SQUARE_SKU_CROP_PADDING,
-  );
-  const fillRatio = isMainImage
-    ? await squareFillRatio(source, box)
-    : SQUARE_SKU_FILL_RATIO;
-  const target = Math.round(SQUARE_CANVAS_SIZE * fillRatio);
-  const { data: resized, info } = await sharp(cropped.buffer)
+  if (options.framing === "main") {
+    const article = box ?? await measureInkBox(source);
+    if (!article) throw new Error("方形交付图缺少裁切框：生成图整幅是空白");
+    await frameArticleOnSquare(source, article, output);
+    return;
+  }
+  if (!box) throw new Error("方形交付图缺少裁切框：未提供 SKU 裁切框");
+  const cropped = await cropBufferToBox(source, box, SQUARE_SKU_CROP_PADDING);
+  const target = Math.round(SQUARE_CANVAS_SIZE * SQUARE_SKU_FILL_RATIO);
+  // `inside` is uniform: the article keeps the proportions the frame gave it.
+  // No other resize in this path is allowed to be anything else.
+  const { data: resized, info } = await sharp(cropped)
     .resize(target, target, { fit: "inside" })
     .png()
     .toBuffer({ resolveWithObject: true });
-  // Centring the widened 主图 crop would push the product off-centre by however
-  // far the shadow stretched it, so place the *product* on the canvas centre
-  // and let the shadow run into the margin. Clamped so the raster still lands
-  // whole — a crop that overhung the canvas would be the same cut again. SKU
-  // crops stay symmetric around the product, so they keep plain centring.
-  const left = isMainImage
-    ? clampOffset(
-      centredOffset(box.left + box.width / 2, cropped.relativeLeft, cropped.relativeRight, info.width),
-      info.width,
-    )
-    : Math.round((SQUARE_CANVAS_SIZE - info.width) / 2);
-  const top = isMainImage
-    ? clampOffset(
-      centredOffset(box.top + box.height / 2, cropped.relativeTop, cropped.relativeBottom, info.height),
-      info.height,
-    )
-    : Math.round((SQUARE_CANVAS_SIZE - info.height) / 2);
+  const left = Math.round((SQUARE_CANVAS_SIZE - info.width) / 2);
+  const top = Math.round((SQUARE_CANVAS_SIZE - info.height) / 2);
   await sharp({ create: { width: SQUARE_CANVAS_SIZE, height: SQUARE_CANVAS_SIZE, channels: 3, background: "#ffffff" } })
     .composite([{ input: resized, left, top }])
     // sharp applies flatten() in a fixed internal stage that runs before
     // composite(), so it cannot strip the alpha composite() just introduced —
     // removeAlpha() has no such ordering quirk.
+    .removeAlpha()
+    .png()
+    .toFile(output);
+}
+
+/**
+ * Puts `article` in the middle of the square at the size the reference set
+ * prints it, and lets the rest of the frame land wherever that leaves it.
+ *
+ * Scaling and placement are driven by the article alone, so two shots of the
+ * same hat come out the same size in the same place whatever the generator did
+ * with the shadow between them. The frame is not cropped to any box first: it
+ * is scaled whole and a window is taken out of it, which is what keeps the
+ * shadow attached to the article instead of sliced to a box's edge.
+ */
+async function frameArticleOnSquare(frame: Buffer, article: RelativeBox, output: string): Promise<void> {
+  const { width, height } = await sharp(frame).metadata();
+  if (!width || !height) throw new Error("无法读取生成图尺寸");
+  const articleWidth = Math.max(1, article.width * width);
+  const articleHeight = Math.max(1, article.height * height);
+  const span = SQUARE_CANVAS_SIZE * squareFillRatio(articleWidth / articleHeight);
+  // Uniform, and the only thing setting it is how big the article has to come
+  // out. Fitting the longer axis is what leaves the shorter one its margin.
+  const scale = Math.min(span / articleWidth, span / articleHeight);
+  // Width only, so sharp derives the height and the resize cannot come out
+  // anything but uniform. The height it picked is then read back rather than
+  // assumed, because the window below is measured against it.
+  const scaled = await sharp(frame)
+    .resize({ width: Math.max(1, Math.round(width * scale)) })
+    .flatten({ background: "#ffffff" })
+    .removeAlpha()
+    .png()
+    .toBuffer();
+  const scaledMeta = await sharp(scaled).metadata();
+  if (!scaledMeta.width || !scaledMeta.height) throw new Error("无法读取缩放后的生成图尺寸");
+  const { width: scaledWidth, height: scaledHeight } = scaledMeta;
+
+  // The 800x800 window onto the scaled frame whose centre is the article's.
+  const windowLeft = Math.round((article.left + article.width / 2) * scaledWidth - SQUARE_CANVAS_SIZE / 2);
+  const windowTop = Math.round((article.top + article.height / 2) * scaledHeight - SQUARE_CANVAS_SIZE / 2);
+  // Wherever the window runs off the frame, the canvas shows through as blank
+  // white — the same white the generated sweep was lifted to.
+  const padLeft = Math.max(0, -windowLeft);
+  const padTop = Math.max(0, -windowTop);
+  const padRight = Math.max(0, windowLeft + SQUARE_CANVAS_SIZE - scaledWidth);
+  const padBottom = Math.max(0, windowTop + SQUARE_CANVAS_SIZE - scaledHeight);
+  // Kept to its own pass: sharp runs extend and a post-resize extract at fixed
+  // points in one pipeline, and this reads as the two steps it is.
+  const padded = padLeft || padTop || padRight || padBottom
+    ? await sharp(scaled)
+      .extend({ top: padTop, bottom: padBottom, left: padLeft, right: padRight, background: "#ffffff" })
+      .png()
+      .toBuffer()
+    : scaled;
+  await sharp(padded)
+    .extract({
+      left: windowLeft + padLeft,
+      top: windowTop + padTop,
+      width: SQUARE_CANVAS_SIZE,
+      height: SQUARE_CANVAS_SIZE,
+    })
     .removeAlpha()
     .png()
     .toFile(output);
@@ -1369,21 +1557,32 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   if (!classification.colors.length) throw new Error("无法识别可用商品颜色；未调用付费生图服务");
 
   // 主图（方形+阴影，每张原图一份）和 SKU（每个颜色一张代表图，无阴影）都是
-  // 本地渲染，不占抠图或付费生图的名额。放在分类之后，是因为方形裁切要用
-  // classifyProductSources 已经量出来的 box —— 这张图里商品到底在哪。
+  // 本地渲染，不占抠图或付费生图的名额。放在分类之后，是因为 SKU 的裁切要用
+  // classifyProductSources 量出来的 box（这张图里商品到底在哪），而 SKU 一色
+  // 一张也要靠分类结果来挑代表图。主图不用分类的 box：它用的是自己那张生成图
+  // 的抠图量出来的 layers.mainArticle，见 composeSquareDeliverable。
   progress(job, "正在渲染方形主图与 SKU 图", 32, { colors: classification.colors.length });
   const masterSquareStage = path.join(stagingRoot, "主图"); await mkdir(masterSquareStage, { recursive: true });
   const skuStage = path.join(stagingRoot, "SKU"); await mkdir(skuStage, { recursive: true });
   const tiledForegrounds: Buffer[] = Array.from({ length: classification.colors.length });
   const allMasterShots = classification.colors.flatMap((color) => color.members);
+  // Frames the generator re-composed instead of editing in place. Collected
+  // from the shots that actually became a 主图, so the operator is only asked
+  // to re-check pictures that were published.
+  const mainFrameWarnings: string[] = [];
   await runWithConcurrency(allMasterShots, PRODUCT_CUTOUT_CONCURRENCY, async (member) => {
     if (signal.aborted) throw new Error("任务已取消");
     const layers = layersByPath.get(member.path);
     if (!layers) throw new Error(`缺少白底图中间产物：${member.path}`);
+    mainFrameWarnings.push(...layers.warnings);
     const stem = path.parse(member.path).name;
+    // The article as located on this very generated frame, not the box the
+    // classifier measured on the white master. Classification still decides
+    // *which* shots become a 主图 and what each one is called, but nothing it
+    // measured reaches the framing.
     await composeSquareDeliverable(
       layers.mainImage,
-      member.metric.box,
+      layers.mainArticle,
       path.join(masterSquareStage, `${stem}.png`),
       { framing: "main" },
     );
@@ -1427,7 +1626,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
       detailShots: detailShots.length || classification.details.length,
       slots: [],
       deliverables,
-      warnings: [...classification.warnings, "PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL：本次运行跳过了 images 详情图生成"],
+      warnings: [...classification.warnings, ...mainFrameWarnings, "PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL：本次运行跳过了 images 详情图生成"],
       resumed: false,
       incomplete: false,
       failedSlots: [],
@@ -1438,7 +1637,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   const rawOnlySlots = job.input.onlySlots;
   const onlySlots = Array.isArray(rawOnlySlots) && rawOnlySlots.length ? rawOnlySlots.map(String) : null;
   const modelSlots = selectModelSlots(onlySlots);
-  const warnings = [...classification.warnings];
+  const warnings = [...classification.warnings, ...mainFrameWarnings];
   // Captured once and carried through every later progress() call and the
   // final return: each call replaces the whole result rather than merging
   // into it, so a field dropped from one payload just disappears from the
@@ -1670,6 +1869,14 @@ async function validateTemplateBundle(root: string, workflowId: string): Promise
 }
 /** How many angles of the chosen colourway are sent as product references. */
 const PRODUCT_REFERENCE_COUNT = 3;
+// A fetch without a deadline can leave a card looking active indefinitely
+// while the worker continues renewing its lease. This remains comfortably
+// above normal image-generation latency but routes a real stall through the
+// existing per-slot retry and failure handling.
+const MODEL_IMAGE_REQUEST_TIMEOUT_MS = Math.max(
+  30_000,
+  Number(process.env.PRODUCT_PIPELINE_MODEL_REQUEST_TIMEOUT_MS) || 5 * 60 * 1000,
+);
 
 async function generateModelSlot(
   template: ProductTemplate,
@@ -1787,18 +1994,28 @@ async function callImageGenerate(
   const endpoint = process.env.MONO_IMAGE_GENERATE_URL ?? new URL("/v1/api/generate", base).toString();
   const bytes = await Promise.all(references.map((reference) =>
     Buffer.isBuffer(reference) ? reference : readFile(reference)));
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model,
-      prompt,
-      images: bytes.map((buffer) => `data:image/jpeg;base64,${buffer.toString("base64")}`),
-      aspectRatio,
-      replyType: "json",
-    }),
-    signal,
-  });
+  const deadline = AbortSignal.timeout(MODEL_IMAGE_REQUEST_TIMEOUT_MS);
+  const requestSignal = AbortSignal.any([signal, deadline]);
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        model,
+        prompt,
+        images: bytes.map((buffer) => `data:image/jpeg;base64,${buffer.toString("base64")}`),
+        aspectRatio,
+        replyType: "json",
+      }),
+      signal: requestSignal,
+    });
+  } catch (error) {
+    if (deadline.aborted && !signal.aborted) {
+      throw new Error(`${model} 请求超时（${Math.round(MODEL_IMAGE_REQUEST_TIMEOUT_MS / 1000)} 秒）`);
+    }
+    throw error;
+  }
   // Read the body as text first: a rejected prompt, an oversized reference and a
   // spent quota all arrive as the same status, and one failed slot ends the run.
   // Reporting the code alone leaves nothing to act on.
@@ -1808,7 +2025,17 @@ async function callImageGenerate(
   try { json = JSON.parse(body) as GenerateResponse; } catch { /* upstream errors are not always JSON */ }
   const url = json?.url ?? json?.results?.[0]?.url;
   if (!response.ok || !url) throw new Error(`${model} 请求失败 (HTTP ${response.status})：${body.slice(0, 300)}`);
-  const image = await fetch(url, { signal }); if (!image.ok) throw new Error(`无法下载 ${model} 结果`); return Buffer.from(await image.arrayBuffer());
+  let image: Response;
+  try {
+    image = await fetch(url, { signal: requestSignal });
+  } catch (error) {
+    if (deadline.aborted && !signal.aborted) {
+      throw new Error(`${model} 结果下载超时（${Math.round(MODEL_IMAGE_REQUEST_TIMEOUT_MS / 1000)} 秒）`);
+    }
+    throw error;
+  }
+  if (!image.ok) throw new Error(`无法下载 ${model} 结果`);
+  return Buffer.from(await image.arrayBuffer());
 }
 
 async function requestModelImage(
@@ -1821,9 +2048,25 @@ async function requestModelImage(
   return callImageGenerate(references, prompt, `${slot[1]}:${slot[2]}`, signal, workspaceId, "gpt-image-2");
 }
 
-const SHADOW_BACKDROP_PROMPT = "请保持商品本体像素级不变，构图与裁切与输入图完全一致；"
-  + "将背景替换为纯白色 #FFFFFF，并渲染一个自然、方向感一致、虚实过渡自然的影棚级投影，"
-  + "不要改变商品的形状、颜色、材质、图案或位置。";
+/**
+ * Two instructions here are spelled out rather than left implied by
+ * "像素级不变", for different reasons:
+ *
+ * - the proportions, because a run once appeared to come back with the article
+ *   7% narrower. That reading was a measuring error (see
+ *   `describeProportionDrift`) and the article is in fact redrawn at the size
+ *   it went in, so this sentence is now belt-and-braces rather than a fix —
+ *   `locateGeneratedArticle` reports it if that ever stops being true;
+ * - the cast shadow, because it did genuinely come back so faint it read as no
+ *   shadow at all against the white, which defeats the point of sending the
+ *   shot out in the first place.
+ */
+const SHADOW_BACKDROP_PROMPT = "请保持商品本体像素级不变，构图、裁切、取景范围与输入图完全一致；"
+  + "严格保持商品的长宽比例、尺寸与透视，不得把商品拉长、压扁、放大或缩小，"
+  + "不要改变商品的形状、颜色、材质、图案或位置；"
+  + "将背景替换为纯白色 #FFFFFF，并保留输入图中商品投在地面上的投影，"
+  + "投影的方向、长度与浓淡要与输入图一致，且必须清晰可见——"
+  + "是影棚级的自然投影，不是几乎看不见的一层浅灰。";
 
 /**
  * Replaces the local histogram-based shadow recovery with the same online
@@ -1836,6 +2079,11 @@ const SHADOW_BACKDROP_PROMPT = "请保持商品本体像素级不变，构图与
  * No silent fallback to `composeNaturalShadowBackdrop` on failure: a
  * downgraded-quality shadow must surface as a failed run, not slip through
  * unnoticed.
+ *
+ * The source's own pixel dimensions are sent as the requested ratio so the
+ * model has no reason to reframe: a re-composition is the point at which it
+ * starts redrawing the article at new proportions. Whatever comes back is
+ * returned at its own size — see below.
  */
 export async function requestShadowBackdrop(
   source: SourceImage,
@@ -1856,8 +2104,13 @@ export async function requestShadowBackdrop(
         workspaceId,
         model,
       );
+      // Returned at the generator's own dimensions, deliberately. Forcing it
+      // back to the source's width/height is a non-uniform resize wherever the
+      // service rounded the requested ratio to one of its supported shapes,
+      // and it squeezed the article in every single 主图. Everything
+      // downstream measures and scales this frame in its own coordinates, so
+      // no size agreement is needed here.
       return await sharp(generated)
-        .resize(width, height, { fit: "fill" })
         .removeAlpha()
         .png()
         .toBuffer();

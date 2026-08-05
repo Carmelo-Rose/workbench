@@ -1,78 +1,219 @@
-# 交接文档 — N1 任务中心 + N2 作品库已完成，下一步 N3
+# 交接文档 — 主图取景与比例（阶段 1 已完成并实跑验收，阶段 2 未开工）
 
-更新于 2026-08-03，分支 `claude/workbench-p2-polish-fzl9h8`（commit `1ab7528`，已 push 到 origin）。
+更新于 2026-08-05，分支 `main`，基于 commit `9beff5b`。改动尚未提交。
 
-## 这次做了什么
+> 上一版交接文档讲的是 N1 任务中心 / N2 作品库 / 下一步 N3 用量面板，跟这条线不相干。
+> 原文用 `git show 671cb5b:HANDOFF.md` 翻出来。**N3 用量面板仍然没做，优先级由用户定。**
 
-A 组 7 项通用能力在上一个会话已完成（commit `7aa0224`/`67c3f19`/`adacd8f`）。本会话按计划顺序做完了 **N1 任务中心** 和 **N2 作品库**，commit 见 `1ab7528`。
+## 结论先行
 
-两项都已在浏览器里实操验证通过（登录 → 触发真实任务/查看真实历史资产 → 打开对应 Sheet → 操作），不是只跑了 tsc 就交差。
-
-### N1 任务中心
-
-| 项 | 文件 | 状态 |
+| # | 问题 | 状态 |
 |---|---|---|
-| 后端 kinds 过滤 | `src/lib/mono/store.ts`（`listMonoJobs`）、`src/lib/mono/service.ts`（`listJobs`）、`src/app/api/workbench/mono/jobs/route.ts` | ✅ 新增 `kinds?: MonoJobKind[]` / `?kinds=a,b`，SQL 用 `IN (...)`，保留原单 `kind` 参数向后兼容 |
-| 全局 store | `src/lib/mono/job-center.ts`（新文件） | ✅ 仿 `useAgentStatus`，10s 轮询 + focus 刷新 |
-| Sheet | `src/components/workbench/JobCenterSheet.tsx`（新文件） | ✅ 仿 `SubjectLibrary` 的 Sheet 壳；`mono_jobs` 无 thread 关联字段，未渲染「打开所在会话」，优雅降级 |
-| 侧边栏角标 | `src/components/assistant-ui/threadlist-sidebar.tsx`（`JobCenterFooterItem`） | ✅ 仅 `running+queued>0` 时出现，实测：提交真实生图任务后角标秒出「1 个任务进行中」，取消后角标消失 |
+| 1 | `requestShadowBackdrop` 里 `.resize(w, h, { fit: "fill" })` 把生成图硬拉回原图尺寸，生图服务一旦对请求比例就近取整就是非等比拉伸 | ✅ 已删（雷，没爆过） |
+| 2 | 主图裁切框在**白底图**上量、拿去裁**生成图**，两套坐标系；`a1af220` 的 `unionBox`/`centredOffset`/`clampOffset` 是在给这个错位打补丁 | ✅ 已删 |
+| 3 | 「模型把帽子画窄了 6~7%」 | ❌ **这个问题不存在**，是量法造成的假象。为它写的自动拉伸已删，测量和告警留下。见下面「第 3 条是个假问题」 |
+| 4 | 取景框 `measureInkBox` 把**投影**一起框进去，再把「商品+投影」居中——投影全打在一侧，商品就被顶到另一侧贴边 | ✅ 已修，`job_e1722cd4` 实跑验收通过 |
 
-浏览器验证细节：登录后进生图模式提交一条真实 prompt，角标即时出现；打开 Sheet 能看到这条新任务和历史上全部 5 种任务类型（图片生成/视频生成/商品套图/抠像/视频分析）混合按时间倒序排列，状态标签、失败原因文案都正确；轮询会更新相对时间（「刚刚」→「2 分钟前」）；用 API 直接把任务标记 cancelled 后角标自动消失。
+**用户实际看到并否掉的那两版，根因都是第 4 条。**
 
-### N2 作品库
+## 第 4 条：取景（已修，已验收）
 
-| 项 | 文件 | 状态 |
-|---|---|---|
-| 后端游标分页 | `src/lib/mono/store.ts`（`listGeneratedMonoAssets`）、`src/lib/mono/service.ts`（`listGeneratedAssets`）、`src/app/api/workbench/mono/assets/route.ts` | ✅ 新增可选 `beforeCreatedAt` / `?before=`，`origin=generated` 现有行为不变（`SubjectLibrary.tsx` 沿用的那次调用不受影响） |
-| store | `src/lib/mono/asset-library.ts`（新文件） | ✅ 极简 open/close，无轮询（浏览型 Sheet，不需要常驻） |
-| Sheet | `src/components/workbench/AssetLibrarySheet.tsx`（新文件） | ✅ `grid-cols-2` 卡片网格，图片用 `<img>`、视频用 `<video muted>`；每张卡 hover 出「插入到消息」「下载」两个操作 |
-| 入口 1：composer `+` 菜单 | `src/components/assistant-ui/thread.tsx`（`ComposerPlusMenu`） | ✅ 加在「主体库」下面一项 |
-| 入口 2：⌘K | `src/components/workbench/command-palette.tsx` | ✅ 新增「工具」分组，位置在「能力」和「设置」之间 |
+一张生成图里商品和投影**都只是"非白"，光看这张图分不开**。`measureInkBox` 的定义就是"所有非白像素的包围盒"，
+所以它框的是「商品+投影」。把这个框往画布中间一摆，投影打在哪边、商品就被顶到另一边。
 
-浏览器验证细节：两个入口都实测能打开同一个 Sheet；首屏拉到 24 张真实历史资产，点「加载更多」用 `before` 游标再拉 24 张，48 张全部去重（`Set` 校验无重复 `src`）；点某张卡的「插入到消息」，`fetch` 该资产内容成功（200）、`aui.composer().addAttachment()` 后 composer 区域真的多出一个 `.aui-attachment-root`，随后 Sheet 关闭。
+`job_14a3c460`（00:37 那版，被用户否掉的）实测，商品中心 X 本该 50%：
 
-## 已知瑕疵（延续自上次，未修）
+| 图号 | 中心 X | 占宽 | 左边距 | 右边距 |
+|---|---|---|---|---|
+| 4131 | 61.0% | 69.3% | 211px | 35px |
+| 4132 | 66.9% | 57.0% | 307px | 37px |
+| 4133 | 62.1% | 66.8% | 230px | 36px |
+| 4134 | 57.1% | 77.8% | 146px | 32px |
+| 4135 | 64.8% | 61.8% | 271px | 35px |
 
-**置顶后不刷新当前视图就看不到分组跳动。** 细节见 git log 里 `adacd8f` 之前那版 HANDOFF（已被这次覆盖，可以 `git show adacd8f:HANDOFF.md` 翻出来）。这次没碰这块代码，问题原样还在。
+右边距恒等于 ~35px（正好是那 2% padding）＝商品一路顶到框的右沿。
+「占宽」在 57%~78% 之间乱跳也是同一个原因：投影画多大，商品就被挤多小——**这才是"每版都不一样"的真身**，
+不是比例问题。上一轮往提示词里加的"投影必须清晰可见"生效了、投影变大变实（4134 那张干脆是块硬边灰矩形），
+反而把这个 bug 放大到一眼可见。
 
-## 这次踩的坑
+### 改法
 
-**Radix `Sheet`/`Dialog` 在这个沙盒的浏览器自动化工具里，关闭动画比平时感觉更慢。** 点了关闭按钮或触发 `onOpenChange(false)` 之后，`role="dialog"` 的节点不会立刻从 DOM 消失，用 `read_page`/`javascript_tool` 马上查会看到内容还在（甚至看起来像“没关掉”）；等个 2~3 秒再查就确认关了。JobCenterSheet 和 AssetLibrarySheet 的关闭逻辑本身都是对的，纯粹是验证时候等得不够久，别被这个现象误导成「close() 没生效」去瞎改代码。
+抠图本来就有——当时那个 `correctedProportions` 为了量比例已经对生成图抠过一次，量完就扔。现在把商品的框留下来。
 
-**这个沙盒里 Radix `DropdownMenu` 用 `computer` 工具的 `left_click` 点触发按钮，有时候第一次点没反应（`data-state` 还是 `closed`），第二次点才真的开。** 用原生 `.click()` 或手工 dispatch 完整的 pointerdown/mousedown/pointerup/mouseup/click 序列也复现过同样的延迟。原因没深挖（可能是 Radix 的 pointer-capture 逻辑和这个沙盒的合成事件时序对不上），已确认不是我这次改的代码的问题——同样的现象在完全没碰过的「账号与工作区」下拉菜单上也能复现。下次调试类似菜单，多点一次或者等一下再查。
+- `measureMatteAspect` → `measureMatteBox`：同一次扫描，除长宽比再返回商品的相对框。
+- `correctedProportions` → `locateGeneratedArticle`，返回 `{ article, warning? }`。生成图的抠图挪到函数最前面，
+  因为 `article` 现在是取景的必需品，不能因为原图抠图为空就提前 return 掉。
+- `MasterRenderLayers.mainArticle: RelativeBox | null` 一路传到 `composeSquareDeliverable`。
+- 新增 `frameArticleOnSquare`：**不再"先裁框再居中"**，改成「整张图等比缩放 → 取一个 800×800 的窗口、
+  窗口中心对准商品中心 → 越界补白」。投影因此始终黏在商品旁边它本来的位置，越出画布就被裁掉，
+  不再参与决定商品的位置和大小。缩放用 `.resize({ width })` 只给宽度、让 sharp 推高度，从根上保证等比。
+- `squareFillRatio` 只吃一个商品长宽比，语义也变了：**「商品长边占画布多少」**（原来是「商品+投影+padding 的框占多少」）。
+  常数跟着重定 `0.87/0.96` → `0.78/0.90`，`SQUARE_MAIN_CROP_PADDING` 随之删除。
+- `measureInkBox` 保留但降级为**兜底**：只在生成图抠图为空时走，同时报警告说"取景会被投影挤偏"。
 
-**提交前发现 `src/components/workbench/backend-select.tsx` 和 `src/app/assistant.tsx` 有一处不是我做的改动**：完整移除了头部的 `HeaderBackendStatus` 徽标组件（导出和所有引用都干净地删掉了，没留下悬挂引用，`tsc`/`eslint`/`vitest` 全过）。看起来是有意为之的外部改动，没有回退，一并提交了。如果这不是预期的，git blame `1ab7528` 能看到具体 diff。
+**取景的目标值是从人工成品上量的**：`Z:\型麦-得物-品牌\【原图】-待制作\` 下的 `62604106\主图`、`XM2606013\主图`，
+商品中心 X 在 45%~53%，商品占长边 69%~93%。
 
-## 环境踩坑记录（延续自上次，仍然有效）
+### 实跑验收（`job_e1722cd4`，01:14 落盘）
 
-`npm install` 如果巨慢或报 403，先查 `package-lock.json` 里的 `registry.npmmirror.com` 镜像地址问题（详见 `adacd8f` 之前那版 HANDOFF 或 `git log -p -- package-lock.json`）。这次没有触发这个问题（这次会话开始时 `node_modules` 已经装好了，只跑了一次 `npm install` 做增量校验，9 秒完事）。
+| 图号 | 中心 X | 中心 Y | 占宽 | 占高 | 左边距 | 右边距 | 投影像素占比 |
+|---|---|---|---|---|---|---|---|
+| 4131 | 49.9% | 51.1% | 90.1% | 68.9% | 39px | 40px | 4.11% |
+| 4132 | 50.0% | 52.6% | 76.8% | 83.0% | 93px | 93px | 7.44% |
+| 4133 | 50.0% | 51.2% | 85.3% | 73.4% | 59px | 59px | 7.77% |
+| 4134 | 49.9% | 50.1% | 89.9% | 46.9% | 40px | 41px | 1.68% |
+| 4135 | 50.0% | 49.9% | 88.0% | 70.4% | 48px | 48px | 6.04% |
 
-**Windows 下 `next dev -p 3020` 起不来**：3020 落在 Windows 保留端口段里，报 `EADDRINUSE`/reserved port 错误。`.claude/launch.json` 里已经准备好备用配置 `workbench-dev-3100`（`-p 3100`），这次全程用它验证，没问题。
+左右边距逐张对称，中心 X 全在 49.9%~50.0%，占长边 76.8%~90.1%（人工基准 69%~93%），投影都还在。
+中心 Y 那 1~2.6% 的偏是**量法差异**，不是取景差异：代码用抠图定位、这张表用色度阈值，两者对帽子内衬那种浅灰的判定不同。
 
-## 下一步：N3
+**已知取舍**：商品放到 78%~90% 之后留白只剩 5%~11%，**一侧拖很长的投影会被画布裁掉一部分**。
+人工成品也是这样（好几张投影直接顶到边）。想多留投影只有一个旋钮——调小那两个 fill ratio，
+但那等于把商品做小，方向和人工基准相反。
 
-Plan 原文第三批的最后一项：
+## 第 3 条是个假问题（重要，别再追了）
 
-**N3 用量面板** — 设置里新分区，新增 `GET /api/workbench/usage?range=day|week|month`。这次没有深入调研这块（用量数据存在哪张表、口径怎么定义都还没查），下一个会话开始前建议先起一个 Explore 调研：
-- 用量/计费相关的数据现在存在哪（`mono_jobs` 有没有能顺出 token/时长/张数的字段？有没有专门的用量表？）
-- `settings-dialog.tsx` 里加新分区的现有模式（参考「外观」「数据」分区怎么写的）
-- 复用点参考原 plan 表格里提到的模式，这次 N1/N2 都验证了「新 store + 仿 SubjectLibrary 的 Sheet 壳」这套路子很顺手，N3 大概率是「新 store + 设置分区里嵌一个统计面板」而不是 Sheet，UI 形态会不一样，调研时注意确认。
+两个会话追了"模型把帽子画窄 6~7%"这个数，**它是验证脚本量出来的假象**。
 
-## 回归验证方式（照抄即可）
+那个脚本判定商品像素用 `max<200 || 色度>40`。**原图里那片投影是实打实的深灰，`max` 落在 160~200 之间，
+被算成了商品**，于是原图的包围盒被投影撑宽了；而生成图的投影更浅（还被 `GENERATED_SWEEP_WHITE_FLOOR`
+提亮过），落在 200 以上、没被算进去。拿"帽子+投影"跟"帽子"比宽度，当然差 6~8%。
+
+4131 的阈值敏感度（同一对图，只改判定阈值 T）：
+
+| T | 原图长宽比（框） | 主图长宽比（框） | 偏离 |
+|---|---|---|---|
+| 200 | 1.421 (405×285) | 1.310 (541×413) | **-7.8%** |
+| 160 | 1.310 (368×281) | 1.317 (540×410) | +0.6% |
+| 120 | 1.319 (368×279) | 1.324 (540×408) | +0.3% |
+| 90 | 1.329 (368×277) | 1.328 (539×406) | -0.1% |
+| 70 | 1.333 (368×276) | 1.337 (539×403) | +0.3% |
+
+原图的框从 T=200 到 T=160 宽度掉了 37px（-9%）、高度只掉 4px——**掉的全是横向，就是旁边那片投影**。
+主图的框 541→540，几乎不动。T≤160 之后两边一致到 ±0.6%。
+
+最直接的证据：把两张图各自裁到帽子（T=90）、缩到同高 420px，
+**原图 560px 宽，主图 560px 宽，一模一样**（4133 是 498 vs 500）。
+（重现：项目根目录写个 `.mjs`，两张图各自按 T=90 求包围盒 → `extract` → `resize({height:420})` → 比宽度。）
+
+推论：交接文档里"原图 1.421"这个基准值从头就是错的，**1.33 才是这顶帽子的真实长宽比**。
+前几轮记的 -6.5% / -6.8% 也都是同一个假象。
+
+### 处置：拆掉执行器，留下传感器（已做）
+
+用户让我定，定的结果是**删掉自动拉伸、保留测量和告警**。
+
+- 删除 `planProportionRepair` / `ProportionRepair` / `correctedProportions` /
+  `MIN_PROPORTION_CORRECTION` / `MAX_PROPORTION_CORRECTION`，以及那句 `resize(..., { fit: "fill" })`。
+  **本文件现在没有任何一处会改变商品长宽比的操作。**
+- 新增纯函数 `describeProportionDrift(sourceName, sourceAspect, generatedAspect)`：
+  漂移超过 `ARTICLE_PROPORTION_TOLERANCE`（5%）就返回一条告警文案，否则返回 `undefined`。
+  5% 这个值：探针噪声够不着，又能抓住当初以为存在的那个 ~6% 重画。
+- `correctedProportions` → `locateGeneratedArticle`，**不再改图**，只返回
+  `{ article, warning? }`。`makeWhiteMaster` 直接用 `generated`，后面只剩提亮那一步。
+
+**为什么是这个方向**：两种误判不对称。告警误报，代价是有人多看一眼好图；拉伸误报，
+代价是发出去一张变形的商品图、而且下游没有任何东西能发现——**那正是这条线最开始的投诉本身**。
+既然触发它的证据已经证明是量错了，就不该让代码继续凭一个抠图读数自作主张动图。
+
+**注意 `measureMatteBox` 不能删**——主图取景现在靠它定位商品。
+生成图的那次抠图调用也**没省下**：它现在是取景的必需品，不是比例校正的附属品。
+
+## 阶段 2（未开工）
+
+三条线并行。**形态已经和用户定了：一个 job 内三条并行分支，不拆成三个独立任务**——拆任务要动
+`contracts.ts` 的 job kind、`store.ts`、`service.ts` 调度、任务中心 UI、四个 API 路由和一片测试，摊子太大；
+一个 job 内并行只改 `runProductPipeline` 一个函数就能拿到"互不阻塞、单支失败不拖垮其余"。
+
+`runProductPipeline` 改成三支 `Promise.allSettled`：主图支 / SKU 支 / images 支。SKU 支和 images 支
+共用同一份抠图+聚类（算一次两边共享），所以真正并行的是「主图支」和「SKU+images 支」。
+
+还剩的耦合：**主图的几何已经完全不依赖聚类了，但"哪几张原图会产出主图"仍由
+`classification.colors.flatMap(c => c.members)` 决定**。改这个等于改变产出文件的集合
+（有些原图会被分类成 detail 而不进 colors），属于产品决策，放阶段 2 一起做。
+
+配套：`progress()` 要从"单调递增百分比"改成"每支各自报、汇总成总进度"，
+会牵动 `src/components/workbench/ProductPipelineCard.tsx` 的阶段文案。
+
+完整计划见 `C:\Users\Administrator.DESKTOP-GRHN4PA\.claude\plans\sku-foamy-map.md`。
+已和用户确认的边界：`images` 内部分工不变（11 个槽位里只有 8 张模特图走大模型，`02/09/10/11`
+继续本地模板拼版）；**颜色聚类保留**，只是主图不再依赖它。
+
+## 其他还开着的口子
+
+- **4134 的投影被模型画成一块硬边灰矩形**。取景修完之后它不再影响构图，但"画得像不像投影"仍然
+  完全由模型决定，本地没有任何兜底或校验。
+- **`job_14a3c460` 那次卡死**：standalone worker 进程死了没人回收租约，任务停在 `generating_models` 60%，
+  主图/SKU 已落盘、images 没跑完。后来被判 failed（"执行服务已中断；为避免重复扣费，任务未自动重跑"）。
+  会话期间有别的分支在动 `service.ts` / `store.ts` / `worker-queue.test.ts`，看着就是在做租约回收，注意别撞车。
+- **`src/lib/server/tenant.ts` 有一行 `ON CONFLICT(account)` → `ON CONFLICT` 的改动不是这条线做的**，来源未确认。
+
+## 回归验证方式
 
 ```bash
-npx tsc --noEmit          # 应为 0 错误（如果报 .next/dev/types 下一堆 TS1005，先 rm -rf .next 再跑，是构建缓存不是真错误）
-npx eslint .               # 应只剩 pre-existing 的 13 个问题（跟本次改动无关的文件）
-npx vitest run              # 239 passed，全绿
+npx tsc --noEmit
 ```
 
-浏览器验证需要先在 `.env.local`（gitignored，可以放心留着）设置一次性 bootstrap 账号：
 ```bash
-WORKBENCH_BOOTSTRAP_EMAIL="dev@workbench.local"
-WORKBENCH_BOOTSTRAP_PASSWORD="dev-smoke-test-pw-12345"
+npx vitest run
 ```
-（密码需要 ≥12 位，见 `ensureConfiguredBootstrap` 里的校验。）这次会话已经把这两行写进 `.env.local` 了，直接用 `workbench-dev-3100` 配置起服务、打开浏览器就是已登录状态，不用重新走一遍登录流程。Qwen 直连这次是真的在线，之前几轮 handoff 提到的「后端离线不影响纯前端验证」这次没用上——如果之后又变离线，纯前端功能（Sheet 打开、菜单项、分页）依然不受影响。
 
-## B 组（按需，不急）
+```bash
+npx eslint src/lib/mono/product-pipeline.ts src/lib/mono/product-pipeline.test.ts
+```
 
-提示词库、消息分叉、消息收藏、长任务浏览器通知、分享链接——原 plan 里已经写清楚了，等 N3 做完再看优先级。
+当前状态：tsc 0 错误；vitest **255 passed**（31 个文件全绿）；改动的两个文件 eslint 干净。
+`npx eslint .` 全仓还有 13 个问题（2 error + 11 warning），本来就有，与本次无关。
+
+> `job_e1722cd4` 的验收是在**删拉伸之前**跑的。删掉之后主图链路少了一次条件性的单轴 resize。
+> 用外部探针量到的漂移是 ±0.6%，低于当时 1% 的下限，**大概率本来就没触发拉伸**；
+> 但代码内部用的是抠图掩膜、不是这个探针，那次到底触发没触发从产出上看不出来。
+
+### 删拉伸之后的复跑（`job_867a89e9`，2026-08-05 01:47 落盘）
+
+只跑主图/SKU（`PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL` 临时置 true，跑完已改回 false）。同一个探针、同一批原图：
+
+| 图号 | 中心 X | 占宽（新 / `job_e1722cd4`） | 左/右边距 |
+|---|---|---|---|
+| 4131 | 49.9% | 90.3% / 90.1% | 39 / 39px |
+| 4132 | 50.0% | 76.6% / 76.8% | 94 / 93px |
+| 4133 | 49.9% | 85.4% / 85.1% | 58 / 59px |
+| 4134 | 49.9% | 90.3% / 89.6% | 39 / 39px |
+| 4135 | 50.0% | 87.6% / 88.0% | 50 / 49px |
+
+**取景没变**（占宽最大差 0.7pp，是模型每次重画投影带来的噪声，不是取景差异），
+warnings 里既没有比例漂移也没有 `MAIN_FRAME_ASPECT_TOLERANCE` 告警。删拉伸这件事对产出无影响，这条口子可以关掉。
+
+测试都在 `src/lib/mono/product-pipeline.test.ts`：
+
+- `square deliverable composition`：主图缩放必须等比（2:1 的块出来还得是 2:1）；主图带的投影不能被当成独立图层丢掉。
+- 取景三条，共用夹具 `litFromOneSide(reach)`（商品在右、投影往左拖 `reach` 那么远）：
+  「按商品居中，不按商品+投影居中」（中心须落在 392~408px）；
+  「同一个商品配两种长度的投影，产出的商品框必须逐像素相等」（盯"每版都不一样"）；
+  「抠图为空时仍然出图」（锁兜底分支不抛异常）。
+- `主图 article measurement`：`measureMatteAspect` 的灰度/RGBA 两种掩膜、空掩膜返回 null；
+  `describeProportionDrift` 三条——容差内不吭声（含 1234 的真实读数 1.333/1.332、1.186/1.192）、
+  超容差要报出图名和两个读数、以及**两个方向都只返回字符串，没有 resize 可交回**。
+- **删了一条**：原来那条"给主图一个指向错误区域的 box 也要框对"。它的前提是"传进来的 box 一定来自另一张画、不可信"，
+  而现在主图的 box 就是这张生成图自己抠出来的，前提不成立了。**不是因为它变红才删的，是它描述的契约已经不存在。**
+
+## 踩过的坑
+
+**最大的一个：先验证你的尺子，再追你量出来的数。** 第 3 条被追了两个会话，
+根源是验证脚本的一个阈值把原图的投影算成了商品。判据很简单——**换个阈值再量一遍，
+数不该跟着阈值跑**。一跑阈值敏感度就露馅了。
+
+**测试里用 sharp 造掩膜，`composite()` 会自动加 alpha 通道**，于是 `metadata().hasAlpha` 为 true，
+`measureMatteBox` 走"legacy RGBA"分支去读 alpha——而那个 alpha 全不透明，量出来的包围盒等于整张画布。
+造灰度掩膜必须显式 `.removeAlpha()`。另外 `sharp({create:{channels:1}})` 直接报错，create 只接受 3 或 4 通道。
+
+**`fetch` 的 body 不接受 `Buffer`**。`requestCutout` 原来能过是因为 `readFile()` 返回 `Buffer<ArrayBuffer>`；
+一旦提成 `bytes: Buffer` 参数就变成 `Buffer<ArrayBufferLike>`，TS 拒绝。现在包一层 `new Uint8Array(bytes)`。
+
+**sharp 一条链子里同时用 `extend()` 和 `extract()` 要小心**：sharp 按固定阶段跑，
+`extract` 还分"resize 前"和"resize 后"两种。`frameArticleOnSquare` 里把补白和取窗口拆成两个 pass、
+中间落一次 Buffer，就是不想赌这个顺序。
+
+**临时脚本要放在项目根目录跑**，放 scratchpad 里 `import sharp` 解析不到（ESM 不吃 NODE_PATH）。
+后缀也得挑：`.ts` 会被 `npx tsx` 当 cjs 处理、顶层 `await` 直接报错；要 import 真实 pipeline 函数就写 `.mts`，
+纯 sharp 脚本写 `.mjs`。用完记得删。

@@ -8,12 +8,15 @@ import {
   composeNaturalShadowBackdrop,
   composeSquareDeliverable,
   composeWhiteMaster,
+  describeReframing,
   detailPageSources,
   installedWorkflowIds,
   listProductFolders,
   listProductWorkflows,
+  measureMatteAspect,
   MODEL_SLOTS,
   modelImageReferences,
+  describeProportionDrift,
   modelSlotColorRanks,
   ProductCutoutScheduler,
   productPipelineSchedulingSettings,
@@ -492,6 +495,46 @@ describe("square deliverable composition", () => {
   }
   const box: RelativeBox = { left: 10 / 40, top: 7 / 30, width: 20 / 40, height: 16 / 30 };
 
+  /**
+   * A generated frame shaped like the ones the 1234 run produced: the article
+   * over on one side of the frame, lit from that side, its cast shadow running
+   * a long way out to the other. `reach` is how far left the shadow gets.
+   */
+  async function litFromOneSide(reach: number): Promise<Buffer> {
+    const frame = Buffer.alloc(60 * 30 * 3, 255);
+    for (let y = 7; y < 23; y += 1) {
+      for (let x = 40; x < 56; x += 1) {
+        const offset = (y * 60 + x) * 3;
+        frame[offset] = 200; frame[offset + 1] = 30; frame[offset + 2] = 30;
+      }
+    }
+    for (let y = 23; y < 26; y += 1) {
+      for (let x = reach; x < 50; x += 1) {
+        const offset = (y * 60 + x) * 3;
+        frame[offset] = 232; frame[offset + 1] = 234; frame[offset + 2] = 238;
+      }
+    }
+    return sharp(frame, { raw: { width: 60, height: 30, channels: 3 } }).png().toBuffer();
+  }
+  /** Where the article in `litFromOneSide` sits — what its matte would say. */
+  const litArticle: RelativeBox = { left: 40 / 60, top: 7 / 30, width: 16 / 60, height: 16 / 30 };
+
+  /** Bounding box of the red article block on a rendered square. */
+  function articleBox(data: Buffer, info: { width: number; height: number; channels: number }) {
+    let minX = info.width, minY = info.height, maxX = -1, maxY = -1;
+    for (let y = 0; y < info.height; y += 1) {
+      for (let x = 0; x < info.width; x += 1) {
+        const offset = (y * info.width + x) * info.channels;
+        if (data[offset] <= data[offset + 2] + 40) continue;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+    }
+    return { left: minX, top: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+  }
+
   it("centres the product on an 800x800 white canvas", async () => {
     const root = await fixture();
     const output = path.join(root, "square.png");
@@ -535,47 +578,158 @@ describe("square deliverable composition", () => {
     expect(pixel(0, 0)).toEqual([255, 255, 255]);
   });
 
-  it("does not slice a 主图 shadow that reaches past the product silhouette", async () => {
+  it("centres a 主图 on the article, not on the article plus the shadow beside it", async () => {
     const root = await fixture();
-    const output = path.join(root, "square-main-wide-shadow.png");
-    // Same silhouette as `box`, but with a shadow that spreads left of it and
-    // fades out gradually — the studio case the silhouette-only crop cut off.
+    const output = path.join(root, "square-main-lit-side.png");
+    await composeSquareDeliverable(await litFromOneSide(4), litArticle, output, { framing: "main" });
+
+    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
+    const rendered = articleBox(data, info);
+    // Centring the two together is what shipped every 1234 主图 with the hat
+    // shoved against one edge: its centre landed at 57%–67% of the width,
+    // because that is how far the shadow reached the other way.
+    expect(rendered.left + rendered.width / 2).toBeGreaterThan(392);
+    expect(rendered.left + rendered.width / 2).toBeLessThan(408);
+    expect(rendered.top + rendered.height / 2).toBeGreaterThan(392);
+    expect(rendered.top + rendered.height / 2).toBeLessThan(408);
+  });
+
+  it("prints the article the same whatever shadow the generator drew next to it", async () => {
+    const root = await fixture();
+    const near = path.join(root, "square-main-near-shadow.png");
+    const far = path.join(root, "square-main-far-shadow.png");
+    // One hat, two shots, two very different shadows — the swing that made
+    // every revision of this folder frame the product differently.
+    await composeSquareDeliverable(await litFromOneSide(30), litArticle, near, { framing: "main" });
+    await composeSquareDeliverable(await litFromOneSide(4), litArticle, far, { framing: "main" });
+
+    const read = async (file: string) => {
+      const { data, info } = await sharp(file).raw().toBuffer({ resolveWithObject: true });
+      let shadowPixels = 0;
+      for (let offset = 0; offset < data.length; offset += info.channels) {
+        const max = Math.max(data[offset], data[offset + 1], data[offset + 2]);
+        const min = Math.min(data[offset], data[offset + 1], data[offset + 2]);
+        if (max < 250 && max > 200 && max - min < 20) shadowPixels += 1;
+      }
+      return { article: articleBox(data, info), shadowPixels };
+    };
+    const [a, b] = await Promise.all([read(near), read(far)]);
+    expect(a.article).toEqual(b.article);
+    // Still a shadow under the hat in both — it just no longer votes on where
+    // the hat goes or how large it prints.
+    expect(a.shadowPixels).toBeGreaterThan(1000);
+    expect(b.shadowPixels).toBeGreaterThan(1000);
+  });
+
+  it("still frames a 主图 when the frame's matte came back empty", async () => {
+    const root = await fixture();
+    const output = path.join(root, "square-main-no-article.png");
+    // Degraded rather than fatal: with nothing to separate article from
+    // shadow, framing falls back to the whole frame's ink and the run warns.
+    await composeSquareDeliverable(await litFromOneSide(4), null, output, { framing: "main" });
+
+    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
+    expect(info).toMatchObject({ width: 800, height: 800, channels: 3 });
+    expect(articleBox(data, info).width).toBeGreaterThan(200);
+  });
+
+  it("scales a 主图 uniformly, so the article keeps the proportions it was generated at", async () => {
+    const root = await fixture();
+    const output = path.join(root, "square-main-uniform.png");
+    // A 2:1 block on a frame that is not itself 2:1. Any non-uniform resize on
+    // the way to the square canvas shows up as a different ratio here.
     const frame = Buffer.alloc(40 * 30 * 3, 255);
-    for (let y = 7; y < 23; y += 1) {
+    for (let y = 10; y < 20; y += 1) {
       for (let x = 10; x < 30; x += 1) {
         const offset = (y * 40 + x) * 3;
         frame[offset] = 200; frame[offset + 1] = 30; frame[offset + 2] = 30;
       }
     }
-    for (let y = 23; y < 26; y += 1) {
-      for (let x = 2; x < 34; x += 1) {
-        const value = 248 - (x - 2) * 2;
-        const offset = (y * 40 + x) * 3;
-        frame[offset] = value; frame[offset + 1] = value; frame[offset + 2] = value;
-      }
-    }
     const generated = await sharp(frame, { raw: { width: 40, height: 30, channels: 3 } }).png().toBuffer();
+    const box: RelativeBox = { left: 10 / 40, top: 10 / 30, width: 20 / 40, height: 10 / 30 };
     await composeSquareDeliverable(generated, box, output, { framing: "main" });
 
     const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
-    const pixel = (x: number, y: number) =>
-      Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x + 1) * info.channels));
-
-    // Whatever the leftmost content on any row is, it has to be a faint tail
-    // fading into the canvas. A mid-grey there means the gradient was cut.
-    let darkestEntry = 255;
-    for (let y = 0; y < 800; y += 1) {
-      for (let x = 0; x < 800; x += 1) {
-        const value = Math.max(...pixel(x, y));
-        if (value >= 250) continue;
-        if (value < darkestEntry) darkestEntry = value;
-        break;
+    const isProduct = (x: number, y: number) => {
+      const offset = (y * info.width + x) * info.channels;
+      return data[offset] > data[offset + 2] + 40;
+    };
+    let minX = info.width, minY = info.height, maxX = -1, maxY = -1;
+    for (let y = 0; y < info.height; y += 1) {
+      for (let x = 0; x < info.width; x += 1) {
+        if (!isProduct(x, y)) continue;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
       }
     }
-    expect(darkestEntry).toBeGreaterThanOrEqual(240);
-    // The product still owns the centre; the shadow ran into the margin.
-    const centre = pixel(400, 400);
-    expect(centre[0]).toBeGreaterThan(centre[2]);
+    const renderedAspect = (maxX - minX + 1) / (maxY - minY + 1);
+    expect(renderedAspect).toBeGreaterThan(1.9);
+    expect(renderedAspect).toBeLessThan(2.1);
+  });
+});
+
+describe("主图 article measurement", () => {
+  /** The standalone grayscale matte the gateway returns today. */
+  async function greyMatte(w: number, h: number, blobW: number, blobH: number): Promise<Buffer> {
+    const blob = await sharp({ create: { width: blobW, height: blobH, channels: 3, background: "#ffffff" } }).png().toBuffer();
+    return sharp({ create: { width: w, height: h, channels: 3, background: "#000000" } })
+      .composite([{ input: blob, left: Math.round((w - blobW) / 2), top: Math.round((h - blobH) / 2) }])
+      .removeAlpha()
+      .png()
+      .toBuffer();
+  }
+
+  /** The older shape: a full-size RGBA copy whose alpha carries the matte. */
+  async function alphaMatte(w: number, h: number, blobW: number, blobH: number): Promise<Buffer> {
+    const blob = await sharp({ create: { width: blobW, height: blobH, channels: 4, background: { r: 200, g: 30, b: 30, alpha: 1 } } }).png().toBuffer();
+    return sharp({ create: { width: w, height: h, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+      .composite([{ input: blob, left: Math.round((w - blobW) / 2), top: Math.round((h - blobH) / 2) }])
+      .png()
+      .toBuffer();
+  }
+
+  it("reads the article's own proportions off a matte, not the canvas's", async () => {
+    // A 2:1 blob on a canvas that is neither 2:1 nor square.
+    await expect(measureMatteAspect(await greyMatte(400, 300, 200, 100))).resolves.toBeCloseTo(2, 1);
+    await expect(measureMatteAspect(await greyMatte(300, 400, 100, 200))).resolves.toBeCloseTo(0.5, 1);
+  });
+
+  it("reads a legacy RGBA matte the same way as a standalone grayscale one", async () => {
+    await expect(measureMatteAspect(await alphaMatte(400, 300, 200, 100))).resolves.toBeCloseTo(2, 1);
+  });
+
+  it("returns null for an empty matte rather than a bogus ratio", async () => {
+    await expect(measureMatteAspect(await sharp({ create: { width: 40, height: 30, channels: 3, background: "#000000" } }).png().toBuffer()))
+      .resolves.toBeNull();
+  });
+
+  it("says nothing when the article came back the shape it went in", () => {
+    expect(describeProportionDrift("hat.jpg", 1.4, 1.4)).toBeUndefined();
+    // Probe noise on a 400px matte, not a redrawn article.
+    expect(describeProportionDrift("hat.jpg", 1.4, 1.407)).toBeUndefined();
+    // The real readings off 1234, measured with a threshold that separates the
+    // article from its cast shadow: every shot agrees to well within tolerance.
+    expect(describeProportionDrift("329A4131.jpg", 1.333, 1.332)).toBeUndefined();
+    expect(describeProportionDrift("329A4133.jpg", 1.186, 1.192)).toBeUndefined();
+  });
+
+  it("reports a redrawn article, naming the shot and both readings", () => {
+    const warning = describeProportionDrift("hat.jpg", 1.4, 1.19);
+    expect(warning).toContain("hat.jpg");
+    expect(warning).toContain("1.190");
+    expect(warning).toContain("1.400");
+    expect(warning).toContain("15%");
+    expect(warning).toContain("请人工复核");
+  });
+
+  it("reports rather than repairs, in both directions", () => {
+    // Whatever the reading, the answer is a string or nothing — there is no
+    // resize to hand back. A bad reading costs someone a look at a good
+    // picture; a stretch on a bad reading would ship a deformed product photo.
+    expect(describeProportionDrift("hat.jpg", 1.2, 1.32)).toBeTypeOf("string");
+    expect(describeProportionDrift("hat.jpg", 2.4, 1.2)).toBeTypeOf("string");
   });
 });
 
@@ -742,12 +896,15 @@ describe("online shadow backdrop generation", () => {
     return { path: sourcePath, name: "hat.jpg", stem: "hat", size: stats.size, mtimeMs: stats.mtimeMs, hash: "irrelevant" };
   }
 
-  it("sends the source photo as the sole reference, sized to its own aspect ratio", async () => {
+  it("asks for the source's own ratio and never stretches what comes back", async () => {
     process.env.MONO_IMAGE_BASE_URL = "https://image.example.test";
     process.env.MONO_IMAGE_API_KEY = "test-image-key";
     const root = await fixture();
     const source = await sourceFixture(root, 90, 60);
-    const resultPng = await sharp({ create: { width: 12, height: 8, channels: 3, background: "#123456" } }).png().toBuffer();
+    // Deliberately a different shape from the 3:2 that was asked for: a service
+    // that rounds the requested ratio to one of its own supported shapes is
+    // exactly the case that used to be resized back and squeeze the article.
+    const resultPng = await sharp({ create: { width: 12, height: 12, channels: 3, background: "#123456" } }).png().toBuffer();
 
     const fetchMock = vi.fn().mockImplementation((endpoint: string) => {
       if (endpoint === "https://image.example.test/v1/api/generate") {
@@ -770,7 +927,17 @@ describe("online shadow backdrop generation", () => {
     expect(body.aspectRatio).toBe("90:60");
 
     const { info } = await sharp(backdrop).raw().toBuffer({ resolveWithObject: true });
-    expect(info).toMatchObject({ width: 90, height: 60, channels: 3 });
+    expect(info).toMatchObject({ width: 12, height: 12, channels: 3 });
+  });
+
+  it("reports a frame the generator re-composed, and stays quiet when it did not", async () => {
+    const root = await fixture();
+    const source = await sourceFixture(root, 90, 60);
+    const reframed = await sharp({ create: { width: 12, height: 12, channels: 3, background: "#123456" } }).png().toBuffer();
+    const inPlace = await sharp({ create: { width: 45, height: 30, channels: 3, background: "#123456" } }).png().toBuffer();
+
+    await expect(describeReframing(source, reframed)).resolves.toMatch("12×12");
+    await expect(describeReframing(source, inPlace)).resolves.toBeUndefined();
   });
 
   it("throws after three failed attempts instead of falling back to the local algorithm", async () => {
