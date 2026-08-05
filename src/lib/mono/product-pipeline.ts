@@ -1039,6 +1039,70 @@ type CroppedRaster = {
   relativeBottom: number;
 };
 
+/**
+ * Pure-white ceiling for "this pixel is blank canvas, not content". The
+ * generated sweep is lifted to 255 before this runs, so anything below the
+ * ceiling is product or the shadow it casts.
+ */
+const SQUARE_INK_MAX_CHANNEL = 250;
+
+/**
+ * Bounding box of everything that is not blank canvas — the product *and* its
+ * cast shadow.
+ *
+ * The crop box handed to `composeSquareDeliverable` is measured on the white
+ * master, which is a cutout flattened onto white and therefore carries no
+ * shadow at all. Applied to the generated frame it describes the silhouette
+ * only, so this fills in the part it cannot see.
+ */
+async function measureInkBox(buffer: Buffer): Promise<RelativeBox | null> {
+  const { data, info } = await sharp(buffer).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * channels;
+      if (data[offset] >= SQUARE_INK_MAX_CHANNEL
+        && data[offset + 1] >= SQUARE_INK_MAX_CHANNEL
+        && data[offset + 2] >= SQUARE_INK_MAX_CHANNEL) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return null;
+  return {
+    left: minX / width,
+    top: minY / height,
+    width: (maxX - minX + 1) / width,
+    height: (maxY - minY + 1) / height,
+  };
+}
+
+/**
+ * Canvas offset that lands `centre` (a source-relative coordinate) on the
+ * middle of the square, given where the crop starts and ends in that same
+ * space and how many pixels the crop occupies once resized.
+ */
+function centredOffset(centre: number, cropStart: number, cropEnd: number, extent: number): number {
+  const span = cropEnd - cropStart;
+  if (span <= 0) return Math.round((SQUARE_CANVAS_SIZE - extent) / 2);
+  return Math.round(SQUARE_CANVAS_SIZE / 2 - ((centre - cropStart) / span) * extent);
+}
+
+function clampOffset(offset: number, extent: number): number {
+  return Math.min(Math.max(offset, 0), Math.max(0, SQUARE_CANVAS_SIZE - extent));
+}
+
+function unionBox(first: RelativeBox, second: RelativeBox): RelativeBox {
+  const left = Math.min(first.left, second.left);
+  const top = Math.min(first.top, second.top);
+  const right = Math.max(first.left + first.width, second.left + second.width);
+  const bottom = Math.max(first.top + first.height, second.top + second.height);
+  return { left, top, width: right - left, height: bottom - top };
+}
+
 /** Crops a raster buffer to a relative box plus padding, in pixel space. */
 async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number): Promise<CroppedRaster> {
   const { width, height } = await sharp(buffer).metadata();
@@ -1066,6 +1130,11 @@ async function cropBufferToBox(buffer: Buffer, box: RelativeBox, padding: number
  * the generated frame, whose shadow is already part of the image; SKU is fed
  * the cutout. Nothing synthetic is generated from the product silhouette.
  *
+ * For 主图 the crop widens to whatever ink the frame actually carries, because
+ * `box` is measured on a shadowless white master and would otherwise cut the
+ * cast shadow off mid-gradient. The product, not the widened crop, is what
+ * gets centred.
+ *
  * `box` must come from measuring a photo framed the *same* way as this one
  * (`classification`'s per-shot box) — a mismatched box would crop the wrong
  * region. The generated frame qualifies: it is returned at the source photo's
@@ -1078,9 +1147,14 @@ export async function composeSquareDeliverable(
   options: { framing?: "main" | "sku" } = {},
 ): Promise<void> {
   const isMainImage = options.framing === "main";
+  // 主图 crops the generated frame, whose cast shadow reaches well past the
+  // silhouette `box` describes. Cropping to the silhouette slices the shadow
+  // off along a dead-straight line — widening to cover the frame's own ink
+  // keeps it whole. SKU is fed the cutout, which has no shadow to lose.
+  const cropBox = isMainImage ? unionBox(box, (await measureInkBox(source)) ?? box) : box;
   const cropped = await cropBufferToBox(
     source,
-    box,
+    cropBox,
     isMainImage ? SQUARE_MAIN_CROP_PADDING : SQUARE_SKU_CROP_PADDING,
   );
   const fillRatio = isMainImage
@@ -1091,8 +1165,23 @@ export async function composeSquareDeliverable(
     .resize(target, target, { fit: "inside" })
     .png()
     .toBuffer({ resolveWithObject: true });
-  const left = Math.round((SQUARE_CANVAS_SIZE - info.width) / 2);
-  const top = Math.round((SQUARE_CANVAS_SIZE - info.height) / 2);
+  // Centring the widened 主图 crop would push the product off-centre by however
+  // far the shadow stretched it, so place the *product* on the canvas centre
+  // and let the shadow run into the margin. Clamped so the raster still lands
+  // whole — a crop that overhung the canvas would be the same cut again. SKU
+  // crops stay symmetric around the product, so they keep plain centring.
+  const left = isMainImage
+    ? clampOffset(
+      centredOffset(box.left + box.width / 2, cropped.relativeLeft, cropped.relativeRight, info.width),
+      info.width,
+    )
+    : Math.round((SQUARE_CANVAS_SIZE - info.width) / 2);
+  const top = isMainImage
+    ? clampOffset(
+      centredOffset(box.top + box.height / 2, cropped.relativeTop, cropped.relativeBottom, info.height),
+      info.height,
+    )
+    : Math.round((SQUARE_CANVAS_SIZE - info.height) / 2);
   await sharp({ create: { width: SQUARE_CANVAS_SIZE, height: SQUARE_CANVAS_SIZE, channels: 3, background: "#ffffff" } })
     .composite([{ input: resized, left, top }])
     // sharp applies flatten() in a fixed internal stage that runs before

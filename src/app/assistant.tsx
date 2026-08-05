@@ -58,8 +58,10 @@ import { GlobalShortcuts } from "@/components/workbench/global-shortcuts";
 import { JobCenterSheet } from "@/components/workbench/JobCenterSheet";
 import { useJobCenterPolling } from "@/lib/mono/job-center";
 import { CapabilityActionsProvider } from "@/components/workbench/CapabilityActions";
+import { Thread } from "@/components/assistant-ui/thread";
 import {
   THREAD_STYLES,
+  ThreadSkinScope,
   loadThreadStyle,
   saveThreadStyle,
   type ThreadStyleId,
@@ -158,8 +160,7 @@ export const Assistant = () => {
       <Image2ModeSync />
       <VideoGenerationModeSync />
       <ThreadTitleSync />
-      {/* 提到这一层而不是 Thread 内部：CommandPalette 与非 base 的样式变体
-          (ChatGPT/Grok/Gemini) 都要能拿到同一份 run()，不只是默认样式。 */}
+      {/* 提到这一层而不是 Thread 内部：CommandPalette 和 Thread 要拿到同一份 run()。 */}
       <CapabilityActionsProvider>
         <AssistantShell />
       </CapabilityActionsProvider>
@@ -437,8 +438,6 @@ const AssistantShell: FC = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("connections");
-  const active = THREAD_STYLES.find((s) => s.id === styleId) ?? THREAD_STYLES[0];
-  const ActiveThread = active.Component;
   const isWorking = useAuiState((s) => s.thread.isRunning);
 
   // 双后端健康轮询；未手动选过模式时跟随服务端默认。
@@ -523,7 +522,9 @@ const AssistantShell: FC = () => {
             key={styleId}
             className="fade-in animate-in h-full duration-200"
           >
-            <ActiveThread />
+            <ThreadSkinScope skin={styleId}>
+              <Thread />
+            </ThreadSkinScope>
           </div>
           <ThreadFindBar />
         </main>

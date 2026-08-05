@@ -1,0 +1,159 @@
+/*
+ * 会话皮肤（Base / ChatGPT / Grok / Gemini）。
+ *
+ * 皮肤只是一层 CSS：渲染的永远是同一个 <Thread />，`/` 命令、@ 引用、生图/
+ * 生视频模式、任务中心、工具卡片这些功能在任何皮肤下都在。换皮肤换的是下面
+ * 这组变量和少量形状规则。
+ *
+ * 这些规则故意不放进 @layer——Tailwind 的工具类都在 utilities 层里，不分层的
+ * 规则天然赢过它们，所以 `bg-background`、`bg-muted` 这类类名可以被直接改写，
+ * 不需要 !important。
+ */
+
+.aui-thread-root {
+  /* Thread 自己用的排版变量（原来写在内联 style 里） */
+  --thread-max-width: 44rem;
+  --composer-bg: color-mix(
+    in oklab,
+    var(--color-muted) 30%,
+    var(--color-background)
+  );
+  --composer-radius: 1.5rem;
+  --composer-padding: 8px;
+
+  /* 皮肤槽位：默认全部沿用主题 token，即 Base 皮肤 */
+  --thread-bg: var(--color-background);
+  --composer-border: var(--color-border);
+  --composer-shadow: 0 4px 16px -8px rgb(0 0 0 / 0.08),
+    0 1px 2px rgb(0 0 0 / 0.04);
+  --user-bubble-bg: var(--color-muted);
+  --user-bubble-fg: var(--color-foreground);
+  --user-bubble-radius: 0.75rem;
+  --welcome-size: 1.5rem;
+  --welcome-weight: 600;
+  --welcome-fg: var(--color-foreground);
+}
+
+[data-thread-skin] .aui-thread-root {
+  background-color: var(--thread-bg);
+}
+
+[data-thread-skin] .aui-user-message-content {
+  background-color: var(--user-bubble-bg);
+  color: var(--user-bubble-fg);
+  border-radius: var(--user-bubble-radius);
+}
+
+[data-thread-skin] [data-slot="aui_composer-shell"] {
+  border-color: var(--composer-border);
+  box-shadow: var(--composer-shadow);
+}
+
+[data-thread-skin] .aui-thread-welcome-message-inner {
+  font-size: var(--welcome-size);
+  font-weight: var(--welcome-weight);
+  color: var(--welcome-fg);
+}
+
+/* ------------------------------- ChatGPT ------------------------------- */
+
+[data-thread-skin="chatgpt"] .aui-thread-root {
+  --thread-max-width: 48rem;
+  --thread-bg: #ffffff;
+  --composer-bg: #ffffff;
+  --composer-border: #e5e5e5;
+  --composer-radius: 1.75rem;
+  --composer-padding: 10px;
+  --composer-shadow: 0 6px 24px -12px rgb(0 0 0 / 0.18);
+  --user-bubble-bg: #f4f4f4;
+  --user-bubble-fg: #0d0d0d;
+  --user-bubble-radius: 1.5rem;
+  --welcome-size: 1.75rem;
+  --welcome-weight: 600;
+  --welcome-fg: #0d0d0d;
+  color: #0d0d0d;
+}
+
+.dark [data-thread-skin="chatgpt"] .aui-thread-root {
+  --thread-bg: #212121;
+  --composer-bg: #303030;
+  --composer-border: #3a3a3a;
+  --composer-shadow: none;
+  --user-bubble-bg: #303030;
+  --user-bubble-fg: #ececec;
+  --welcome-fg: #ececec;
+  color: #ececec;
+}
+
+/* -------------------------------- Grok --------------------------------- */
+
+[data-thread-skin="grok"] .aui-thread-root {
+  --thread-max-width: 48rem;
+  --thread-bg: #fdfdfd;
+  --composer-bg: #f8f8f8;
+  --composer-border: #e5e5e5;
+  --composer-radius: 2rem;
+  --composer-padding: 8px;
+  --composer-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+  --user-bubble-bg: #f0f0f0;
+  --user-bubble-fg: #0d0d0d;
+  /* Grok 的用户气泡右下角是收紧的 */
+  --user-bubble-radius: 1.5rem 1.5rem 0.5rem 1.5rem;
+  --welcome-size: 1.5rem;
+  --welcome-weight: 500;
+  --welcome-fg: #0d0d0d;
+  color: #0d0d0d;
+}
+
+[data-thread-skin="grok"] .aui-user-message-content {
+  border: 1px solid #e5e5e5;
+}
+
+.dark [data-thread-skin="grok"] .aui-thread-root {
+  --thread-bg: #141414;
+  --composer-bg: #212121;
+  --composer-border: #2a2a2a;
+  --composer-shadow: none;
+  --user-bubble-bg: #1a1a1a;
+  --user-bubble-fg: #ffffff;
+  --welcome-fg: #ffffff;
+  color: #e5e5e5;
+}
+
+.dark [data-thread-skin="grok"] .aui-user-message-content {
+  border-color: #2a2a2a;
+}
+
+/* ------------------------------- Gemini -------------------------------- */
+
+[data-thread-skin="gemini"] .aui-thread-root {
+  --thread-max-width: 50rem;
+  --thread-bg: #ffffff;
+  --composer-bg: #f0f4f9;
+  --composer-border: transparent;
+  --composer-radius: 2rem;
+  --composer-padding: 10px;
+  --composer-shadow: none;
+  --user-bubble-bg: #f0f4f9;
+  --user-bubble-fg: #1f1f1f;
+  --user-bubble-radius: 1.25rem;
+  --welcome-size: 2rem;
+  --welcome-weight: 500;
+  color: #1f1f1f;
+}
+
+/* Gemini 的招呼语是渐变字，这里只换外观，文案还是 Workbench 自己的。 */
+[data-thread-skin="gemini"] .aui-thread-welcome-message-inner {
+  background: linear-gradient(74deg, #4285f4 0%, #9b72cb 45%, #d96570 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.dark [data-thread-skin="gemini"] .aui-thread-root {
+  --thread-bg: #1b1c1d;
+  --composer-bg: #1e1f20;
+  --user-bubble-bg: #333537;
+  --user-bubble-fg: #e3e3e3;
+  color: #e3e3e3;
+}

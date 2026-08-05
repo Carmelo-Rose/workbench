@@ -21,14 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ThreadList } from "@/components/assistant-ui/thread-list";
-import { CONN_STATE_LABEL, StatusDot } from "@/components/workbench/backend-select";
 import { useWorkbenchSession } from "@/components/workbench/auth-gate";
-import {
-  hermesConnState,
-  useAgentStatus,
-  useBackendChoice,
-} from "@/lib/agent-status";
-import { BACKENDS } from "@/lib/backends";
 import { useJobCenter, useJobCenterActiveCount } from "@/lib/mono/job-center";
 import { useImage2Mode } from "@/lib/image2-mode";
 import { useVideoGenerationMode } from "@/lib/video-generation-mode";
@@ -106,9 +99,6 @@ export function ThreadListSidebar({
             <AccountFooterMenu onOpenSettings={onOpenSettings} />
           </SidebarMenuItem>
           <JobCenterFooterItem />
-          <SidebarMenuItem>
-            <SettingsFooterButton onClick={onOpenSettings} />
-          </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
       <SidebarRail />
@@ -159,7 +149,8 @@ function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) 
           </DropdownMenuItem>
         ))}
         <DropdownMenuItem onSelect={() => onOpenSettings?.()} className="rounded-lg">
-          员工与工作区
+          <SettingsIcon className="size-4" />
+          设置
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void signOut()} className="rounded-lg">
           <LogOutIcon className="size-4" />
@@ -187,33 +178,5 @@ function JobCenterFooterItem() {
         </div>
       </SidebarMenuButton>
     </SidebarMenuItem>
-  );
-}
-
-function SettingsFooterButton({ onClick }: { onClick?: () => void }) {
-  const backend = useBackendChoice((s) => s.backend);
-  const status = useAgentStatus((s) => s.status);
-  const state =
-    backend === "hermes"
-      ? hermesConnState(status)
-      : status?.direct.configured
-        ? "ok"
-        : status
-          ? "down"
-          : "unknown";
-
-  return (
-    <SidebarMenuButton size="lg" onClick={onClick} aria-label="打开设置">
-      <div className="flex aspect-square size-8 items-center justify-center rounded-lg border">
-        <SettingsIcon className="size-4" />
-      </div>
-      <div className="flex min-w-0 flex-col gap-0.5 leading-none">
-        <span className="font-medium">设置</span>
-        <span className="text-muted-foreground flex items-center gap-1.5 truncate text-xs">
-          <StatusDot state={state} />
-          {BACKENDS[backend].name} · {CONN_STATE_LABEL[state]}
-        </span>
-      </div>
-    </SidebarMenuButton>
   );
 }

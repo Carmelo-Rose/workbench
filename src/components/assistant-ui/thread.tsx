@@ -203,15 +203,10 @@ const ThreadRoot: FC<{ isEmpty: boolean }> = ({ isEmpty }) => {
   const hasVideoTurn = Boolean(useCurrentVideoJobId());
 
   return (
+    // --thread-max-width / --composer-* 以前是内联 style；内联样式盖不过皮肤
+    // 选择器，所以默认值搬去了 globals.css 的 .aui-thread-root。
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root bg-background @container relative flex h-full flex-col"
-      style={{
-        ["--thread-max-width" as string]: "44rem",
-        ["--composer-bg" as string]:
-          "color-mix(in oklab, var(--color-muted) 30%, var(--color-background))",
-        ["--composer-radius" as string]: "1.5rem",
-        ["--composer-padding" as string]: "8px",
-      }}
     >
       <ThreadBackdrop active={isEmpty && !hasVideoTurn} />
       <ThreadPrimitive.Viewport

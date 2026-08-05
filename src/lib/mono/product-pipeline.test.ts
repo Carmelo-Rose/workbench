@@ -534,6 +534,49 @@ describe("square deliverable composition", () => {
     expect(column.slice(500).some((value) => value < 230)).toBe(true);
     expect(pixel(0, 0)).toEqual([255, 255, 255]);
   });
+
+  it("does not slice a 主图 shadow that reaches past the product silhouette", async () => {
+    const root = await fixture();
+    const output = path.join(root, "square-main-wide-shadow.png");
+    // Same silhouette as `box`, but with a shadow that spreads left of it and
+    // fades out gradually — the studio case the silhouette-only crop cut off.
+    const frame = Buffer.alloc(40 * 30 * 3, 255);
+    for (let y = 7; y < 23; y += 1) {
+      for (let x = 10; x < 30; x += 1) {
+        const offset = (y * 40 + x) * 3;
+        frame[offset] = 200; frame[offset + 1] = 30; frame[offset + 2] = 30;
+      }
+    }
+    for (let y = 23; y < 26; y += 1) {
+      for (let x = 2; x < 34; x += 1) {
+        const value = 248 - (x - 2) * 2;
+        const offset = (y * 40 + x) * 3;
+        frame[offset] = value; frame[offset + 1] = value; frame[offset + 2] = value;
+      }
+    }
+    const generated = await sharp(frame, { raw: { width: 40, height: 30, channels: 3 } }).png().toBuffer();
+    await composeSquareDeliverable(generated, box, output, { framing: "main" });
+
+    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
+    const pixel = (x: number, y: number) =>
+      Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x + 1) * info.channels));
+
+    // Whatever the leftmost content on any row is, it has to be a faint tail
+    // fading into the canvas. A mid-grey there means the gradient was cut.
+    let darkestEntry = 255;
+    for (let y = 0; y < 800; y += 1) {
+      for (let x = 0; x < 800; x += 1) {
+        const value = Math.max(...pixel(x, y));
+        if (value >= 250) continue;
+        if (value < darkestEntry) darkestEntry = value;
+        break;
+      }
+    }
+    expect(darkestEntry).toBeGreaterThanOrEqual(240);
+    // The product still owns the centre; the shadow ran into the margin.
+    const centre = pixel(400, 400);
+    expect(centre[0]).toBeGreaterThan(centre[2]);
+  });
 });
 
 describe("product pipeline model generation phase", () => {

@@ -50,7 +50,6 @@ export const ThreadList: FC<{ onNewThread?: () => void }> = ({ onNewThread }) =>
       <ThreadListNew onClick={onNewThread} />
       <ThreadListSearchBox query={query} onQueryChange={setQuery} />
       <ThreadListItems query={query} />
-      <ArchivedThreadsSection />
     </ThreadListRoot>
   );
 };
@@ -363,14 +362,16 @@ export const ThreadListItem: FC = () => {
   return (
     <ThreadListItemPrimitive.Root
       data-slot="aui_thread-list-item"
-      className="group hover:bg-muted focus-visible:bg-muted data-active:bg-muted has-focus-visible:bg-muted has-data-[state=open]:bg-muted relative flex h-8 items-center rounded-md transition-colors focus-visible:outline-none"
+      // 具名 group：侧边栏根节点自己带了一个匿名 `group`，用无名 group-hover
+      // 会被它命中——鼠标进侧边栏任何位置，所有会话的「…」一起亮。
+      className="group/thread-item hover:bg-muted focus-visible:bg-muted data-active:bg-muted has-focus-visible:bg-muted has-data-[state=open]:bg-muted relative flex h-8 items-center rounded-md transition-colors focus-visible:outline-none"
     >
       {renaming ? (
         <RenameInput onDone={() => setRenaming(false)} />
       ) : (
         <ThreadListItemPrimitive.Trigger
           data-slot="aui_thread-list-item-trigger"
-          className="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center rounded-md px-2.5 text-start text-sm outline-none group-hover:pe-9 group-has-focus-visible:pe-9 group-has-data-[state=open]:pe-9 group-data-active:pe-9 focus-visible:ring-[3px]"
+          className="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center rounded-md px-2.5 text-start text-sm outline-none group-hover/thread-item:pe-9 group-has-focus-visible/thread-item:pe-9 group-has-data-[state=open]/thread-item:pe-9 group-data-active/thread-item:pe-9 focus-visible:ring-[3px]"
         >
           <span
             data-slot="aui_thread-list-item-title"
@@ -466,7 +467,7 @@ const ThreadListItemMore: FC<{ onRename: () => void }> = ({ onRename }) => {
           variant="ghost"
           size="icon"
           data-slot="aui_thread-list-item-more"
-          className="data-[state=open]:bg-accent absolute end-1.5 top-1/2 size-6 -translate-y-1/2 p-0 opacity-0 group-hover:opacity-100 group-has-focus-visible:opacity-100 group-data-active:opacity-100 data-[state=open]:opacity-100"
+          className="data-[state=open]:bg-accent absolute end-1.5 top-1/2 size-6 -translate-y-1/2 p-0 opacity-0 group-hover/thread-item:opacity-100 group-has-focus-visible/thread-item:opacity-100 group-data-active/thread-item:opacity-100 data-[state=open]:opacity-100"
         >
           <MoreHorizontalIcon className="size-3.5" />
           <span className="sr-only">更多操作</span>
@@ -509,11 +510,11 @@ const ArchivedThreadListItem: FC = () => {
   return (
     <ThreadListItemPrimitive.Root
       data-slot="aui_thread-list-item"
-      className="group hover:bg-muted focus-visible:bg-muted has-focus-visible:bg-muted has-data-[state=open]:bg-muted relative flex h-8 items-center rounded-md transition-colors focus-visible:outline-none"
+      className="group/thread-item hover:bg-muted focus-visible:bg-muted has-focus-visible:bg-muted has-data-[state=open]:bg-muted relative flex h-8 items-center rounded-md transition-colors focus-visible:outline-none"
     >
       <ThreadListItemPrimitive.Trigger
         data-slot="aui_thread-list-item-trigger"
-        className="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center rounded-md px-2.5 text-start text-sm outline-none group-hover:pe-9 group-has-focus-visible:pe-9 group-has-data-[state=open]:pe-9 focus-visible:ring-[3px]"
+        className="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center rounded-md px-2.5 text-start text-sm outline-none group-hover/thread-item:pe-9 group-has-focus-visible/thread-item:pe-9 group-has-data-[state=open]/thread-item:pe-9 focus-visible:ring-[3px]"
       >
         <span
           data-slot="aui_thread-list-item-title"
@@ -535,7 +536,7 @@ const ArchivedThreadListItemMore: FC = () => {
           variant="ghost"
           size="icon"
           data-slot="aui_thread-list-item-more"
-          className="data-[state=open]:bg-accent absolute end-1.5 top-1/2 size-6 -translate-y-1/2 p-0 opacity-0 group-hover:opacity-100 group-has-focus-visible:opacity-100 data-[state=open]:opacity-100"
+          className="data-[state=open]:bg-accent absolute end-1.5 top-1/2 size-6 -translate-y-1/2 p-0 opacity-0 group-hover/thread-item:opacity-100 group-has-focus-visible/thread-item:opacity-100 data-[state=open]:opacity-100"
         >
           <MoreHorizontalIcon className="size-3.5" />
           <span className="sr-only">更多操作</span>
@@ -564,14 +565,22 @@ const ArchivedThreadListItemMore: FC = () => {
 };
 
 /**
- * 已归档会话：默认折叠、零归档时占 0 像素。归档/恢复后端早就通了，之前只是
- * 界面上没有回去的路——恢复能回到主列表全靠这个 Unarchive 入口。
+ * 已归档会话：默认折叠、零归档时默认占 0 像素。设置页可选择显示空状态；归档/恢复
+ * 后端早就通了，之前只是界面上没有回去的路——恢复能回到主列表全靠这个入口。
  */
-const ArchivedThreadsSection: FC = () => {
+export const ArchivedThreadsSection: FC<{ showEmpty?: boolean }> = ({
+  showEmpty = false,
+}) => {
   const archivedCount = useAuiState((s) => s.threads.archivedThreadIds.length);
   const [open, setOpen] = useState(false);
 
-  if (archivedCount === 0) return null;
+  if (archivedCount === 0) {
+    return showEmpty ? (
+      <p className="text-muted-foreground px-2.5 py-2 text-sm">
+        暂无已归档会话
+      </p>
+    ) : null;
+  }
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mt-2">

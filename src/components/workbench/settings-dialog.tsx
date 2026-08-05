@@ -55,6 +55,10 @@ import { type ThemePref } from "@/lib/theme";
 import { type DensityPref } from "@/lib/density";
 import { cn } from "@/lib/utils";
 import { WorkspaceSettings } from "@/components/workbench/workspace-settings";
+import {
+  ArchivedThreadsSection,
+  ThreadListRoot,
+} from "@/components/assistant-ui/thread-list";
 
 export type SettingsSection =
   | "connections"
@@ -728,6 +732,14 @@ const DataSection: FC = () => {
             清空全部会话
           </Button>
         )}
+      </div>
+      <div className="mt-8 border-t pt-6">
+        <SectionTitle sub="归档的会话不会出现在侧边栏主列表中，可在这里恢复或删除。">
+          已归档会话
+        </SectionTitle>
+        <ThreadListRoot className="rounded-xl border p-2">
+          <ArchivedThreadsSection showEmpty />
+        </ThreadListRoot>
       </div>
     </div>
   );
