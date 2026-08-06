@@ -52,11 +52,20 @@ const SLOT_META: SlotMeta[] = [
 const stageLabel: Record<string, string> = {
   main_published: "主图已完成，正在准备详情套图",
   generating_masters: "正在生成白底主图",
+  正在生成白底主图: "正在生成白底主图",
   classifying: "正在识别商品颜色和角度",
+  classified: "颜色识别完成",
+  generating_main: "正在生成主图背景（会调用付费生图服务）",
+  publishing_main: "正在发布主图",
+  rendering_sku: "正在渲染 SKU 图",
+  publishing_sku: "正在发布 SKU 图",
   generating_models: "正在生成模特图（会调用付费生图服务）",
   compositing: "正在制作商品拼图",
   qa: "正在进行视觉与尺寸质检",
   publishing_images: "正在发布详情套图",
+  branch_published: "已发布",
+  branch_failed: "未能完成",
+  queued: "排队中",
   completed: "详情套图已完成",
 };
 
@@ -67,8 +76,19 @@ type PipelineResult = {
   progress?: number;
   slots?: SlotRecord[];
   failedSlots?: FailedSlot[];
+  /** Per-branch stage and percentage, since 主图 / SKU / images now run at once. */
+  branches?: Record<string, { stage?: string; progress?: number }>;
+  failedBranches?: { branch: string; reason: string; label?: string }[];
   incomplete?: boolean;
   warnings?: string[];
+};
+
+const BRANCH_ORDER = ["prepare", "main", "sku", "images"] as const;
+const branchLabel: Record<string, string> = {
+  prepare: "白底图与颜色识别",
+  main: "主图",
+  sku: "SKU 图",
+  images: "详情套图",
 };
 
 function resultOf(job: MonoJob | null): PipelineResult {
@@ -346,8 +366,24 @@ export function ProductPipelineTrial() {
               })}
             </div>
 
+            {/* One stage line can only name one of the three directories now. */}
+            {active(job) && result.branches ? (
+              <ul className="text-muted-foreground grid gap-x-4 gap-y-0.5 text-xs sm:grid-cols-2">
+                {BRANCH_ORDER.filter((id) => result.branches?.[id]).map((id) => (
+                  <li key={id} className="flex items-baseline justify-between gap-2">
+                    <span>{branchLabel[id]}</span>
+                    <span className="tabular-nums">
+                      {stageLabel[result.branches![id].stage ?? ""] ?? result.branches![id].stage ?? "排队中"}
+                      {result.branches![id].progress !== undefined ? ` ${result.branches![id].progress}%` : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
             {result.warnings?.length ? <ul className="text-muted-foreground space-y-1 text-xs">{result.warnings.map((warning, index) => <li key={index}>· {warning}</li>)}</ul> : null}
-            {result.incomplete ? <p className="text-amber-700 dark:text-amber-400 text-xs">任务已完成，但部分槽位生成失败；请将失败槽位和任务 ID 发到反馈群。</p> : null}
+            {result.failedBranches?.length ? <p className="text-amber-700 dark:text-amber-400 text-xs">{result.failedBranches.map((item) => item.label ?? branchLabel[item.branch] ?? item.branch).join("、")}未能发布，其余目录已照常发布；请将任务 ID 发到反馈群。</p> : null}
+            {result.incomplete && !result.failedBranches?.length ? <p className="text-amber-700 dark:text-amber-400 text-xs">任务已完成，但部分槽位生成失败；请将失败槽位和任务 ID 发到反馈群。</p> : null}
             {!active(job) && generatedSlots.length ? <Button variant="outline" onClick={downloadAll}><DownloadIcon />下载已生成图片</Button> : null}
             {job.status === "failed" && !generatedSlots.length ? <p className="text-destructive text-sm">{job.error ?? "任务没有生成任何图片"}</p> : null}
             {job.status === "cancelled" ? <p className="text-muted-foreground text-sm">任务已停止，已经生成的槽位仍可查看。</p> : null}

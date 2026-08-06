@@ -9,6 +9,7 @@ import {
   classifySources,
   clusterByColor,
   deltaE,
+  isFullArticleShot,
   type Lab,
   type MeasuredSource,
 } from "./product-classify";
@@ -128,6 +129,21 @@ describe("shoot classification", () => {
 
   it("refuses a shoot that is entirely macro crops rather than guessing", () => {
     expect(() => classifySources([shot("macro", NAVY, 0.4, 0.6)])).toThrow("没有可用的商品整体图");
+  });
+
+  // 主图 picks its shots with this predicate instead of waiting for the
+  // clustering, on the strength of the two agreeing. If they ever stop
+  // agreeing, 主图 silently starts publishing a different set of pictures.
+  it("accepts exactly the shots the clustering turns into colourway members", () => {
+    const withFailedCutout = [...shoot, shot("failed", [100, 0, 0], 0, 0)];
+    const clustered = new Set(
+      classifySources(withFailedCutout).colors.flatMap((color) => color.members).map((item) => item.path),
+    );
+    const predicated = new Set(
+      withFailedCutout.filter((item) => isFullArticleShot(item.metric)).map((item) => item.path),
+    );
+    expect(predicated).toEqual(clustered);
+    expect(predicated.size).toBe(15);
   });
 
   it("drops blank masters from a failed cutout instead of clustering them as a white colourway", () => {

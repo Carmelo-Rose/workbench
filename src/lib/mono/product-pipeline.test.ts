@@ -8,9 +8,11 @@ import {
   composeNaturalShadowBackdrop,
   composeSquareDeliverable,
   composeWhiteMaster,
+  createPipelineProgress,
   describeReframing,
   detailPageSources,
   installedWorkflowIds,
+  liftGeneratedSweep,
   listProductFolders,
   listProductWorkflows,
   measureMatteAspect,
@@ -27,6 +29,7 @@ import {
   resolveProductFolder,
   resolveProductFolderByName,
   runModelGenerationPhase,
+  runPipelineBranches,
   runWithConcurrency,
   selectModelSlots,
   validateProductPipelineInput,
@@ -670,6 +673,41 @@ describe("square deliverable composition", () => {
   });
 });
 
+describe("generated sweep lift", () => {
+  it("lifts the sweep to pure white without lightening the shadow standing on it", async () => {
+    // One row of the generator's output: its background, the shadow it drew on
+    // that background, and the article.
+    const frame = Buffer.alloc(30 * 10 * 3, 254);
+    const paint = (from: number, to: number, value: number) => {
+      for (let y = 0; y < 10; y += 1) {
+        for (let x = from; x < to; x += 1) {
+          const offset = (y * 30 + x) * 3;
+          frame[offset] = value; frame[offset + 1] = value; frame[offset + 2] = value;
+        }
+      }
+    };
+    paint(10, 15, 245); // the shadow's outer edge, where it fades into the sweep
+    paint(15, 20, 230); // its core
+    paint(20, 25, 20);  // the article
+    const lifted = await liftGeneratedSweep(
+      await sharp(frame, { raw: { width: 30, height: 10, channels: 3 } }).png().toBuffer(),
+    );
+
+    const { data } = await sharp(lifted).raw().toBuffer({ resolveWithObject: true });
+    const at = (x: number) => data[(5 * 30 + x) * 3];
+    // What the lift is for: 主图 pads with #ffffff, so the sweep has to reach it
+    // or the padding prints as a rectangle.
+    expect(at(2)).toBe(255);
+    // What must not ride along. A floor of 245 printed these three as 255, 239
+    // and 21 — the outer edge gone entirely, which is the shadow the 1234 run
+    // was missing next to its uncropped frames.
+    expect(at(12)).toBeGreaterThanOrEqual(246);
+    expect(at(12)).toBeLessThan(250);
+    expect(at(17)).toBeLessThan(234);
+    expect(at(22)).toBeLessThan(24);
+  });
+});
+
 describe("主图 article measurement", () => {
   /** The standalone grayscale matte the gateway returns today. */
   async function greyMatte(w: number, h: number, blobW: number, blobH: number): Promise<Buffer> {
@@ -779,6 +817,110 @@ describe("product pipeline model generation phase", () => {
       throw new Error("upstream aborted the request");
     });
     await expect(run).rejects.toThrow("upstream aborted the request");
+  });
+});
+
+describe("parallel deliverable branches", () => {
+  it("lets one branch fail without stopping or discarding the others", async () => {
+    const finished: string[] = [];
+    const failures = await runPipelineBranches([
+      { id: "main", run: async () => { await new Promise((r) => setTimeout(r, 5)); finished.push("main"); } },
+      { id: "sku", run: async () => { throw new Error("SKU 代表图缺少中间产物"); } },
+      { id: "images", run: async () => { await new Promise((r) => setTimeout(r, 10)); finished.push("images"); } },
+    ]);
+    expect(finished).toEqual(["main", "images"]);
+    expect(failures).toEqual([{ branch: "sku", reason: "SKU 代表图缺少中间产物" }]);
+  });
+
+  it("reports failures in the declared order, not the order they happened", async () => {
+    const failures = await runPipelineBranches([
+      { id: "main", run: async () => { await new Promise((r) => setTimeout(r, 10)); throw new Error("慢的先声明"); } },
+      { id: "sku", run: async () => { throw new Error("快的后声明"); } },
+    ]);
+    expect(failures.map((item) => item.branch)).toEqual(["main", "sku"]);
+  });
+
+  it("tells the caller which branch settled and why, once per branch", async () => {
+    const settled: [string, string | undefined][] = [];
+    await runPipelineBranches(
+      [
+        { id: "main", run: async () => {} },
+        { id: "sku", run: async () => { throw new Error("盘不可写"); } },
+      ],
+      (branch, reason) => { settled.push([branch, reason]); },
+    );
+    expect(settled.sort()).toEqual([["main", undefined], ["sku", "盘不可写"]]);
+  });
+});
+
+describe("aggregated branch progress", () => {
+  it("weighs each branch into one total instead of restarting the bar per branch", () => {
+    const emitted: Record<string, unknown>[] = [];
+    const progress = createPipelineProgress((result) => { emitted.push(result); }, ["prepare", "main", "sku", "images"]);
+    progress.settle("prepare", "classifying");
+    expect(emitted.at(-1)!.progress).toBe(20);
+    progress.report("main", "generating_main", 50);
+    expect(emitted.at(-1)!.progress).toBe(35);
+    progress.settle("main", "branch_published");
+    progress.settle("sku", "branch_published");
+    progress.settle("images", "branch_published");
+    expect(emitted.at(-1)!.progress).toBe(100);
+    expect(emitted.at(-1)!.stage).toBe("completed");
+  });
+
+  // Every payload replaces result_json wholesale, so a field one branch set has
+  // to survive the next branch reporting from a different call site.
+  it("keeps fields set by one branch when another branch reports", () => {
+    const emitted: Record<string, unknown>[] = [];
+    const progress = createPipelineProgress((result) => { emitted.push(result); }, ["prepare", "main", "images"]);
+    progress.report("main", "generating_main", 10, { mainWarnings: ["帽子被重画"] });
+    progress.report("images", "generating_models", 10, { slots: [{ slot: "03" }] });
+    expect(emitted.at(-1)!.mainWarnings).toEqual(["帽子被重画"]);
+    expect(emitted.at(-1)!.slots).toEqual([{ slot: "03" }]);
+  });
+
+  // images/ carries the most weight but has not begun while the cutouts run,
+  // so naming it would leave the card reading "排队中" for the first phase.
+  it("never headlines a branch nobody has reported on yet", () => {
+    const emitted: Record<string, unknown>[] = [];
+    const progress = createPipelineProgress((result) => { emitted.push(result); }, ["prepare", "main", "sku", "images"]);
+    progress.report("prepare", "正在生成白底主图", 30);
+    expect(emitted.at(-1)!.stage).toBe("正在生成白底主图");
+  });
+
+  it("names the branch with the most weighted work left as the stage to show", () => {
+    const emitted: Record<string, unknown>[] = [];
+    const progress = createPipelineProgress((result) => { emitted.push(result); }, ["main", "sku", "images"]);
+    progress.report("sku", "rendering_sku", 0);
+    progress.report("main", "generating_main", 0);
+    progress.report("images", "generating_models", 0);
+    // images carries the largest share, so it is what the run is waiting on…
+    expect(emitted.at(-1)!.stage).toBe("generating_models");
+    progress.settle("images", "branch_published");
+    // …until it lands, at which point 主图 is.
+    expect(emitted.at(-1)!.stage).toBe("generating_main");
+  });
+
+  it("does not let a failed branch hold the total below 100 forever", () => {
+    const emitted: Record<string, unknown>[] = [];
+    const progress = createPipelineProgress((result) => { emitted.push(result); }, ["main", "sku"]);
+    progress.report("main", "generating_main", 40);
+    progress.settle("main", "branch_failed");
+    progress.settle("sku", "branch_published");
+    expect(emitted.at(-1)!.progress).toBe(100);
+    expect(emitted.at(-1)!.branches).toEqual({
+      main: { stage: "branch_failed", progress: 100 },
+      sku: { stage: "branch_published", progress: 100 },
+    });
+  });
+
+  it("never walks a branch backwards when a later report reads lower", () => {
+    const emitted: Record<string, unknown>[] = [];
+    const progress = createPipelineProgress((result) => { emitted.push(result); }, ["main"]);
+    progress.report("main", "generating_main", 60);
+    progress.report("main", "publishing_main", 30);
+    expect(emitted.at(-1)!.progress).toBe(60);
+    expect(emitted.at(-1)!.stage).toBe("publishing_main");
   });
 });
 

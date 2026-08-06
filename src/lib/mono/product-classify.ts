@@ -70,6 +70,20 @@ export type SourceMetric = {
 
 export type MeasuredSource = { path: string; metric: SourceMetric };
 
+/**
+ * Whether a frame shows the whole article, which is what a 主图 and a colourway
+ * are both made of. Everything else in the master set is either a macro crop or
+ * a frame whose cutout came back blank.
+ *
+ * Exported because 主图 has to make this call without the colour clustering:
+ * the clustering needs every cutout in the folder before it can say anything,
+ * while this reads one frame's own metric. `classifySources` below applies the
+ * very same predicate, so the two can never disagree about which shots count.
+ */
+export function isFullArticleShot(metric: SourceMetric): boolean {
+  return metric.coverage >= MIN_PRODUCT_COVERAGE && metric.edgeRatio <= DETAIL_EDGE_RATIO_THRESHOLD;
+}
+
 export type ColorGroup = {
   /** 0 is the hero colourway; it receives the most model slots. */
   rank: number;
@@ -293,8 +307,8 @@ export function classifySources(
     warnings.push(`${blank.length} 张白底主图几乎是空白，可能抠图失败，已排除在颜色识别之外`);
   }
   const usable = measured.filter((item) => item.metric.coverage >= MIN_PRODUCT_COVERAGE);
-  const details = usable.filter((item) => item.metric.edgeRatio > DETAIL_EDGE_RATIO_THRESHOLD);
-  const fullShots = usable.filter((item) => item.metric.edgeRatio <= DETAIL_EDGE_RATIO_THRESHOLD);
+  const details = usable.filter((item) => !isFullArticleShot(item.metric));
+  const fullShots = usable.filter((item) => isFullArticleShot(item.metric));
   if (!fullShots.length) throw new Error("原图里没有可用的商品整体图，全部被判定为细节特写或空白");
 
   const clusters = clusterByColor(fullShots);

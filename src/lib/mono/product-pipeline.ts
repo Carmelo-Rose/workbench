@@ -9,10 +9,13 @@ import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
 import { getConfigValue } from "@/lib/server/api-config";
 import {
   allocateModelSlots,
-  classifyProductSources,
+  classifySources,
+  isFullArticleShot,
   measureColorPresence,
+  measureProductImage,
   type RelativeBox,
   type SourceClassification,
+  type SourceMetric,
 } from "./product-classify";
 import { applyBrandMark, renderDetailPresentation, renderTiledDisplay } from "./product-layouts";
 import {
@@ -980,27 +983,70 @@ export async function composeNaturalShadowBackdrop(sourcePath: string, cutout: B
     .toBuffer();
 }
 
-type MasterRenderLayers = {
+/**
+ * Everything one photographed frame yields locally, before any paid request.
+ *
+ * This is the pipeline's shared prefix: the cutout feeds SKU, the colour
+ * clustering and 主图's proportion check, and the white master is both what the
+ * classifier measures and what the model-image slots reference.
+ */
+type PreparedArticleSource = {
+  source: SourceImage;
+  /** The white master this frame was flattened to, on the staging disk. */
+  master: string;
+  /** Segmentation alpha over the source's own canvas. */
+  cutout: Buffer;
+  /** Measured once here, so neither the classifier nor 主图 re-reads the file. */
+  metric: SourceMetric;
   foreground: Buffer;
   skuForeground: Buffer;
-  mainImage: Buffer;
+};
+
+/** What the generator drew for one frame, ready to be framed as a 主图. */
+type MainFrameRender = {
+  image: Buffer;
   /**
-   * Where the article sits inside `mainImage`, measured on that frame's own
-   * matte. Null when the matte came back empty, which drops 主图 onto the
-   * degraded framing in `composeSquareDeliverable`.
+   * Where the article sits inside `image`, measured on that frame's own matte.
+   * Null when the matte came back empty, which drops 主图 onto the degraded
+   * framing in `composeSquareDeliverable`.
    */
-  mainArticle: RelativeBox | null;
+  article: RelativeBox | null;
   /** Anything about this frame a person should look at before it ships. */
   warnings: string[];
 };
 
 /**
- * The generator returns a sweep a few levels off pure white. Left alone, the
- * 主图 crop lands on the white canvas as a faintly visible rectangle. Lifting
- * the top of the range to 255 costs a few percent of shadow density and
- * removes the seam.
+ * The white the generated sweep actually comes back at.
+ *
+ * The generator's background is not #ffffff: across the 1234 frames it measures
+ * 253–254 over ~58% of the picture. 主图 pads with pure white wherever the
+ * framing window runs off the frame, so an unlifted sweep prints that padding
+ * as a visible rectangle against the slightly darker background.
+ *
+ * This has to sit on the measured floor. The lift is `v * 255 / floor` applied
+ * to the whole picture, so every level below the real floor multiplies the cast
+ * shadow along with the background. At 245 it did exactly that: ×1.0408 pushed
+ * the 245–252 outer edge of every shadow to pure white and cost 12%–35% of the
+ * shadow pixels the generator drew — which is what "the shadow changed after
+ * cropping" turned out to be. At 253 the seam disappears just the same and
+ * nothing below it moves by more than two levels.
  */
-const GENERATED_SWEEP_WHITE_FLOOR = 245;
+const GENERATED_SWEEP_WHITE_FLOOR = 253;
+
+/**
+ * Lifts the generated sweep to pure white, and nothing else.
+ *
+ * Named and exported because it is the only step on the 主图 path that changes
+ * a pixel value the generator drew — everything downstream scales and crops.
+ * A 主图 whose shadow reads lighter than the frame it came from came from here.
+ */
+export async function liftGeneratedSweep(frame: Buffer): Promise<Buffer> {
+  return sharp(frame)
+    .linear(255 / GENERATED_SWEEP_WHITE_FLOOR, 0)
+    .removeAlpha()
+    .png()
+    .toBuffer();
+}
 
 /**
  * How far the generated frame's own aspect may drift from the source photo's
@@ -1155,44 +1201,77 @@ export async function describeReframing(source: SourceImage, generated: Buffer):
     + "生图服务重新构图了，商品比例可能被改动，请人工复核该张主图";
 }
 
-async function makeWhiteMaster(
+/**
+ * The local half of one frame: cutout, white master, refined foregrounds and
+ * the metric all three downstream branches ask questions of.
+ *
+ * No paid request happens here. That is the whole point of the split — the
+ * detail set's model slots wait on colour clustering, clustering waits on every
+ * frame's cutout, and none of it should also be waiting behind 主图's paid
+ * background generation.
+ */
+async function prepareArticleSource(
   source: SourceImage,
   output: string,
   folderKey: string,
   signal: AbortSignal,
-  workspaceId: string,
-): Promise<MasterRenderLayers> {
+): Promise<PreparedArticleSource> {
   const cutout = await requestCutout(source, folderKey, signal);
   const rawForeground = await composeWhiteMaster(source.path, cutout, output);
-  // 主图 is the generated frame whole, product included — not a cutout laid
-  // over a generated backdrop. Compositing the two means aligning a redrawn
-  // product with a photographed one pixel for pixel, and everywhere they
-  // disagree prints as a doubled outline. The cutout still feeds SKU, the
-  // colour clustering and the crop box; it just no longer reaches 主图.
-  const [foreground, skuForeground, generated] = await Promise.all([
+  const [foreground, skuForeground, metric] = await Promise.all([
     refineProductForeground(rawForeground),
     refineSkuForeground(rawForeground),
-    requestShadowBackdrop(source, signal, workspaceId),
+    measureProductImage(output),
   ]);
+  return { source, master: output, cutout, metric, foreground, skuForeground };
+}
+
+/**
+ * The paid half of one frame, which only 主图 needs.
+ *
+ * 主图 is the generated frame whole, product included — not a cutout laid over
+ * a generated backdrop. Compositing the two means aligning a redrawn product
+ * with a photographed one pixel for pixel, and everywhere they disagree prints
+ * as a doubled outline. The prepared cutout still reaches this path, but only
+ * as the reference the redrawn article's proportions are checked against.
+ */
+async function renderMainFrame(
+  prepared: PreparedArticleSource,
+  folderKey: string,
+  signal: AbortSignal,
+  workspaceId: string,
+): Promise<MainFrameRender> {
+  const { source, cutout } = prepared;
+  const generated = await requestShadowBackdrop(source, signal, workspaceId);
   const located = await locateGeneratedArticle(generated, cutout, folderKey, signal, source.name);
   // Tone only. Nothing on the 主图 path resizes the generated frame on one
   // axis, so the article reaches the square canvas at the proportions the
   // generator drew it at, and `located.article` stays true of the picture.
-  const mainImage = await sharp(generated)
-    .linear(255 / GENERATED_SWEEP_WHITE_FLOOR, 0)
-    .removeAlpha()
-    .png()
-    .toBuffer();
+  const image = await liftGeneratedSweep(generated);
   const warnings = [await describeReframing(source, generated), located.warning]
     .filter((entry): entry is string => Boolean(entry));
-  return { foreground, skuForeground, mainImage, mainArticle: located.article, warnings };
+  return { image, article: located.article, warnings };
 }
 
 /** Square 1:1 deliverable side, matching the hand-built reference set on the share. */
 const SQUARE_CANVAS_SIZE = 800;
-/** Existing SKU framing: more white margin and no recovered shadow. */
-const SQUARE_SKU_CROP_PADDING = 0.04;
-const SQUARE_SKU_FILL_RATIO = 0.86;
+/**
+ * SKU framing: the article on white, with no shadow to leave room for.
+ *
+ * Measured against the hand-built SKU sets on the share, where the article
+ * covers 88%–98% of the frame with 0%–5.6% of margin at its tightest edge.
+ * The 0.04/0.86 pair these replace printed 73.6% and 13% — a quarter of the
+ * canvas was white the reference sets do not have.
+ *
+ * The two multiply, which is why the old pair landed so far short of its own
+ * 0.86: the padding is a fraction of the *source* frame rather than of the
+ * article, so on a white master where the article spans about half the frame,
+ * 4% each side ate another 14% of the article's size inside the crop. It is
+ * only a safety margin against cropping into the matte's own edge, so it stays
+ * as small as that job allows.
+ */
+const SQUARE_SKU_CROP_PADDING = 0.01;
+const SQUARE_SKU_FILL_RATIO = 0.94;
 /**
  * How much of the 800px canvas the article itself spans on its longer axis.
  *
@@ -1204,9 +1283,19 @@ const SQUARE_SKU_FILL_RATIO = 0.86;
  * shadow reaches well past the hat on the lit side, so letting it into this
  * budget both shrinks the article and makes its size swing shot to shot with
  * whatever shadow the generator happened to draw.
+ *
+ * They are also the only control over how much of that shadow survives, which
+ * is what set them where they are. At 0.78/0.90 the article left 5%–11% of the
+ * canvas as margin and the shadow ran off the edge: the 1234 frames printed
+ * 1.3%–8.3% of each 主图 as shadow. At 0.72/0.84 the same frames print
+ * 2.4%–9.3% — level with what cropping the generated frame to a plain square
+ * keeps, without handing the article's size back to the generator. A plain
+ * square crop put that size anywhere from 66% to 100% and clipped the one
+ * frame drawn wider than the sweep is tall, which is why this is a ratio and
+ * not a crop.
  */
-const SQUARE_COMPACT_FILL_RATIO = 0.78;
-const SQUARE_LANDSCAPE_FILL_RATIO = 0.9;
+const SQUARE_COMPACT_FILL_RATIO = 0.72;
+const SQUARE_LANDSCAPE_FILL_RATIO = 0.84;
 
 function squareFillRatio(articleAspect: number): number {
   const landscapeWeight = smoothStep(articleAspect, 1, 1.35);
@@ -1483,183 +1572,260 @@ export async function atomicPublish(stage: string, destination: string): Promise
   ]);
 }
 
-function progress(job: MonoJob, stage: string, percent: number, result: Record<string, unknown>): void {
-  updateMonoJobResult(job.id, { stage, progress: percent, ...result });
-}
+/**
+ * The four stretches of work a run is made of. `prepare` is the shared prefix —
+ * every cutout, every white master and the colour clustering — and the other
+ * three are the deliverable directories, which run concurrently once it is done.
+ */
+export type PipelineBranchId = "prepare" | "main" | "sku" | "images";
 
 /**
- * Deterministic white-master phase, then the detail set.
- *
- * The detail set requires an installed, hash-verified template bundle: the
- * bundle carries only category-level styling, so an unattended run can never
- * fall back to describing one particular article it happens to remember.
+ * Roughly what share of a run each stretch takes, so the single number the card
+ * shows still climbs at a believable rate now that three things advance at once.
+ * `main` and `images` both wait on a paid generator; `sku` is local compositing
+ * and is over almost as soon as it starts.
  */
-export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
-  const folderId = String(job.input.folderId ?? "");
-  const modelPairId = typeof job.input.modelPairId === "string" ? job.input.modelPairId : "";
-  // Resolve before any local cutout work or paid request. The current adapter
-  // only reads already-saved experiment assets; it never creates castings.
-  const modelPair = modelPairId
-    ? await resolveProductModelPair(job.workspaceId, modelPairId)
-    : undefined;
-  const { absolutePath, relativePath } = resolveProductFolder(folderId);
-  const detailFolder = resolveDetailPageFolder(relativePath);
-  const folderKey = productPipelineFolderKey(folderId);
-  const sources = await sourceImages(path.join(absolutePath, "原图"));
-  const { article: articleSources, details: detailShots } = partitionSources(sources);
-  if (!articleSources.length) throw new Error("原图目录只有 x_ 开头的细节图，缺少商品整体图");
-  const stagingRoot = productPipelineStagingRoot(job.id);
-  // Full-frame, unstyled — an intermediate used only for colour clustering and
-  // as the gpt-image-2 reference set. Never published: the deliverable a
-  // person sees under 【详情页】-待审/主图 is the square+shadow render below,
-  // built once each shot's crop box is known from classification.
-  const masterStage = path.join(stagingRoot, "主图-原始");
-  const masterDestination = path.join(detailFolder, "主图");
-  const skuDestination = path.join(detailFolder, "SKU");
-  await mkdir(masterStage, { recursive: true });
-  progress(job, "正在生成白底主图", 5, { sourceCount: articleSources.length, outputs: [] });
-  const outputs: ({ name: string; sha256: string } | undefined)[] = Array.from({ length: articleSources.length });
-  // Keyed by masterStage path so the classifier's per-shot box (computed
-  // against that exact file) can be matched back to the product and natural
-  // shadow layers from the same source frame.
-  const layersByPath = new Map<string, MasterRenderLayers>();
-  await runWithConcurrency(articleSources, PRODUCT_CUTOUT_CONCURRENCY, async (source, index) => {
-    if (signal.aborted) throw new Error("任务已取消");
-    await assertSourcesUnchanged(sources);
-    const name = `${source.stem}.jpg`; const output = path.join(masterStage, name);
-    const layers = await makeWhiteMaster(source, output, folderKey, signal, job.workspaceId);
-    layersByPath.set(output, layers);
-    outputs[index] = { name, sha256: sha256(await readFile(output)) };
-    progress(job, "正在生成白底主图", Math.round(5 + (outputs.filter(Boolean).length / articleSources.length) * 70), { sourceCount: articleSources.length, outputs: outputs.filter(Boolean) });
+const BRANCH_WEIGHT: Record<PipelineBranchId, number> = {
+  prepare: 0.2,
+  main: 0.3,
+  sku: 0.05,
+  images: 0.45,
+};
+
+export const BRANCH_LABEL: Record<PipelineBranchId, string> = {
+  prepare: "白底图与颜色识别",
+  main: "主图",
+  sku: "SKU 图",
+  images: "详情套图",
+};
+
+export type PipelineBranchState = { stage: string; progress: number };
+
+export type PipelineProgressReporter = {
+  /**
+   * Set result fields that outlive any one report. Every emitted payload
+   * replaces `result_json` wholesale, so with branches reporting concurrently
+   * the accumulated fields have to live here rather than in each call site.
+   */
+  merge(fields: Record<string, unknown>): void;
+  report(branch: PipelineBranchId, stage: string, percent: number, fields?: Record<string, unknown>): void;
+  /** Marks a branch done at whatever it managed, so it stops holding the total back. */
+  settle(branch: PipelineBranchId, stage: string, fields?: Record<string, unknown>): void;
+  snapshot(): Record<string, unknown>;
+};
+
+/**
+ * Collects what the branches report into one job result.
+ *
+ * `stage` stays a single key because that is what the card renders, and is
+ * taken from the branch with the most weighted work left — the critical path,
+ * which is the honest answer to "what is this run waiting on". The per-branch
+ * detail travels alongside it under `branches` for anyone who wants the rest.
+ */
+export function createPipelineProgress(
+  emit: (result: Record<string, unknown>) => void,
+  activeBranches: readonly PipelineBranchId[],
+): PipelineProgressReporter {
+  const fields: Record<string, unknown> = {};
+  const branches = new Map<PipelineBranchId, PipelineBranchState>(
+    activeBranches.map((id) => [id, { stage: "queued", progress: 0 }] as const),
+  );
+  const totalWeight = activeBranches.reduce((sum, id) => sum + BRANCH_WEIGHT[id], 0) || 1;
+  const snapshot = (): Record<string, unknown> => {
+    let done = 0;
+    let critical: { stage: string; remaining: number } | null = null;
+    for (const [id, state] of branches) {
+      done += BRANCH_WEIGHT[id] * state.progress;
+      // A branch nobody has reported on yet is not what the run is waiting on,
+      // however much weight it carries: while the shared prefix is running,
+      // images/ has the largest share left and has not started, and naming it
+      // would leave the card reading "排队中" for the whole first phase.
+      if (state.stage === "queued" || state.progress >= 100) continue;
+      const remaining = BRANCH_WEIGHT[id] * (100 - state.progress);
+      if (!critical || remaining > critical.remaining) critical = { stage: state.stage, remaining };
+    }
+    return {
+      ...fields,
+      stage: critical?.stage ?? "completed",
+      progress: Math.round(done / totalWeight),
+      branches: Object.fromEntries([...branches].map(([id, state]) => [id, { ...state }])),
+    };
+  };
+  const set = (branch: PipelineBranchId, stage: string, percent: number, extra?: Record<string, unknown>) => {
+    const state = branches.get(branch);
+    if (!state) return;
+    state.stage = stage;
+    // Clamped, and never allowed to walk backwards: a branch reporting an
+    // earlier stage must not make the run look like it lost ground.
+    state.progress = Math.max(state.progress, Math.min(100, Math.max(0, Math.round(percent))));
+    if (extra) Object.assign(fields, extra);
+    emit(snapshot());
+  };
+  return {
+    merge(extra) { Object.assign(fields, extra); emit(snapshot()); },
+    report(branch, stage, percent, extra) { set(branch, stage, percent, extra); },
+    settle(branch, stage, extra) { set(branch, stage, 100, extra); },
+    snapshot,
+  };
+}
+
+export type PipelineBranchFailure = { branch: PipelineBranchId; reason: string };
+
+/**
+ * Runs the deliverable branches at the same time and lets each one fail alone.
+ *
+ * The point is that a rejected 主图 must not throw away an images/ set that has
+ * already been paid for, and vice versa. Failures come back in the order the
+ * branches were declared rather than the order they happened, so the same run
+ * reports the same way twice.
+ */
+export async function runPipelineBranches(
+  branches: readonly { id: PipelineBranchId; run: () => Promise<void> }[],
+  onSettled?: (branch: PipelineBranchId, reason?: string) => void,
+): Promise<PipelineBranchFailure[]> {
+  const failures = new Map<PipelineBranchId, string>();
+  await Promise.all(branches.map(async ({ id, run }) => {
+    try {
+      await run();
+      onSettled?.(id);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      failures.set(id, reason);
+      onSettled?.(id, reason);
+    }
+  }));
+  return branches.flatMap(({ id }) => {
+    const reason = failures.get(id);
+    return reason === undefined ? [] : [{ branch: id, reason }];
   });
-  await assertSourcesUnchanged(sources);
-  const masters = articleSources.map((source) => path.join(masterStage, `${source.stem}.jpg`));
-  // TRIAL: color.members[].path (below) is a white-master path; model-slot
-  // generation resolves it back to the matching raw original through this map
-  // instead of waiting on the cutout/composite step for its reference images.
-  const masterToOriginal = new Map(articleSources.map((source) => [path.join(masterStage, `${source.stem}.jpg`), source.path]));
-  progress(job, "main_published", 25, { resumed: false, masterHashes: await Promise.all(masters.map(fileHash)) });
-  // The bundle the job asked for, not a hardcoded one — otherwise dropping a
-  // second category into config/product-pipeline would still render every
-  // product with the hat template.
-  const workflowId = String(job.input.workflowId ?? WORKFLOW_ID);
-  if (!installedWorkflowIds().has(workflowId)) throw new Error(`商品套图模板未安装：${workflowId}`);
-  const templateRoot = productTemplateRoot(workflowId);
-  const manifest = await validateTemplateBundle(templateRoot, workflowId);
-  const template = await loadProductTemplate(templateRoot);
-  if (template.version !== manifest.version) throw new Error("商品套图模板版本不匹配");
-  await assertSourcesUnchanged(sources);
-  progress(job, "classifying", 30, { templateVersion: manifest.version });
+}
 
-  // Colourways and macro crops are recovered from the shoot itself; nothing in
-  // the folder labels them, and no human edits the set between steps.
-  const classification = await classifyProductSources(masters, { hasNamedDetailShots: detailShots.length > 0 });
-  if (!classification.colors.length) throw new Error("无法识别可用商品颜色；未调用付费生图服务");
+/** Everything the three deliverable branches share once the prefix is done. */
+type BranchContext = {
+  job: MonoJob;
+  signal: AbortSignal;
+  folderKey: string;
+  stagingRoot: string;
+  detailFolder: string;
+  prepared: readonly PreparedArticleSource[];
+  classification: SourceClassification;
+  progress: PipelineProgressReporter;
+};
 
-  // 主图（方形+阴影，每张原图一份）和 SKU（每个颜色一张代表图，无阴影）都是
-  // 本地渲染，不占抠图或付费生图的名额。放在分类之后，是因为 SKU 的裁切要用
-  // classifyProductSources 量出来的 box（这张图里商品到底在哪），而 SKU 一色
-  // 一张也要靠分类结果来挑代表图。主图不用分类的 box：它用的是自己那张生成图
-  // 的抠图量出来的 layers.mainArticle，见 composeSquareDeliverable。
-  progress(job, "正在渲染方形主图与 SKU 图", 32, { colors: classification.colors.length });
-  const masterSquareStage = path.join(stagingRoot, "主图"); await mkdir(masterSquareStage, { recursive: true });
-  const skuStage = path.join(stagingRoot, "SKU"); await mkdir(skuStage, { recursive: true });
-  const tiledForegrounds: Buffer[] = Array.from({ length: classification.colors.length });
-  const allMasterShots = classification.colors.flatMap((color) => color.members);
-  // Frames the generator re-composed instead of editing in place. Collected
-  // from the shots that actually became a 主图, so the operator is only asked
-  // to re-check pictures that were published.
-  const mainFrameWarnings: string[] = [];
-  await runWithConcurrency(allMasterShots, PRODUCT_CUTOUT_CONCURRENCY, async (member) => {
-    if (signal.aborted) throw new Error("任务已取消");
-    const layers = layersByPath.get(member.path);
-    if (!layers) throw new Error(`缺少白底图中间产物：${member.path}`);
-    mainFrameWarnings.push(...layers.warnings);
-    const stem = path.parse(member.path).name;
-    // The article as located on this very generated frame, not the box the
-    // classifier measured on the white master. Classification still decides
-    // *which* shots become a 主图 and what each one is called, but nothing it
-    // measured reaches the framing.
+/**
+ * 主图: the generated frame for every whole-article shot, framed on the square.
+ *
+ * Which shots those are used to come out of `classification.colors`, which is
+ * only reachable after every cutout in the folder has landed. It is the same
+ * set either way — the clustering partitions exactly the frames this predicate
+ * accepts — but asking each frame's own metric is what lets this branch run
+ * without waiting on the rest of the folder.
+ */
+async function runMainBranch(ctx: BranchContext): Promise<{ deliverables: ProductPipelineDeliverable[]; warnings: string[] }> {
+  const shots = ctx.prepared.filter((item) => isFullArticleShot(item.metric));
+  if (!shots.length) throw new Error("没有可用于主图的商品整体图：原图不是细节特写就是抠图为空");
+  const stage = path.join(ctx.stagingRoot, "主图");
+  await mkdir(stage, { recursive: true });
+  const destination = path.join(ctx.detailFolder, "主图");
+  // Frames the generator re-composed instead of editing in place, collected
+  // from the shots that actually became a 主图 so the operator is only asked to
+  // re-check pictures that were published.
+  const warnings: string[] = [];
+  let done = 0;
+  ctx.progress.report("main", "generating_main", 2);
+  await runWithConcurrency(shots, PRODUCT_CUTOUT_CONCURRENCY, async (item) => {
+    if (ctx.signal.aborted) throw new Error("任务已取消");
+    const frame = await renderMainFrame(item, ctx.folderKey, ctx.signal, ctx.job.workspaceId);
+    warnings.push(...frame.warnings);
+    // The article as located on this very generated frame. Nothing measured on
+    // another picture reaches the framing.
     await composeSquareDeliverable(
-      layers.mainImage,
-      layers.mainArticle,
-      path.join(masterSquareStage, `${stem}.png`),
+      frame.image,
+      frame.article,
+      path.join(stage, `${item.source.stem}.png`),
       { framing: "main" },
     );
+    done += 1;
+    ctx.progress.report("main", "generating_main", (done / shots.length) * 90, { mainWarnings: [...warnings] });
   });
-  await runWithConcurrency(classification.colors, PRODUCT_CUTOUT_CONCURRENCY, async (color) => {
-    if (signal.aborted) throw new Error("任务已取消");
-    const layers = layersByPath.get(color.representative.path);
-    if (!layers) throw new Error(`缺少 SKU 代表图的中间产物：${color.representative.path}`);
-    // representative is today's best-effort stand-in for "the ~45° side shot":
-    // the standard shoot's third frame, matching the approved clean catalogue
-    // angle and avoiding the broad underside shadow exposed by frame one.
-    tiledForegrounds[color.rank] = layers.skuForeground;
-    await composeSquareDeliverable(layers.skuForeground, color.representative.metric.box, path.join(skuStage, `SKU${color.rank + 1}.png`));
+  ctx.progress.report("main", "publishing_main", 92);
+  await atomicPublish(stage, destination);
+  return { deliverables: await persistProductDirectory(ctx.job, destination, "product-main"), warnings };
+}
+
+/** SKU: one clean catalogue angle per colourway, no recovered shadow. */
+async function runSkuBranch(ctx: BranchContext): Promise<{ deliverables: ProductPipelineDeliverable[] }> {
+  const stage = path.join(ctx.stagingRoot, "SKU");
+  await mkdir(stage, { recursive: true });
+  const destination = path.join(ctx.detailFolder, "SKU");
+  const byMaster = preparedByMaster(ctx.prepared);
+  let done = 0;
+  ctx.progress.report("sku", "rendering_sku", 5);
+  await runWithConcurrency(ctx.classification.colors, PRODUCT_CUTOUT_CONCURRENCY, async (color) => {
+    if (ctx.signal.aborted) throw new Error("任务已取消");
+    const item = byMaster.get(color.representative.path);
+    if (!item) throw new Error(`缺少 SKU 代表图的中间产物：${color.representative.path}`);
+    await composeSquareDeliverable(
+      item.skuForeground,
+      color.representative.metric.box,
+      path.join(stage, `SKU${color.rank + 1}.png`),
+    );
+    done += 1;
+    ctx.progress.report("sku", "rendering_sku", (done / ctx.classification.colors.length) * 90);
   });
-  await atomicPublish(masterSquareStage, masterDestination);
-  await atomicPublish(skuStage, skuDestination);
-  const deliverables: ProductPipelineDeliverable[] = [
-    ...(await persistProductDirectory(job, masterDestination, "product-main")),
-    ...(await persistProductDirectory(job, skuDestination, "product-sku")),
-  ];
+  ctx.progress.report("sku", "publishing_sku", 92);
+  await atomicPublish(stage, destination);
+  return { deliverables: await persistProductDirectory(ctx.job, destination, "product-sku") };
+}
 
-  // TEMPORARY (shadow-backdrop trial only): skip paid model-image generation
-  // and the images/ detail set entirely so a run only exercises 主图/SKU.
-  // Remove this block — and the `PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL` constant
-  // below — once the online shadow generation is confirmed and this goes back
-  // to producing the full detail set.
-  if (PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL) {
-    await rm(masterStage, { recursive: true, force: true });
-    return {
-      stage: "completed",
-      progress: 100,
-      relativePath,
-      templateVersion: manifest.version,
-      modelPairId: modelPair?.id,
-      modelPairName: modelPair?.displayName,
-      colors: classification.colors.map((color) => ({
-        rank: color.rank,
-        lab: color.lab.map((channel) => Math.round(channel * 10) / 10),
-        shots: color.members.length,
-      })),
-      detailShots: detailShots.length || classification.details.length,
-      slots: [],
-      deliverables,
-      warnings: [...classification.warnings, ...mainFrameWarnings, "PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL：本次运行跳过了 images 详情图生成"],
-      resumed: false,
-      incomplete: false,
-      failedSlots: [],
-    };
-  }
+function preparedByMaster(prepared: readonly PreparedArticleSource[]): Map<string, PreparedArticleSource> {
+  return new Map(prepared.map((item) => [item.master, item]));
+}
 
+type ImagesBranchOutcome = {
+  deliverables: ProductPipelineDeliverable[];
+  records: Record<string, unknown>[];
+  failedSlots: FailedModelSlot[];
+  warnings: string[];
+};
+
+/** images/: the eight paid model slots plus the four assembled from the shoot. */
+async function runImagesBranch(
+  ctx: BranchContext,
+  options: {
+    template: ProductTemplate;
+    templateRoot: string;
+    sources: SourceImage[];
+    detailShots: SourceImage[];
+    baseName: string;
+    modelPair: ResolvedProductModelPair | undefined;
+  },
+): Promise<ImagesBranchOutcome> {
+  const { job, signal, classification } = ctx;
+  const { template, templateRoot, sources, detailShots, baseName, modelPair } = options;
   const slotColorRank = modelSlotColorRanks(classification.colors.length);
   const rawOnlySlots = job.input.onlySlots;
   const onlySlots = Array.isArray(rawOnlySlots) && rawOnlySlots.length ? rawOnlySlots.map(String) : null;
   const modelSlots = selectModelSlots(onlySlots);
-  const warnings = [...classification.warnings, ...mainFrameWarnings];
-  // Captured once and carried through every later progress() call and the
-  // final return: each call replaces the whole result rather than merging
-  // into it, so a field dropped from one payload just disappears from the
-  // job the moment the next stage reports in.
-  const colors = classification.colors.map((color) => ({
-    rank: color.rank,
-    lab: color.lab.map((channel) => Math.round(channel * 10) / 10),
-    shots: color.members.length,
-  }));
-  const detailShotCount = detailShots.length || classification.details.length;
-  progress(job, "generating_models", 35, {
-    colors,
-    detailShots: detailShotCount,
+  const warnings: string[] = [];
+  // color.members[].path is a white-master path; model-slot generation resolves
+  // it back to the matching raw original through this map.
+  const masterToOriginal = new Map(ctx.prepared.map((item) => [item.master, item.source.path]));
+  const byMaster = preparedByMaster(ctx.prepared);
+  // The colourway line-up wants the same silhouette SKU publishes, in rank
+  // order. Built here rather than borrowed from the SKU branch, so a failure
+  // over there cannot leave this one holding a half-filled array.
+  const tiledForegrounds = classification.colors.map((color) => {
+    const item = byMaster.get(color.representative.path);
+    if (!item) throw new Error(`缺少颜色拼版的中间产物：${color.representative.path}`);
+    return item.skuForeground;
+  });
+  ctx.progress.report("images", "generating_models", 2, {
     slotColorRanks: Object.fromEntries(slotColorRank),
-    modelPairId: modelPair?.id,
-    modelPairName: modelPair?.displayName,
     onlySlots,
-    warnings,
   });
 
-  const detailStage = path.join(stagingRoot, "images"); await mkdir(detailStage, { recursive: true });
-  const baseName = path.basename(absolutePath);
+  const detailStage = path.join(ctx.stagingRoot, "images"); await mkdir(detailStage, { recursive: true });
   const records: Record<string, unknown>[] = [];
   const { records: modelRecords, failedSlots } = await runModelGenerationPhase(
     modelSlots,
@@ -1683,19 +1849,20 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
       return { slot: slot[0], colorRank: color.rank, ...record };
     },
     ({ records: settledRecords, failedSlots: settledFailures }) => {
-      progress(job, "generating_models", 35 + (settledRecords.length + settledFailures.length) * 5, {
-        colors, detailShots: detailShotCount, slots: settledRecords, failedSlots: settledFailures, warnings,
+      const settled = settledRecords.length + settledFailures.length;
+      ctx.progress.report("images", "generating_models", 2 + (settled / Math.max(1, modelSlots.length)) * 70, {
+        slots: [...settledRecords], failedSlots: [...settledFailures],
       });
     },
   );
   records.push(...modelRecords);
-  // A run that produced nothing new has nothing worth publishing, and must
+  // A branch that produced nothing new has nothing worth publishing, and must
   // still fail loudly rather than report a hollow "success".
   if (!records.length) {
     throw new Error(`模特图全部生成失败（${modelSlots.length} 个槽位），未发布任何内容：${failedSlots.map((item) => `${item.slot}(${item.reason})`).join("；")}`);
   }
 
-  progress(job, "compositing", 75, { colors, detailShots: detailShotCount, slots: records, failedSlots, warnings });
+  ctx.progress.report("images", "compositing", 76, { slots: [...records], failedSlots });
   for (const slot of DETAIL_SLOTS.filter((item) => item[3] !== "model")) {
     const output = path.join(detailStage, `${baseName}_${slot[0]}.jpg`);
     await renderCompositedSlot(
@@ -1709,30 +1876,181 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     );
     records.push({ slot: slot[0], attempts: 0, qa: "not-required", sha256: await fileHash(output) });
   }
-  progress(job, "qa", 87, { colors, detailShots: detailShotCount, slots: records, failedSlots, warnings });
+  ctx.progress.report("images", "qa", 88, { slots: [...records], failedSlots });
   // Only the slots actually staged this run are verified/published: a failed
   // model slot (or one skipped by `onlySlots`) simply keeps whatever image is
   // already on the share, rather than blocking or clobbering it.
   const producedSlotIds = new Set(records.map((record) => record.slot as string));
   await verifyDetailOutputs(detailStage, baseName, sources, producedSlotIds);
   await assertSourcesUnchanged(sources);
-  progress(job, "publishing_images", 93, { colors, detailShots: detailShotCount, slots: records, failedSlots, warnings });
-  await publishImages(detailStage, path.join(detailFolder, "images"), baseName, producedSlotIds);
-  const detailDeliverables = await persistProductDetailDirectory(
-    job,
-    path.join(detailFolder, "images"),
-    baseName,
-  );
-  deliverables.push(...detailDeliverables);
+  ctx.progress.report("images", "publishing_images", 94);
+  const destination = path.join(ctx.detailFolder, "images");
+  await publishImages(detailStage, destination, baseName, producedSlotIds);
+  const deliverables = await persistProductDetailDirectory(job, destination, baseName);
   for (const slotId of producedSlotIds) {
-    const asset = detailDeliverables.find((item) => item.slotKey === slotId);
+    const asset = deliverables.find((item) => item.slotKey === slotId);
     const record = records.find((item) => item.slot === slotId);
     if (record && asset) record.assetId = asset.assetId;
   }
+  return { deliverables, records, failedSlots, warnings };
+}
+
+/**
+ * The shared local prefix, then the three deliverable directories at once.
+ *
+ * Every cutout, white master and the colour clustering happen first because all
+ * three branches ask something of them. Once they have, 主图 / SKU / images run
+ * concurrently and settle independently: the detail set's paid model slots no
+ * longer queue behind 主图's paid backgrounds, and neither directory is thrown
+ * away because the other one failed.
+ *
+ * The detail set requires an installed, hash-verified template bundle: the
+ * bundle carries only category-level styling, so an unattended run can never
+ * fall back to describing one particular article it happens to remember. That
+ * check stays in the prefix — a missing bundle is a misconfigured job, not one
+ * branch's bad luck, and there is no point paying for 主图 backgrounds first.
+ */
+export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
+  const folderId = String(job.input.folderId ?? "");
+  const modelPairId = typeof job.input.modelPairId === "string" ? job.input.modelPairId : "";
+  // Resolve before any local cutout work or paid request. The current adapter
+  // only reads already-saved experiment assets; it never creates castings.
+  const modelPair = modelPairId
+    ? await resolveProductModelPair(job.workspaceId, modelPairId)
+    : undefined;
+  const { absolutePath, relativePath } = resolveProductFolder(folderId);
+  const detailFolder = resolveDetailPageFolder(relativePath);
+  const folderKey = productPipelineFolderKey(folderId);
+  const sources = await sourceImages(path.join(absolutePath, "原图"));
+  const { article: articleSources, details: detailShots } = partitionSources(sources);
+  if (!articleSources.length) throw new Error("原图目录只有 x_ 开头的细节图，缺少商品整体图");
+  const stagingRoot = productPipelineStagingRoot(job.id);
+  // Full-frame, unstyled — an intermediate used only for colour clustering and
+  // as the gpt-image-2 reference set. Never published: the deliverable a person
+  // sees under 【详情页】-待审/主图 is the square render the 主图 branch builds
+  // from the generated frame.
+  const masterStage = path.join(stagingRoot, "主图-原始");
+  await mkdir(masterStage, { recursive: true });
+
+  const activeBranches: PipelineBranchId[] = PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL
+    ? ["prepare", "main", "sku"]
+    : ["prepare", "main", "sku", "images"];
+  const progress = createPipelineProgress(
+    (result) => updateMonoJobResult(job.id, result),
+    activeBranches,
+  );
+  progress.merge({
+    relativePath,
+    sourceCount: articleSources.length,
+    modelPairId: modelPair?.id,
+    modelPairName: modelPair?.displayName,
+    // Cutout is no longer skipped across runs (see masterStage above), so this
+    // is always false. Kept for API/UI compatibility with `result.resumed`.
+    resumed: false,
+    outputs: [],
+  });
+
+  const prepared: PreparedArticleSource[] = Array.from({ length: articleSources.length });
+  const outputs: ({ name: string; sha256: string } | undefined)[] = Array.from({ length: articleSources.length });
+  progress.report("prepare", "正在生成白底主图", 1);
+  await runWithConcurrency(articleSources, PRODUCT_CUTOUT_CONCURRENCY, async (source, index) => {
+    if (signal.aborted) throw new Error("任务已取消");
+    await assertSourcesUnchanged(sources);
+    const name = `${source.stem}.jpg`;
+    const output = path.join(masterStage, name);
+    prepared[index] = await prepareArticleSource(source, output, folderKey, signal);
+    outputs[index] = { name, sha256: sha256(await readFile(output)) };
+    progress.report(
+      "prepare",
+      "正在生成白底主图",
+      (outputs.filter(Boolean).length / articleSources.length) * 80,
+      { outputs: outputs.filter(Boolean) },
+    );
+  });
+  await assertSourcesUnchanged(sources);
+
+  // The bundle the job asked for, not a hardcoded one — otherwise dropping a
+  // second category into config/product-pipeline would still render every
+  // product with the hat template.
+  const workflowId = String(job.input.workflowId ?? WORKFLOW_ID);
+  if (!installedWorkflowIds().has(workflowId)) throw new Error(`商品套图模板未安装：${workflowId}`);
+  const templateRoot = productTemplateRoot(workflowId);
+  const manifest = await validateTemplateBundle(templateRoot, workflowId);
+  const template = await loadProductTemplate(templateRoot);
+  if (template.version !== manifest.version) throw new Error("商品套图模板版本不匹配");
+  await assertSourcesUnchanged(sources);
+  progress.report("prepare", "classifying", 88, {
+    templateVersion: manifest.version,
+    masterHashes: await Promise.all(prepared.map((item) => fileHash(item.master))),
+  });
+
+  // Colourways and macro crops are recovered from the shoot itself; nothing in
+  // the folder labels them, and no human edits the set between steps. The
+  // metrics were already taken while the masters were being written, so this
+  // only does the clustering.
+  const classification = classifySources(
+    prepared.map((item) => ({ path: item.master, metric: item.metric })),
+    { hasNamedDetailShots: detailShots.length > 0 },
+  );
+  if (!classification.colors.length) throw new Error("无法识别可用商品颜色；未调用付费生图服务");
+  const colors = classification.colors.map((color) => ({
+    rank: color.rank,
+    lab: color.lab.map((channel) => Math.round(channel * 10) / 10),
+    shots: color.members.length,
+  }));
+  const detailShotCount = detailShots.length || classification.details.length;
+  progress.settle("prepare", "classified", { colors, detailShots: detailShotCount });
+
+  const context: BranchContext = {
+    job, signal, folderKey, stagingRoot, detailFolder, prepared, classification, progress,
+  };
+  let mainOutcome: { deliverables: ProductPipelineDeliverable[]; warnings: string[] } | undefined;
+  let skuOutcome: { deliverables: ProductPipelineDeliverable[] } | undefined;
+  let imagesOutcome: ImagesBranchOutcome | undefined;
+  const branches: { id: PipelineBranchId; run: () => Promise<void> }[] = [
+    { id: "main", run: async () => { mainOutcome = await runMainBranch(context); } },
+    { id: "sku", run: async () => { skuOutcome = await runSkuBranch(context); } },
+  ];
+  // TEMPORARY (shadow-backdrop trial only): skip paid model-image generation
+  // and the images/ detail set entirely so a run only exercises 主图/SKU.
+  // Remove this branch — and the `PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL` constant
+  // above — once the online shadow generation is confirmed.
+  if (!PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL) {
+    branches.push({
+      id: "images",
+      run: async () => {
+        imagesOutcome = await runImagesBranch(context, {
+          template, templateRoot, sources, detailShots,
+          baseName: path.basename(absolutePath),
+          modelPair,
+        });
+      },
+    });
+  }
+  const failures = await runPipelineBranches(branches, (branch, reason) => {
+    progress.settle(branch, reason ? "branch_failed" : "branch_published");
+  });
+
   // The only staging directory not already removed by an atomicPublish call:
   // it fed classification and the gpt-image-2 references but was never itself
   // a publish target.
   await rm(masterStage, { recursive: true, force: true });
+  // A cancellation reaches every branch at once and would otherwise read as
+  // "everything failed on its own", which is not what happened and not what
+  // the operator should be told.
+  if (signal.aborted) throw new Error("任务已取消");
+  if (failures.length === branches.length) {
+    throw new Error(`${branches.length} 个交付目录全部失败，未发布任何内容：${failures.map((item) => `${BRANCH_LABEL[item.branch]}(${item.reason})`).join("；")}`);
+  }
+
+  const warnings = [
+    ...classification.warnings,
+    ...(mainOutcome?.warnings ?? []),
+    ...(imagesOutcome?.warnings ?? []),
+    ...failures.map((item) => `${BRANCH_LABEL[item.branch]}未能完成，其余目录已照常发布：${item.reason}`),
+    ...(PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL ? ["PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL：本次运行跳过了 images 详情图生成"] : []),
+  ];
+  const failedSlots = imagesOutcome?.failedSlots ?? [];
   return {
     stage: "completed",
     progress: 100,
@@ -1742,14 +2060,17 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     modelPairName: modelPair?.displayName,
     colors,
     detailShots: detailShotCount,
-    slots: records,
-    deliverables,
+    slots: imagesOutcome?.records ?? [],
+    deliverables: [
+      ...(mainOutcome?.deliverables ?? []),
+      ...(skuOutcome?.deliverables ?? []),
+      ...(imagesOutcome?.deliverables ?? []),
+    ],
     warnings,
-    // Cutout is no longer skipped across runs (see masterStage above), so this
-    // is always false. Kept for API/UI compatibility with `result.resumed`.
     resumed: false,
-    incomplete: failedSlots.length > 0,
+    incomplete: failedSlots.length > 0 || failures.length > 0,
     failedSlots,
+    failedBranches: failures.map((item) => ({ ...item, label: BRANCH_LABEL[item.branch] })),
   };
 }
 

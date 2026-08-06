@@ -55,15 +55,33 @@ const stageLabel: Record<string, string> = {
   main_published: "主图已完成，正在准备详情套图",
   正在生成白底主图: "正在生成白底主图",
   classifying: "正在识别商品颜色和角度",
+  classified: "颜色识别完成",
+  generating_main: "正在生成主图背景（调用付费生图服务）",
+  publishing_main: "正在原子发布主图",
+  rendering_sku: "正在渲染 SKU 图",
+  publishing_sku: "正在原子发布 SKU 图",
   generating_models: "正在生成模特图（调用付费生图服务）",
   compositing: "正在制作产品拼图",
   qa: "正在进行视觉与尺寸质检",
   publishing_images: "正在原子发布详情套图",
+  branch_published: "已发布",
+  branch_failed: "未能完成",
+  queued: "排队中",
   completed: "详情套图已完成",
+};
+
+/** The three deliverable directories, in the order they appear on the share. */
+const BRANCH_ORDER = ["prepare", "main", "sku", "images"] as const;
+const branchLabel: Record<string, string> = {
+  prepare: "白底图与颜色识别",
+  main: "主图",
+  sku: "SKU 图",
+  images: "详情套图",
 };
 
 type SlotRecord = { slot: string; attempts?: number; warning?: string; qa?: string };
 type FailedSlot = { slot: string; reason: string };
+type BranchState = { stage?: string; progress?: number };
 type PipelineResult = {
   stage?: string;
   progress?: number;
@@ -72,6 +90,9 @@ type PipelineResult = {
   detailShots?: number;
   slots?: SlotRecord[];
   failedSlots?: FailedSlot[];
+  /** Per-branch stage and percentage, since three of them now advance at once. */
+  branches?: Record<string, BranchState>;
+  failedBranches?: { branch: string; reason: string; label?: string }[];
   warnings?: string[];
   resumed?: boolean;
   incomplete?: boolean;
@@ -188,7 +209,9 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
           {isActive
             ? `${stageLabel[result.stage ?? ""] ?? "正在处理"}${result.progress !== undefined ? `（${result.progress}%）` : ""}`
             : job.status === "succeeded"
-              ? (result.incomplete ? "已完成（部分槽位失败）" : "已完成")
+              ? (result.failedBranches?.length
+                ? `已完成（${result.failedBranches.map((item) => item.label ?? branchLabel[item.branch] ?? item.branch).join("、")}未发布）`
+                : result.incomplete ? "已完成（部分槽位失败）" : "已完成")
               : job.status === "cancelled"
                 ? "已取消"
                 : (job.error ?? "未完成")}
@@ -223,6 +246,25 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
           );
         })}
       </div>
+
+      {/* Three directories publish independently now, so a single stage line
+          can only ever name one of them. This says where each one actually is. */}
+      {isActive && result.branches ? (
+        <ul className="text-muted-foreground grid gap-x-4 gap-y-0.5 text-xs sm:grid-cols-2">
+          {BRANCH_ORDER.filter((id) => result.branches?.[id]).map((id) => {
+            const branch = result.branches![id];
+            return (
+              <li key={id} className="flex items-baseline justify-between gap-2">
+                <span>{branchLabel[id]}</span>
+                <span className="tabular-nums">
+                  {stageLabel[branch.stage ?? ""] ?? branch.stage ?? "排队中"}
+                  {branch.progress !== undefined ? ` ${branch.progress}%` : ""}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
 
       <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-xs">
         {result.resumed ? <span className="bg-muted rounded-full px-2.5 py-1">已复用现有主图</span> : null}
