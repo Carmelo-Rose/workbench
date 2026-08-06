@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 function errorResponse(error: unknown): Response {
   if (error instanceof TenantAccessError) {
-    return NextResponse.json({ error: error.message }, { status: error.status });
+    return NextResponse.json({ error: error.message, ...(error.status === 403 ? { code: "PERMISSION_DENIED", ...(error.permission ? { permission: error.permission } : {}) } : {}) }, { status: error.status });
   }
   console.error("[workspaces] request failed", error);
   return NextResponse.json({ error: "Workspace service is unavailable" }, { status: 500 });

@@ -10,7 +10,10 @@ type Context = { params: Promise<{ id: string }> };
 
 export async function GET(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const permission = new URL(request.url).searchParams.get("download") === "1"
+      ? "resources.assets.export"
+      : "resources.assets.view";
+    const actor = actorFromWorkbenchRequest(request, permission);
     const { id } = await context.params;
     const asset = getMonoAsset(actor, id);
     if (!asset) throw new MonoHttpError(404, "素材不存在或已无权访问");

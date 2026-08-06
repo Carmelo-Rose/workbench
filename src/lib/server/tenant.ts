@@ -7,15 +7,20 @@ import {
 } from "node:crypto";
 import { getDb } from "./db";
 import {
-  canonicalPermission,
   createWorkbenchAbility,
+  expandLegacyPermission,
+  isDataScope,
+  isPermission,
+  normalizeGrants,
   organizationPermissions,
-  permissionCatalog,
+  permissionDefinition,
   systemRoleDefinitions,
   workspacePermissions as catalogWorkspacePermissions,
   type AbilityAction,
   type AbilitySubject,
   type Permission,
+  type PermissionGrant,
+  type DataScope,
   type RoleScope,
 } from "../authorization";
 import {
@@ -55,6 +60,8 @@ export type RoleSummary = {
   system: boolean;
   protected: boolean;
   permissions: Permission[];
+  grants: PermissionGrant[];
+  updatedAt: number;
   assignedCount?: number;
 };
 
@@ -71,6 +78,7 @@ export type WorkspaceActor = {
   organizationRoles: RoleSummary[];
   workspaceRoles: RoleSummary[];
   permissions: Permission[];
+  grants: PermissionGrant[];
 };
 
 export type WorkspaceMember = {
@@ -104,14 +112,17 @@ export type OrganizationSummary = {
 };
 
 export class TenantAccessError extends Error {
-  constructor(readonly status: 400 | 401 | 403 | 404 | 409 | 429, message: string) {
+  constructor(readonly status: 400 | 401 | 403 | 404 | 409 | 429, message: string, readonly permission?: string) {
     super(message);
   }
 }
 
 export function tenantErrorResponse(error: unknown): Response {
   if (error instanceof TenantAccessError) {
-    return Response.json({ error: error.message }, { status: error.status });
+    return Response.json({
+      error: error.message,
+      ...(error.status === 403 ? { code: "PERMISSION_DENIED", ...(error.permission ? { permission: error.permission } : {}) } : {}),
+    }, { status: error.status });
   }
   console.error("[tenant] request failed", error);
   return Response.json({ error: "租户服务暂时不可用" }, { status: 500 });
@@ -141,6 +152,8 @@ type DbRoleRow = {
   is_system: number;
   is_protected: number;
   permission: string | null;
+  data_scope: DataScope | null;
+  updated_at: number;
 };
 
 function localDevelopmentEnabled(): boolean {
@@ -218,12 +231,24 @@ function ensureSystemRoles(organizationId: string): void {
      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`,
   );
   const permission = db.prepare(
-    "INSERT OR IGNORE INTO role_permissions (role_id, permission) VALUES (?, ?)",
+    "INSERT OR IGNORE INTO role_permissions (role_id, permission, data_scope) VALUES (?, ?, ?)",
   );
+  const roleExists = db.prepare("SELECT 1 FROM roles WHERE id = ?");
+  const clearPermissions = db.prepare("DELETE FROM role_permissions WHERE role_id = ?");
+  const currentPermissions = db.prepare("SELECT permission, data_scope FROM role_permissions WHERE role_id = ? ORDER BY permission");
   for (const definition of systemRoleDefinitions) {
     const id = systemRoleId(organizationId, definition.key);
+    const existed = !!roleExists.get(id);
     insert.run(id, organizationId, definition.scope, definition.key, definition.name, definition.protected ? 1 : 0, now, now);
-    for (const value of definition.permissions) permission.run(id, value);
+    const editableBusinessRole = definition.key === "workspace-member" || definition.key === "workspace-viewer";
+    if (existed && editableBusinessRole) continue;
+    const expected = [...definition.grants]
+      .map((grant) => ({ permission: grant.permission, data_scope: grant.dataScope ?? null }))
+      .sort((left, right) => left.permission.localeCompare(right.permission));
+    const current = currentPermissions.all(id) as { permission: string; data_scope: string | null }[];
+    if (existed && JSON.stringify(current) === JSON.stringify(expected)) continue;
+    clearPermissions.run(id);
+    for (const grant of expected) permission.run(id, grant.permission, grant.data_scope);
   }
 }
 
@@ -231,7 +256,7 @@ function roleSummaries(roleIds: readonly string[]): RoleSummary[] {
   if (!roleIds.length) return [];
   const placeholders = roleIds.map(() => "?").join(",");
   const rows = getDb().prepare(
-    `SELECT r.id, r.role_key, r.name, r.scope, r.is_system, r.is_protected, rp.permission
+    `SELECT r.id, r.role_key, r.name, r.scope, r.is_system, r.is_protected, r.updated_at, rp.permission, rp.data_scope
        FROM roles r LEFT JOIN role_permissions rp ON rp.role_id = r.id
       WHERE r.id IN (${placeholders}) ORDER BY r.name, rp.permission`,
   ).all(...roleIds) as DbRoleRow[];
@@ -245,9 +270,12 @@ function roleSummaries(roleIds: readonly string[]): RoleSummary[] {
       system: row.is_system === 1,
       protected: row.is_protected === 1,
       permissions: [],
+      grants: [],
+      updatedAt: row.updated_at,
     };
-    if (row.permission && (permissionCatalog as readonly string[]).includes(row.permission)) {
+    if (row.permission && isPermission(row.permission)) {
       current.permissions.push(row.permission as Permission);
+      current.grants.push({ permission: row.permission, ...(row.data_scope ? { dataScope: row.data_scope } : {}) });
     }
     grouped.set(row.id, current);
   }
@@ -275,6 +303,10 @@ function permissionsForRoles(...groups: RoleSummary[][]): Permission[] {
   return [...new Set(groups.flat().flatMap((role) => role.permissions))].sort();
 }
 
+function grantsForRoles(...groups: RoleSummary[][]): PermissionGrant[] {
+  return normalizeGrants(groups.flat().flatMap((role) => role.grants));
+}
+
 function legacyWorkspaceRole(roles: RoleSummary[], fallback: string): WorkspaceRole {
   const keys = new Set(roles.map((role) => role.key));
   if (keys.has("workspace-owner")) return "owner";
@@ -287,6 +319,7 @@ function toActor(row: ActorRow): WorkspaceActor | null {
   if (row.status !== "active") return null;
   const roles = assignedRoles(row.id, row.organization_id, row.workspace_id);
   const permissions = permissionsForRoles(roles.organizationRoles, roles.workspaceRoles);
+  const grants = grantsForRoles(roles.organizationRoles, roles.workspaceRoles);
   return {
     userId: row.id,
     organizationId: row.organization_id,
@@ -299,6 +332,7 @@ function toActor(row: ActorRow): WorkspaceActor | null {
     organizationRoles: roles.organizationRoles,
     workspaceRoles: roles.workspaceRoles,
     permissions,
+    grants,
   };
 }
 
@@ -591,28 +625,28 @@ export function organizationSummaries(userId: string): OrganizationSummary[] {
   });
 }
 
-function requirementFor(permission: WorkspacePermission): { action: AbilityAction; subject: AbilitySubject } | null {
-  const canonical = canonicalPermission(permission);
-  if (!canonical) return null;
-  const requirements: Record<Permission, { action: AbilityAction; subject: AbilitySubject }> = {
-    "admin:access": { action: "read", subject: "Admin" },
-    "accounts:manage": { action: "manage", subject: "Account" },
-    "roles:manage": { action: "manage", subject: "Role" },
-    "workspaces:manage": { action: "manage", subject: "Workspace" },
-    "organization:read": { action: "read", subject: "Organization" },
-    "organization:manage": { action: "manage", subject: "Organization" },
-    "workspace:read": { action: "read", subject: "Workspace" },
-    "workspace:operate": { action: "operate", subject: "Workspace" },
-    "workspace:members:manage": { action: "manage", subject: "WorkspaceMember" },
-    "workspace:settings:manage": { action: "manage", subject: "Workspace" },
-    "runtime-config:manage": { action: "manage", subject: "RuntimeConfig" },
-  };
-  return requirements[canonical];
+export function hasPermission(actor: WorkspaceActor, permission: WorkspacePermission): boolean {
+  if (isPermission(permission)) return hasGrant(actor, permission);
+  const expanded = expandLegacyPermission(permission);
+  return expanded.length > 0 && expanded.some((item) => hasGrant(actor, item));
 }
 
-export function hasPermission(actor: WorkspaceActor, permission: WorkspacePermission): boolean {
-  const requirement = requirementFor(permission);
-  return !!requirement && createWorkbenchAbility(actor.permissions).can(requirement.action, requirement.subject);
+export function effectiveDataScope(actor: WorkspaceActor, permission: Permission): DataScope | undefined {
+  return actor.grants.find((grant) => grant.permission === permission)?.dataScope;
+}
+
+export function hasGrant(actor: WorkspaceActor, permission: Permission, ownerUserId?: string): boolean {
+  const grant = actor.grants.find((item) => item.permission === permission);
+  if (!grant) return false;
+  return grant.dataScope !== "own" || ownerUserId === undefined || ownerUserId === actor.userId;
+}
+
+/** Returns the effective scope so DAL queries can append an owner predicate. */
+export function requireGrant(actor: WorkspaceActor, permission: Permission, ownerUserId?: string): DataScope | undefined {
+  if (!hasGrant(actor, permission, ownerUserId)) {
+    throw new TenantAccessError(403, "当前账号无权执行此操作", permission);
+  }
+  return effectiveDataScope(actor, permission);
 }
 
 export function requirePermission(actor: WorkspaceActor, permission: WorkspacePermission): void {
@@ -620,7 +654,7 @@ export function requirePermission(actor: WorkspaceActor, permission: WorkspacePe
 }
 
 export function requireAbility(actor: WorkspaceActor, action: AbilityAction, subject: AbilitySubject): void {
-  if (!createWorkbenchAbility(actor.permissions).can(action, subject)) {
+  if (!createWorkbenchAbility(actor.grants, actor.userId).can(action, subject)) {
     throw new TenantAccessError(403, "当前账号无权执行此操作");
   }
 }
@@ -629,12 +663,23 @@ function isOrganizationOwner(actor: WorkspaceActor): boolean {
   return actor.organizationRoles.some((role) => role.key === "organization-owner");
 }
 
+export function isAdministratorAccount(actor: WorkspaceActor): boolean {
+  return actor.organizationRoles.some((role) => role.key === "organization-owner" || role.key === "organization-admin")
+    || actor.workspaceRoles.some((role) => role.key === "workspace-owner" || role.key === "workspace-admin");
+}
+
+export function requireAdministrator(actor: WorkspaceActor): void {
+  if (!isAdministratorAccount(actor)) {
+    throw new TenantAccessError(403, "只有所有者或管理员账号可以访问管理后台");
+  }
+}
+
 export function requireWorkspaceManager(actor: WorkspaceActor): void {
-  requirePermission(actor, "workspace:members:manage");
+  requireGrant(actor, "system.members.manage");
 }
 
 export function listWorkspaceMembers(actor: WorkspaceActor): WorkspaceMember[] {
-  requirePermission(actor, "workspace:read");
+  requireGrant(actor, "system.members.view");
   const rows = getDb().prepare(
     `SELECT u.id, u.account, u.email, u.display_name, u.department, u.status, wm.role, wm.created_at
        FROM workspace_members wm JOIN users u ON u.id = wm.user_id
@@ -675,8 +720,10 @@ function assertAssignableRoles(actor: WorkspaceActor, roleIds: string[], scope: 
   if (!isOrganizationOwner(actor) && roles.some((role) => role.key === "organization-owner" || role.key === "workspace-owner")) {
     throw new TenantAccessError(403, "只有组织所有者可以变更所有者");
   }
-  const actorPermissions = new Set(actor.permissions);
-  if (roles.some((role) => role.permissions.some((permission) => !actorPermissions.has(permission)))) {
+  if (roles.some((role) => role.grants.some((grant) => {
+    const actorGrant = actor.grants.find((item) => item.permission === grant.permission);
+    return !actorGrant || (grant.dataScope === "workspace" && actorGrant.dataScope === "own");
+  }))) {
     throw new TenantAccessError(403, "不能授予自己尚未拥有的权限");
   }
   return roles;
@@ -758,7 +805,8 @@ export function addWorkspaceMember(
 }
 
 export function createWorkspace(actor: WorkspaceActor, input: { name: string }): WorkspaceSummary {
-  requireAbility(actor, "manage", "Workspace");
+  requireAdministrator(actor);
+  requireGrant(actor, "system.workspaces.manage");
   const name = input.name.trim();
   if (!name) throw new TenantAccessError(409, "请输入工作区名称");
   const id = `ws_${randomUUID()}`;
@@ -858,7 +906,8 @@ export type AdminAccount = {
 };
 
 export function listAdminAccounts(actor: WorkspaceActor, query = ""): AdminAccount[] {
-  requireAbility(actor, "manage", "Account");
+  requireAdministrator(actor);
+  requireGrant(actor, "system.accounts.view");
   const search = `%${query.trim()}%`;
   const rows = getDb().prepare(
     `SELECT DISTINCT u.id, u.account, u.email, u.display_name, u.department, u.status
@@ -888,7 +937,8 @@ export function upsertAdminAccount(actor: WorkspaceActor, input: {
   organizationRoleIds?: string[];
   workspaceRoleIds?: Record<string, string[]>;
 }): AdminAccount {
-  requireAbility(actor, "manage", "Account");
+  requireAdministrator(actor);
+  requireGrant(actor, "system.accounts.manage");
   const account = normalizedAccount(input.account);
   const displayName = input.displayName.trim();
   if (!displayName) throw new TenantAccessError(409, "姓名不能为空");
@@ -908,6 +958,8 @@ export function upsertAdminAccount(actor: WorkspaceActor, input: {
       db.prepare("UPDATE users SET account = ?, display_name = ?, department = ?, status = ?, updated_at = ? WHERE id = ?").run(account, displayName, input.department?.trim() || null, input.status ?? user.status, Date.now(), user.id);
       if (input.status === "disabled") revokeUserSessions(user.id);
     }
+    const organizationMember = db.prepare("SELECT 1 FROM organization_members WHERE organization_id = ? AND user_id = ?").get(actor.organizationId, user.id);
+    if (!organizationMember) replaceLegacyOrganizationRole(actor.organizationId, user.id, "member");
     if (input.organizationRoleIds) setOrganizationRoles(actor, user.id, [...new Set(input.organizationRoleIds)]);
     if (input.workspaceRoleIds) for (const [workspaceId, roleIds] of Object.entries(input.workspaceRoleIds)) setWorkspaceRoles(actor, user.id, workspaceId, [...new Set(roleIds)]);
     db.exec("COMMIT");
@@ -922,7 +974,8 @@ export function upsertAdminAccount(actor: WorkspaceActor, input: {
 }
 
 export function setAccountStatus(actor: WorkspaceActor, userId: string, status: "active" | "disabled"): void {
-  requireAbility(actor, "manage", "Account");
+  requireAdministrator(actor);
+  requireGrant(actor, "system.accounts.manage");
   assertCanModifyTarget(actor, userId);
   const member = getDb().prepare("SELECT 1 FROM organization_members WHERE organization_id = ? AND user_id = ?").get(actor.organizationId, userId);
   if (!member) throw new TenantAccessError(404, "账号不存在");
@@ -933,7 +986,8 @@ export function setAccountStatus(actor: WorkspaceActor, userId: string, status: 
 }
 
 export function resetAccountPassword(actor: WorkspaceActor, userId: string): void {
-  requireAbility(actor, "manage", "Account");
+  requireAdministrator(actor);
+  requireGrant(actor, "system.accounts.manage");
   assertCanModifyTarget(actor, userId);
   const member = getDb().prepare("SELECT 1 FROM organization_members WHERE organization_id = ? AND user_id = ?").get(actor.organizationId, userId);
   if (!member) throw new TenantAccessError(404, "账号不存在");
@@ -942,8 +996,43 @@ export function resetAccountPassword(actor: WorkspaceActor, userId: string): voi
   addAudit(actor, "account.password.reset", "account", userId);
 }
 
+export function deleteAdminAccount(actor: WorkspaceActor, userId: string): void {
+  requireAdministrator(actor);
+  requireGrant(actor, "system.accounts.manage");
+  if (userId === actor.userId) throw new TenantAccessError(409, "不能删除当前登录账号");
+  assertCanModifyTarget(actor, userId);
+  const member = getDb().prepare("SELECT 1 FROM organization_members WHERE organization_id = ? AND user_id = ?").get(actor.organizationId, userId);
+  if (!member) throw new TenantAccessError(404, "账号不存在");
+  assertOwnerWillRemain(actor.organizationId, userId, []);
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(
+      `DELETE FROM workspace_member_roles WHERE user_id = ? AND workspace_id IN
+       (SELECT id FROM workspaces WHERE organization_id = ?)`,
+    ).run(userId, actor.organizationId);
+    db.prepare(
+      `DELETE FROM workspace_members WHERE user_id = ? AND workspace_id IN
+       (SELECT id FROM workspaces WHERE organization_id = ?)`,
+    ).run(userId, actor.organizationId);
+    db.prepare("DELETE FROM organization_member_roles WHERE organization_id = ? AND user_id = ?").run(actor.organizationId, userId);
+    db.prepare("DELETE FROM organization_members WHERE organization_id = ? AND user_id = ?").run(actor.organizationId, userId);
+    db.prepare("DELETE FROM workbench_sessions WHERE user_id = ?").run(userId);
+    const otherMembership = db.prepare("SELECT 1 FROM organization_members WHERE user_id = ? LIMIT 1").get(userId);
+    const auditHistory = db.prepare("SELECT 1 FROM admin_audit_log WHERE actor_user_id = ? LIMIT 1").get(userId);
+    if (!otherMembership && !auditHistory) db.prepare("DELETE FROM users WHERE id = ?").run(userId);
+    else if (!otherMembership) db.prepare("UPDATE users SET status = 'disabled', updated_at = ? WHERE id = ?").run(Date.now(), userId);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  addAudit(actor, "account.delete", "account", userId);
+}
+
 export function listAdminRoles(actor: WorkspaceActor): RoleSummary[] {
-  requireAbility(actor, "manage", "Role");
+  requireAdministrator(actor);
+  requireGrant(actor, "system.roles.view");
   const rows = getDb().prepare("SELECT id FROM roles WHERE organization_id = ? ORDER BY scope, is_system DESC, name").all(actor.organizationId) as { id: string }[];
   const roles = roleSummaries(rows.map((row) => row.id));
   for (const role of roles) {
@@ -954,18 +1043,18 @@ export function listAdminRoles(actor: WorkspaceActor): RoleSummary[] {
   return roles;
 }
 
-function validateRolePermissions(scope: RoleScope, permissions: string[]): Permission[] {
+function validateLegacyRolePermissions(scope: RoleScope, permissions: string[]): Permission[] {
   const permitted = scope === "organization" ? organizationPermissions : catalogWorkspacePermissions;
   const invalid = permissions.filter((value) => !(permitted as readonly string[]).includes(value));
   if (invalid.length) throw new TenantAccessError(409, "角色包含不属于此作用域的权限");
   return [...new Set(permissions)] as Permission[];
 }
 
-export function createAdminRole(actor: WorkspaceActor, input: { scope: RoleScope; name: string; permissions: string[]; copyFromId?: string }): RoleSummary {
+export function createAdminRoleLegacy(actor: WorkspaceActor, input: { scope: RoleScope; name: string; permissions: string[]; copyFromId?: string }): RoleSummary {
   requireAbility(actor, "manage", "Role");
   const name = input.name.trim();
   if (!name || name.length > 80) throw new TenantAccessError(409, "请输入 1 至 80 个字符的角色名称");
-  const permissions = validateRolePermissions(input.scope, input.permissions);
+  const permissions = validateLegacyRolePermissions(input.scope, input.permissions);
   if (permissions.some((permission) => !actor.permissions.includes(permission))) throw new TenantAccessError(403, "不能创建包含自己尚未拥有权限的角色");
   const id = `role_${randomUUID()}`;
   const db = getDb();
@@ -979,7 +1068,7 @@ export function createAdminRole(actor: WorkspaceActor, input: { scope: RoleScope
   return roleSummaries([id])[0]!;
 }
 
-export function updateAdminRole(actor: WorkspaceActor, roleId: string, input: { name: string; permissions: string[] }): RoleSummary {
+export function updateAdminRoleLegacy(actor: WorkspaceActor, roleId: string, input: { name: string; permissions: string[] }): RoleSummary {
   requireAbility(actor, "manage", "Role");
   const role = roleSummaries([roleId])[0];
   if (!role) throw new TenantAccessError(404, "角色不存在");
@@ -988,7 +1077,7 @@ export function updateAdminRole(actor: WorkspaceActor, roleId: string, input: { 
   if (role.protected || role.system) throw new TenantAccessError(403, "受保护的系统角色不可编辑");
   const name = input.name.trim();
   if (!name) throw new TenantAccessError(409, "角色名称不能为空");
-  const permissions = validateRolePermissions(role.scope, input.permissions);
+  const permissions = validateLegacyRolePermissions(role.scope, input.permissions);
   if (permissions.some((permission) => !actor.permissions.includes(permission))) throw new TenantAccessError(403, "不能授予自己尚未拥有的权限");
   const db = getDb();
   db.exec("BEGIN IMMEDIATE");
@@ -1003,7 +1092,7 @@ export function updateAdminRole(actor: WorkspaceActor, roleId: string, input: { 
   return roleSummaries([roleId])[0]!;
 }
 
-export function deleteAdminRole(actor: WorkspaceActor, roleId: string): void {
+export function deleteAdminRoleLegacy(actor: WorkspaceActor, roleId: string): void {
   requireAbility(actor, "manage", "Role");
   const role = roleSummaries([roleId])[0];
   if (!role) throw new TenantAccessError(404, "角色不存在");
@@ -1014,17 +1103,249 @@ export function deleteAdminRole(actor: WorkspaceActor, roleId: string): void {
   addAudit(actor, "role.delete", "role", roleId);
 }
 
+function validateRoleGrants(scope: RoleScope, input: { grants?: { permission: string; dataScope?: unknown }[]; permissions?: string[] }): PermissionGrant[] {
+  const raw: { permission: string; dataScope?: unknown }[] = input.grants ?? (input.permissions ?? []).flatMap((permission) =>
+    expandLegacyPermission(permission).map((expanded) => ({ permission: expanded })),
+  );
+  const grants: PermissionGrant[] = [];
+  for (const item of raw) {
+    if (!isPermission(item.permission)) throw new TenantAccessError(409, `未知权限：${item.permission}`);
+    const definition = permissionDefinition(item.permission)!;
+    if (definition.roleScope !== scope) throw new TenantAccessError(409, `权限 ${item.permission} 不属于此角色作用域`);
+    if (item.dataScope !== undefined && !isDataScope(item.dataScope)) throw new TenantAccessError(409, `权限 ${item.permission} 的数据范围无效`);
+    if (definition.dataScopes.length === 0 && item.dataScope !== undefined) throw new TenantAccessError(409, `权限 ${item.permission} 不支持数据范围`);
+    if (item.dataScope !== undefined && !definition.dataScopes.includes(item.dataScope)) throw new TenantAccessError(409, `权限 ${item.permission} 不支持该数据范围`);
+    const dataScope = definition.dataScopes.length === 0 ? undefined
+      : definition.dataScopes.length === 1 ? definition.dataScopes[0]
+        : (item.dataScope as DataScope | undefined) ?? "own";
+    grants.push({ permission: item.permission, ...(dataScope ? { dataScope } : {}) });
+  }
+  return normalizeGrants(grants);
+}
+
+function assertCanDelegateGrants(actor: WorkspaceActor, grants: PermissionGrant[]): void {
+  for (const grant of grants) {
+    const own = actor.grants.find((item) => item.permission === grant.permission);
+    if (!own || (grant.dataScope === "workspace" && own.dataScope === "own")) {
+      throw new TenantAccessError(403, "不能授予自己尚未拥有的权限或更宽数据范围", grant.permission);
+    }
+  }
+}
+
+function replaceRoleGrants(roleId: string, grants: PermissionGrant[]): void {
+  const db = getDb();
+  db.prepare("DELETE FROM role_permissions WHERE role_id = ?").run(roleId);
+  const insert = db.prepare("INSERT INTO role_permissions (role_id, permission, data_scope) VALUES (?, ?, ?)");
+  for (const grant of grants) insert.run(roleId, grant.permission, grant.dataScope ?? null);
+}
+
+type RoleMutationInput = {
+  scope: RoleScope;
+  name: string;
+  grants?: { permission: string; dataScope?: unknown }[];
+  permissions?: string[];
+  copyFromId?: string;
+};
+
+export function createAdminRole(actor: WorkspaceActor, input: RoleMutationInput): RoleSummary {
+  requireAdministrator(actor);
+  requireGrant(actor, "system.roles.manage");
+  const name = input.name.trim();
+  if (!name || name.length > 80) throw new TenantAccessError(409, "请输入 1 至 80 个字符的角色名称");
+  const grants = validateRoleGrants(input.scope, input);
+  assertCanDelegateGrants(actor, grants);
+  const id = `role_${randomUUID()}`;
+  const now = Date.now();
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(
+      `INSERT INTO roles (id, organization_id, scope, role_key, name, is_system, is_protected, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+    ).run(id, actor.organizationId, input.scope, `custom-${id.slice(5)}`, name, now, now);
+    replaceRoleGrants(id, grants);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  addAudit(actor, input.copyFromId ? "role.copy" : "role.create", "role", id, { before: [], after: grants });
+  return roleSummaries([id])[0]!;
+}
+
+export function updateAdminRole(actor: WorkspaceActor, roleId: string, input: { name: string; grants?: { permission: string; dataScope?: unknown }[]; permissions?: string[] }): RoleSummary {
+  requireAdministrator(actor);
+  requireGrant(actor, "system.roles.manage");
+  const role = roleSummaries([roleId])[0];
+  const belongs = getDb().prepare("SELECT 1 FROM roles WHERE id = ? AND organization_id = ?").get(roleId, actor.organizationId);
+  if (!role || !belongs) throw new TenantAccessError(404, "角色不存在");
+  const editableSystemRole = role.key === "workspace-member" || role.key === "workspace-viewer";
+  if ((role.protected || role.system) && !editableSystemRole) throw new TenantAccessError(403, "所有者和管理员系统角色不可编辑");
+  const name = input.name.trim();
+  if (!name) throw new TenantAccessError(409, "角色名称不能为空");
+  if (editableSystemRole && name !== role.name) throw new TenantAccessError(409, "成员和只读成员角色名称不可修改");
+  const grants = validateRoleGrants(role.scope, input);
+  if (editableSystemRole && grants.some((grant) => permissionDefinition(grant.permission)?.group === "system")) {
+    throw new TenantAccessError(409, "成员和只读成员只能调整业务模块授权");
+  }
+  assertCanDelegateGrants(actor, grants);
+  const actorUsesRole = [...actor.organizationRoles, ...actor.workspaceRoles].some((item) => item.id === roleId);
+  if (actorUsesRole) {
+    const other = [...actor.organizationRoles, ...actor.workspaceRoles].filter((item) => item.id !== roleId).flatMap((item) => item.grants);
+    if (!normalizeGrants([...other, ...grants]).some((grant) => grant.permission === "system.roles.manage")) {
+      throw new TenantAccessError(409, "不能通过角色变更锁死自己的角色管理权限");
+    }
+  }
+  const assigned = getDb().prepare(
+    `SELECT (SELECT COUNT(*) FROM organization_member_roles WHERE role_id = ?) +
+            (SELECT COUNT(*) FROM workspace_member_roles WHERE role_id = ?) AS count`,
+  ).get(roleId, roleId) as { count: number };
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("UPDATE roles SET name = ?, updated_at = ? WHERE id = ?").run(name, Date.now(), roleId);
+    replaceRoleGrants(roleId, grants);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  addAudit(actor, "role.update", "role", roleId, { before: role.grants, after: grants, assignedCount: assigned.count });
+  return roleSummaries([roleId])[0]!;
+}
+
+export function deleteAdminRole(actor: WorkspaceActor, roleId: string): void {
+  requireAdministrator(actor);
+  requireGrant(actor, "system.roles.manage");
+  const role = roleSummaries([roleId])[0];
+  const belongs = getDb().prepare("SELECT 1 FROM roles WHERE id = ? AND organization_id = ?").get(roleId, actor.organizationId);
+  if (!role || !belongs) throw new TenantAccessError(404, "角色不存在");
+  if (role.protected || role.system) throw new TenantAccessError(403, "受保护的系统角色不可删除");
+  const assigned = getDb().prepare(
+    `SELECT (SELECT COUNT(*) FROM organization_member_roles WHERE role_id = ?) +
+            (SELECT COUNT(*) FROM workspace_member_roles WHERE role_id = ?) AS count`,
+  ).get(roleId, roleId) as { count: number };
+  if (assigned.count > 0) throw new TenantAccessError(409, `角色仍被 ${assigned.count} 人分配，不能删除`);
+  getDb().prepare("DELETE FROM roles WHERE id = ?").run(roleId);
+  addAudit(actor, "role.delete", "role", roleId, { before: role.grants, after: [] });
+}
+
+export type PermissionAuditEntry = {
+  id: string;
+  actorUserId: string;
+  actorName: string;
+  targetRoleId: string | null;
+  action: string;
+  detail: unknown;
+  createdAt: number;
+};
+
+export function listPermissionAudit(actor: WorkspaceActor, limit = 100): PermissionAuditEntry[] {
+  requireAdministrator(actor);
+  requireGrant(actor, "system.audit.view");
+  const rows = getDb().prepare(
+    `SELECT a.id, a.actor_user_id, u.display_name, a.action, a.target_id, a.detail_json, a.created_at
+       FROM admin_audit_log a JOIN users u ON u.id = a.actor_user_id
+      WHERE a.organization_id = ? AND a.target_type = 'role'
+      ORDER BY a.created_at DESC LIMIT ?`,
+  ).all(actor.organizationId, Math.min(Math.max(limit, 1), 500)) as {
+    id: string; actor_user_id: string; display_name: string; action: string; target_id: string | null; detail_json: string | null; created_at: number;
+  }[];
+  return rows.map((row) => ({
+    id: row.id, actorUserId: row.actor_user_id, actorName: row.display_name,
+    targetRoleId: row.target_id, action: row.action,
+    detail: row.detail_json ? JSON.parse(row.detail_json) : null, createdAt: row.created_at,
+  }));
+}
+
+export function effectiveGrantsForAccount(actor: WorkspaceActor, userId: string, workspaceId = actor.workspaceId) {
+  requireAdministrator(actor);
+  requireGrant(actor, "system.accounts.view");
+  const target = workspaceActorForUser(userId, workspaceId);
+  if (target.organizationId !== actor.organizationId) throw new TenantAccessError(404, "账号不存在");
+  const sources = [...target.organizationRoles, ...target.workspaceRoles];
+  return target.grants.map((grant) => ({
+    ...grant,
+    sourceRoles: sources.filter((role) => role.grants.some((item) => item.permission === grant.permission)).map((role) => ({ id: role.id, name: role.name })),
+  }));
+}
+
 export function listAdminWorkspaces(actor: WorkspaceActor) {
-  requireAbility(actor, "manage", "Workspace");
+  requireAdministrator(actor);
+  requireGrant(actor, "system.workspaces.view");
   return getDb().prepare("SELECT id, name, slug, created_at, updated_at FROM workspaces WHERE organization_id = ? ORDER BY created_at").all(actor.organizationId) as { id: string; name: string; slug: string; created_at: number; updated_at: number }[];
 }
 
+export function deleteAdminWorkspace(actor: WorkspaceActor, workspaceId: string): void {
+  requireAdministrator(actor);
+  requireGrant(actor, "system.workspaces.manage");
+  if (workspaceId === actor.workspaceId) throw new TenantAccessError(409, "不能删除当前正在使用的工作区，请先切换工作区");
+  const db = getDb();
+  const workspace = db.prepare("SELECT name FROM workspaces WHERE id = ? AND organization_id = ?").get(workspaceId, actor.organizationId) as { name: string } | undefined;
+  if (!workspace) throw new TenantAccessError(404, "工作区不存在");
+  const remaining = db.prepare("SELECT COUNT(*) AS count FROM workspaces WHERE organization_id = ? AND id <> ?").get(actor.organizationId, workspaceId) as { count: number };
+  if (remaining.count === 0) throw new TenantAccessError(409, "组织至少需要保留一个工作区");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM mono_job_events WHERE job_id IN (SELECT id FROM mono_jobs WHERE workspace_id = ?)").run(workspaceId);
+    db.prepare("DELETE FROM mono_product_pipeline_jobs WHERE job_id IN (SELECT id FROM mono_jobs WHERE workspace_id = ?)").run(workspaceId);
+    for (const table of [
+      "mono_job_assets", "mono_product_model_pairs", "mono_product_model_profiles", "mono_subjects",
+      "collector_items", "messages", "threads", "mono_jobs", "mono_assets", "api_config",
+      "workbench_sessions", "workspace_member_roles", "workspace_members",
+    ]) db.prepare(`DELETE FROM ${table} WHERE workspace_id = ?`).run(workspaceId);
+    db.prepare("DELETE FROM workspaces WHERE id = ? AND organization_id = ?").run(workspaceId, actor.organizationId);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  addAudit(actor, "workspace.delete", "workspace", workspaceId, { name: workspace.name });
+}
+
 export function assignWorkspaceRoles(actor: WorkspaceActor, input: { userId: string; workspaceId: string; roleIds: string[] }): void {
-  requireAbility(actor, "manage", "Account");
+  requireAdministrator(actor);
+  requireGrant(actor, "system.members.manage");
   const member = getDb().prepare("SELECT 1 FROM organization_members WHERE organization_id = ? AND user_id = ?").get(actor.organizationId, input.userId);
   if (!member) throw new TenantAccessError(404, "账号不存在");
   setWorkspaceRoles(actor, input.userId, input.workspaceId, [...new Set(input.roleIds)]);
   addAudit(actor, "workspace.roles.assign", "workspace", input.workspaceId, { userId: input.userId, roleIds: input.roleIds });
+}
+
+export function removeWorkspaceMember(actor: WorkspaceActor, input: { userId: string; workspaceId: string }): void {
+  requireAdministrator(actor);
+  requireGrant(actor, "system.members.manage");
+  if (input.userId === actor.userId && input.workspaceId === actor.workspaceId) {
+    throw new TenantAccessError(409, "不能将当前登录账号移出正在使用的工作区");
+  }
+  assertCanModifyTarget(actor, input.userId);
+  const workspace = getDb().prepare("SELECT 1 FROM workspaces WHERE id = ? AND organization_id = ?").get(input.workspaceId, actor.organizationId);
+  if (!workspace) throw new TenantAccessError(404, "工作区不存在");
+  const member = getDb().prepare("SELECT 1 FROM workspace_members WHERE workspace_id = ? AND user_id = ?").get(input.workspaceId, input.userId);
+  if (!member) throw new TenantAccessError(404, "成员不在该工作区");
+  const ownsWorkspace = getDb().prepare(
+    `SELECT 1 FROM workspace_member_roles wmr JOIN roles r ON r.id = wmr.role_id
+      WHERE wmr.workspace_id = ? AND wmr.user_id = ? AND r.role_key = 'workspace-owner' LIMIT 1`,
+  ).get(input.workspaceId, input.userId);
+  if (ownsWorkspace) {
+    const otherOwner = getDb().prepare(
+      `SELECT 1 FROM workspace_member_roles wmr JOIN roles r ON r.id = wmr.role_id
+        WHERE wmr.workspace_id = ? AND wmr.user_id <> ? AND r.role_key = 'workspace-owner' LIMIT 1`,
+    ).get(input.workspaceId, input.userId);
+    if (!otherOwner) throw new TenantAccessError(409, "工作区至少需要保留一位所有者");
+  }
+  const db = getDb();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare("DELETE FROM workspace_member_roles WHERE workspace_id = ? AND user_id = ?").run(input.workspaceId, input.userId);
+    db.prepare("DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?").run(input.workspaceId, input.userId);
+    db.prepare("DELETE FROM workbench_sessions WHERE workspace_id = ? AND user_id = ?").run(input.workspaceId, input.userId);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  addAudit(actor, "workspace.member.remove", "workspace", input.workspaceId, { userId: input.userId });
 }
 
 export type ImportRow = { account: string; displayName: string; department?: string; organizationRole?: string; workspaceRole?: string; row: number };
@@ -1042,7 +1363,8 @@ function roleIdByNameOrId(actor: WorkspaceActor, scope: RoleScope, value: string
 }
 
 export function previewEmployeeImport(actor: WorkspaceActor, rows: ImportRow[]): ImportPreview {
-  requireAbility(actor, "manage", "Account");
+  requireAdministrator(actor);
+  requireGrant(actor, "system.accounts.manage");
   const errors: { row: number; message: string }[] = [];
   const seen = new Set<string>();
   for (const row of rows) {

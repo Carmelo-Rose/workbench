@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 /** 全量 JSON 备份下载。 */
 export async function GET(req: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.export");
     const snapshots = exportSnapshot({ workspaceId: actor.workspaceId, userId: actor.userId });
     return new NextResponse(
       JSON.stringify({ exportedAt: new Date().toISOString(), snapshots }, null, 2),

@@ -15,6 +15,7 @@ export const monoActorSchema = z.object({
   workspaceId: z.string().min(1).max(120),
   sessionId: z.string().min(1).max(160).optional(),
   traceId: z.string().min(1).max(160),
+  dataScope: z.enum(["own", "workspace"]).optional(),
 });
 
 export const monoAssetInputSchema = z.object({

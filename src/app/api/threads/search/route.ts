@@ -10,7 +10,7 @@ const MAX_LIMIT = 50;
 /** GET ?q=&limit= → 标题 + 正文全文检索命中列表。 */
 export async function GET(req: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.view");
     const url = new URL(req.url);
     const q = url.searchParams.get("q") ?? "";
     const limitParam = Number(url.searchParams.get("limit"));

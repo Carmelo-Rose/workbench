@@ -12,7 +12,7 @@ type Context = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "models.combinations.manage");
     const { id } = await context.params;
     const patch = await parseMonoJson(request, updateProductModelPairSchema);
     return Response.json({ pair: updateProductModelPair(actor, id, patch) });
@@ -23,7 +23,7 @@ export async function PATCH(request: Request, context: Context) {
 
 export async function DELETE(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "models.combinations.manage");
     const { id } = await context.params;
     deleteProductModelPair(actor, id);
     return new Response(null, { status: 204 });

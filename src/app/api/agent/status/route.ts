@@ -24,7 +24,7 @@ function hostOf(url: string | undefined): string | null {
 export async function GET(req: Request) {
   let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
   try {
-    actor = workspaceActorFromWorkbenchRequest(req);
+    actor = workspaceActorFromWorkbenchRequest(req, "workbench.chat.use");
   } catch (error) {
     return monoErrorResponse(error);
   }

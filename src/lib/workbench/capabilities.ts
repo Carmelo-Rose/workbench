@@ -42,6 +42,8 @@ export type CapabilityOption = {
   disabled?: boolean;
   /** 灰显 chip 尾部的徽标文案，如「即将上线」。 */
   badge?: string;
+  /** Permission required by both UI exposure and the corresponding API/tool. */
+  permission?: import("@/lib/authorization").Permission;
 };
 
 export type CapabilityGroup = {
@@ -66,6 +68,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "image",
         hint: "选择商品文件夹，一键生成帽子白底主图与详情套图",
         slash: true,
+        permission: "image.product-set.use",
       },
       {
         id: "reverse-image",
@@ -75,6 +78,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "image",
         hint: "选一张图，反推可复用的生图提示词",
         slash: true,
+        permission: "image.reverse.use",
       },
       {
         id: "generate-image",
@@ -85,6 +89,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "sparkles",
         hint: "进入生图模式，按模板出图",
         slash: true,
+        permission: "image.generate.use",
       },
       {
         id: "analyze-video",
@@ -94,6 +99,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "video",
         hint: "粘贴链接或上传，分析视频内容",
         slash: true,
+        permission: "video.analyze.use",
       },
       {
         id: "matting",
@@ -103,6 +109,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "scissors",
         hint: "选一张图，抠出主体换背景",
         slash: true,
+        permission: "image.cutout.use",
       },
     ],
   },
@@ -119,6 +126,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "film",
         hint: "创建文生或图生视频，规格以当前 provider 能力为准",
         slash: true,
+        permission: "video.generate.use",
       },
       {
         id: "video-erase",
@@ -128,6 +136,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "eraser",
         hint: "选视频，框选区域擦掉字幕/水印",
         slash: true,
+        permission: "video.erase.use",
       },
       {
         id: "video-enhance",
@@ -137,6 +146,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "wand",
         hint: "选视频，超分放大 + 去噪",
         slash: true,
+        permission: "video.enhance.use",
       },
       {
         id: "video-matting",
@@ -146,6 +156,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "scissors",
         hint: "选视频，抠出人物换纯色背景",
         slash: true,
+        permission: "video.cutout.use",
       },
       // 以下是路线图上留口子的能力：可见传达进度，不可点避免派出做不了的活。
       // 上线时把 disabled/badge 去掉、补上 action 与 slash 即可。
@@ -185,6 +196,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "activity",
         hint: "查最新榜单的新进榜与急升",
         slash: true,
+        permission: "commerce.rankings.view",
       },
       {
         id: "rank-trend",
@@ -194,6 +206,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "trending-up",
         hint: "查单个商品的排名走势",
         slash: true,
+        permission: "commerce.rankings.view",
       },
       {
         id: "collector-search",
@@ -203,6 +216,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "search",
         hint: "检索分析已导入的抓取批次",
         slash: true,
+        permission: "commerce.collection.view",
       },
       {
         id: "collector-import",
@@ -212,6 +226,7 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         iconKey: "upload",
         hint: "上传 XLSX/CSV 抓取结果",
         slash: true,
+        permission: "commerce.collection.import",
       },
     ],
   },
@@ -325,3 +340,15 @@ export const SLASH_CAPABILITY_GROUPS: SlashCapabilityGroup[] = CAPABILITY_GROUPS
 export const SLASH_CAPABILITIES: CapabilityOption[] = SLASH_CAPABILITY_GROUPS.flatMap(
   (group) => group.options,
 );
+
+export function capabilityAllowed(option: CapabilityOption, canGrant: (permission: import("@/lib/authorization").Permission) => boolean): boolean {
+  if (option.disabled && !option.permission) return false;
+  return option.permission ? canGrant(option.permission) : canGrant("workbench.chat.use");
+}
+
+export function allowedCapabilityGroups(canGrant: (permission: import("@/lib/authorization").Permission) => boolean): CapabilityGroup[] {
+  return CAPABILITY_GROUPS.map((group) => ({
+    ...group,
+    options: group.options.filter((option) => capabilityAllowed(option, canGrant)),
+  })).filter((group) => group.options.length > 0);
+}

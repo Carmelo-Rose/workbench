@@ -133,9 +133,10 @@ import {
 import { useRouter } from "next/navigation";
 import { useCapabilityActions } from "@/components/workbench/CapabilityActions";
 import {
-  CAPABILITY_GROUPS,
+  allowedCapabilityGroups,
   type CapabilityOption,
 } from "@/lib/workbench/capabilities";
+import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 import { useSlashCapabilityAdapter } from "@/components/assistant-ui/slash-capability-adapter";
 import {
   createContext,
@@ -369,10 +370,12 @@ const ComingSoonChip: FC<{ options: CapabilityOption[] }> = ({ options }) => {
 
 const ThreadSuggestions: FC = () => {
   const { run } = useCapabilityActions();
+  const { canGrant } = useWorkbenchSession();
+  const capabilityGroups = useMemo(() => allowedCapabilityGroups(canGrant), [canGrant]);
   const image2Active = useImage2Mode((state) => state.active);
   const tilt = useTilt();
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const expandedGroup = CAPABILITY_GROUPS.find(
+  const expandedGroup = capabilityGroups.find(
     (group) => group.id === expandedId,
   );
 
@@ -382,7 +385,7 @@ const ThreadSuggestions: FC = () => {
     <div className="aui-thread-welcome-suggestions flex w-full flex-col gap-2 px-4">
       <ScrollFadeRow className="w-full">
         <div className="mx-auto flex w-max items-center gap-2">
-          {CAPABILITY_GROUPS.map((group) => (
+          {capabilityGroups.map((group) => (
             <Button
               key={group.id}
               variant="ghost"
@@ -424,7 +427,7 @@ const ThreadSuggestions: FC = () => {
                       suggestionChipClass,
                       !option.slash && "border-dashed text-muted-foreground",
                     )}
-                    onClick={() => run({ action: option.action, prompt: option.prompt })}
+                    onClick={() => run({ action: option.action, prompt: option.prompt, permission: option.permission })}
                   >
                     {option.slash ? <CapabilityIcon iconKey={option.iconKey} /> : null}
                     {option.label}
@@ -495,10 +498,11 @@ const Composer: FC = () => {
   const loadSubjects = useMonoSubjectCatalog((state) => state.load);
   const structuredTemplate = useImage2StructuredTemplate();
   const { run: runCapability } = useCapabilityActions();
+  const { canGrant } = useWorkbenchSession();
   // 主体是全模式通用的「引用」，不再只在生图模式加载，让非生图下 @ 也非空。
   useEffect(() => {
-    void loadSubjects();
-  }, [loadSubjects]);
+    if (canGrant("resources.subjects.view")) void loadSubjects();
+  }, [canGrant, loadSubjects]);
   // 当前已上传的图片附件也进 @ 候选（对齐 Mono 插件的「参考图N」虚拟候选）。
   // 编号即附件顺序，与服务端编译提示词时 referenceImageUrls 的编号一致，
   // 所以 chip 只需序列化成纯文本「参考图N」，无需升格为主体。
@@ -520,7 +524,7 @@ const Composer: FC = () => {
   // picker, which shows subjects (+ a pinned create/manage action)
   // immediately — no drill-down step. `@` = 引用，全模式常驻（生图、非生图
   // 都可插主体/参考图）；仅结构化模板用槽位 UI 时让位，不弹 @ 列表。
-  const mentionItems = useMemo(() => !structuredTemplate && !videoGenerationActive ? [
+  const mentionItems = useMemo(() => canGrant("resources.subjects.view") && !structuredTemplate && !videoGenerationActive ? [
     ...subjects.map((subject) => ({
       id: subject.id,
       type: "subject",
@@ -545,7 +549,7 @@ const Composer: FC = () => {
       icon: "subject-library",
       metadata: { actionOnly: true },
     },
-  ] : undefined, [structuredTemplate, videoGenerationActive, subjects, imageAttachments, attachmentPreviews]);
+  ] : undefined, [canGrant, structuredTemplate, videoGenerationActive, subjects, imageAttachments, attachmentPreviews]);
   const mention = unstable_useMentionAdapter({
     items: mentionItems,
     includeModelContextTools: true,
@@ -570,7 +574,7 @@ const Composer: FC = () => {
   // 开视频卡 / 切生图模式）。removeOnExecute 剥掉用户敲的 /xxx；fill 型用 setText
   // 整体替换文本，本就不会残留。
   const runSlashCapability = (option: CapabilityOption) =>
-    runCapability({ action: option.action, prompt: option.prompt });
+    runCapability({ action: option.action, prompt: option.prompt, permission: option.permission });
   const slash = useSlashCapabilityAdapter({
     run: runSlashCapability,
     iconMap: capabilityIconMap,
@@ -621,7 +625,7 @@ const Composer: FC = () => {
           </div>
         </ComposerPrimitive.AttachmentDropzone>
 
-        <ComposerTriggerPopover char="@" {...mention} onActionItem={openSubjectLibraryFromDirective} />
+        {canGrant("resources.subjects.view") && <ComposerTriggerPopover char="@" {...mention} onActionItem={openSubjectLibraryFromDirective} />}
 
         {videoGenerationActive ? null : (
           <ComposerTriggerPopover
@@ -631,8 +635,8 @@ const Composer: FC = () => {
             emptyItemsLabel="没有匹配的命令"
           />
         )}
-        <SubjectLibrarySheet />
-        <AssetLibrarySheet />
+        {canGrant("resources.subjects.view") && <SubjectLibrarySheet />}
+        {canGrant("resources.assets.view") && <AssetLibrarySheet />}
       </ComposerPrimitive.Root>
     </ComposerPrimitive.Unstable_TriggerPopoverRoot>
   );
@@ -653,6 +657,7 @@ const ComposerPlusMenu: FC = () => {
   const videoGenerationActive = useVideoGenerationMode((state) => state.active);
   const activateVideoGeneration = useVideoGenerationMode((state) => state.activate);
   const resetVideoGeneration = useVideoGenerationMode((state) => state.reset);
+  const { canGrant } = useWorkbenchSession();
 
   const enterVideoGeneration = () => {
     void (async () => {
@@ -685,7 +690,7 @@ const ComposerPlusMenu: FC = () => {
             上传图片或文件
           </DropdownMenuItem>
         </ComposerPrimitive.AddAttachment>
-        <DropdownMenuItem
+        {canGrant("image.generate.use") && <DropdownMenuItem
           disabled={image2Active}
           onSelect={() => {
             if (videoGenerationActive) resetVideoGeneration();
@@ -696,23 +701,23 @@ const ComposerPlusMenu: FC = () => {
           <SparklesIcon />
           生成图片
           {image2Active ? <CheckIcon className="ml-auto" /> : null}
-        </DropdownMenuItem>
-        <DropdownMenuItem
+        </DropdownMenuItem>}
+        {canGrant("video.generate.use") && <DropdownMenuItem
           disabled={videoGenerationActive}
           onSelect={enterVideoGeneration}
         >
           <FilmIcon />
           生成视频
           {videoGenerationActive ? <CheckIcon className="ml-auto" /> : null}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openSubjectLibrary()}>
+        </DropdownMenuItem>}
+        {canGrant("resources.subjects.view") && <DropdownMenuItem onSelect={() => openSubjectLibrary()}>
           <UsersIcon />
           主体库
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => openAssetLibrary()}>
+        </DropdownMenuItem>}
+        {canGrant("resources.assets.view") && <DropdownMenuItem onSelect={() => openAssetLibrary()}>
           <ImagesIcon />
           作品库
-        </DropdownMenuItem>
+        </DropdownMenuItem>}
       </DropdownMenuContent>
     </DropdownMenu>
   );

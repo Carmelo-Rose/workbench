@@ -34,7 +34,7 @@ function isEntry(value: unknown): value is StoredEntry {
 /** GET ?format=ai-sdk/v6 → { headId, entries }（按插入序）。 */
 export async function GET(req: Request, { params }: Params) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.view");
     const { threadId } = await params;
     const format = new URL(req.url).searchParams.get("format");
     if (!format) {
@@ -53,7 +53,7 @@ export async function GET(req: Request, { params }: Params) {
 /** append：upsert 单条并把 head 指向它。 */
 export async function POST(req: Request, { params }: Params) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.manage");
     const { threadId } = await params;
     const { entry } = (await req.json()) as { entry?: unknown };
     if (!isEntry(entry)) {
@@ -69,7 +69,7 @@ export async function POST(req: Request, { params }: Params) {
 /** update：按旧 matchId 匹配后改写到新 id（重新生成消息时触发）。 */
 export async function PATCH(req: Request, { params }: Params) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.manage");
     const { threadId } = await params;
     const { entry, matchId } = (await req.json()) as {
       entry?: unknown;
@@ -92,7 +92,7 @@ export async function PATCH(req: Request, { params }: Params) {
 
 export async function DELETE(req: Request, { params }: Params) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.manage");
     const { threadId } = await params;
     const { ids } = (await req.json()) as { ids?: unknown };
     if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string")) {

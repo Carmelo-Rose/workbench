@@ -10,6 +10,7 @@ import type {
   ImageToPromptArgs,
   ImageToPromptResult,
 } from "@/lib/tools/image-to-prompt";
+import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 
 /**
  * 生成式 UI 卡片：把 image_to_prompt 工具的调用/结果渲染成对话里的一张卡片。
@@ -61,6 +62,7 @@ export const ImageToPromptToolUI = makeAssistantToolUI<
 /** 反推的下一步动作：留在对话里复制，或带着提示词进 Image2 创建图片模式。 */
 const PromptActions: FC<{ prompt: string }> = ({ prompt }) => {
   const router = useRouter();
+  const { canGrant } = useWorkbenchSession();
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -86,10 +88,10 @@ const PromptActions: FC<{ prompt: string }> = ({ prompt }) => {
         {copied ? <CheckIcon /> : <CopyIcon />}
         {copied ? "已复制" : "复制提示词"}
       </Button>
-      <Button size="sm" onClick={generate}>
+      {canGrant("image.generate.use") && <Button size="sm" onClick={generate}>
         <SparklesIcon />
         用它生图
-      </Button>
+      </Button>}
     </div>
   );
 };

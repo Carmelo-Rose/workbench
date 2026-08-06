@@ -22,7 +22,7 @@ type Context = { params: Promise<{ id: string }> };
  */
 export async function GET(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "image.product-set.use");
     const { id } = await context.params;
     const job = getJob(actor, id);
     if (!job || job.kind !== "product_pipeline") throw new MonoHttpError(404, "任务不存在或无权访问");

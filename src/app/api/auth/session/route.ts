@@ -27,12 +27,13 @@ function actorDto(actor: ReturnType<typeof currentWorkspaceActor>) {
     organizationRoles: actor.organizationRoles,
     workspaceRoles: actor.workspaceRoles,
     permissions: actor.permissions,
+    grants: actor.grants,
   };
 }
 
 function errorResponse(error: unknown): Response {
   if (error instanceof TenantAccessError) {
-    return NextResponse.json({ error: error.message }, { status: error.status });
+    return NextResponse.json({ error: error.message, ...(error.status === 403 ? { code: "PERMISSION_DENIED", ...(error.permission ? { permission: error.permission } : {}) } : {}) }, { status: error.status });
   }
   console.error("[auth] session request failed", error);
   return NextResponse.json({ error: "Authentication service is unavailable" }, { status: 500 });

@@ -18,6 +18,7 @@ import { BACKENDS, isBackendId, type BackendId } from "@/lib/backends";
 import { cn } from "@/lib/utils";
 import { getCurrentImage2ChatConfig } from "@/lib/image2-mode";
 import { getCurrentProductPipelineConfig } from "@/lib/product-pipeline-run";
+import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 
 const DOT_CLASS: Record<ConnState, string> = {
   ok: "bg-emerald-500",
@@ -96,6 +97,7 @@ export const BackendModelContext: FC = () => {
 
 function useBackendModelOptions(): ModelOption[] {
   const status = useAgentStatus((s) => s.status);
+  const { canGrant } = useWorkbenchSession();
 
   return useMemo(() => {
     const hermesState = hermesConnState(status);
@@ -121,8 +123,8 @@ function useBackendModelOptions(): ModelOption[] {
         icon: <BackendIcon backend="hermes" state={hermesState} />,
         keywords: ["agent", "hermes", "内核"],
       },
-    ];
-  }, [status]);
+    ].filter((model) => model.id === "direct" ? canGrant("workbench.backend.direct.use") : canGrant("workbench.backend.hermes.use"));
+  }, [canGrant, status]);
 }
 
 /** composer 里的模式切换器（替代原装饰性 ModelPicker）。 */
@@ -130,6 +132,12 @@ export const BackendPicker: FC = () => {
   const backend = useBackendChoice((s) => s.backend);
   const setBackend = useBackendChoice((s) => s.setBackend);
   const models = useBackendModelOptions();
+
+  useEffect(() => {
+    if (!models.some((model) => model.id === backend) && models[0] && isBackendId(models[0].id)) {
+      setBackend(models[0].id);
+    }
+  }, [backend, models, setBackend]);
 
   return (
     <ModelSelector

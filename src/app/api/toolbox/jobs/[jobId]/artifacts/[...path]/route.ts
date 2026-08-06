@@ -22,7 +22,7 @@ const PASSTHROUGH_HEADERS = [
 export async function GET(req: NextRequest, { params }: Params) {
   let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
   try {
-    actor = workspaceActorFromWorkbenchRequest(req);
+    actor = workspaceActorFromWorkbenchRequest(req, "resources.tasks.export");
   } catch (error) {
     return monoErrorResponse(error);
   }

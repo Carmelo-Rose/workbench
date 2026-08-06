@@ -25,7 +25,7 @@ const MAX_THUMBNAIL_WIDTH = 640;
  */
 export async function GET(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.tasks.export");
     const { id, index } = await context.params;
     const job = getJob(actor, id);
     if (!job) throw new MonoHttpError(404, "任务不存在或已无权访问");

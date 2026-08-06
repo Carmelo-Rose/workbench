@@ -9,13 +9,13 @@ type Context = { params: Promise<{ id: string }> };
 
 export async function GET(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.subjects.view");
     const { id } = await context.params;
     const subject = getSubject(actor, id);
     if (!subject) throw new MonoHttpError(404, "主体不存在或已无权访问");
     return Response.json({ subject: {
       ...subject,
-      editable: subject.ownerUserId === actor.userId,
+      editable: actor.dataScope === "workspace" || subject.ownerUserId === actor.userId,
       previewUrl: `/api/workbench/mono/assets/${encodeURIComponent(subject.assetId)}/content`,
     } });
   } catch (error) {
@@ -25,7 +25,7 @@ export async function GET(request: Request, context: Context) {
 
 export async function PATCH(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.subjects.manage");
     const { id } = await context.params;
     const patch = await parseMonoJson(request, monoSubjectPatchSchema);
     const subject = updateSubject(actor, id, patch);
@@ -42,7 +42,7 @@ export async function PATCH(request: Request, context: Context) {
 
 export async function DELETE(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.subjects.manage");
     const { id } = await context.params;
     if (!deleteSubject(actor, id)) throw new MonoHttpError(404, "主体不存在，或只有创建者可以删除");
     return new Response(null, { status: 204 });

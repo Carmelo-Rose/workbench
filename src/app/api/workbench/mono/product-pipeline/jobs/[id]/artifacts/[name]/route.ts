@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string; name: string }> };
 export async function GET(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request); const { id, name } = await context.params;
+    const actor = actorFromWorkbenchRequest(request, "image.product-set.use"); const { id, name } = await context.params;
     if (!/^[^\\/:*?"<>|]+\.png$/iu.test(name)) throw new MonoHttpError(404, "产物不存在");
     const job = getJob(actor, id); if (!job || job.kind !== "product_pipeline") throw new MonoHttpError(404, "任务不存在或无权访问");
     const folder = resolveProductFolder(String(job.input.folderId ?? ""));

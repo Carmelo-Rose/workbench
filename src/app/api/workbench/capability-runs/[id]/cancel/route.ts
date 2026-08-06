@@ -10,7 +10,7 @@ type Context = { params: Promise<{ id: string }> };
 
 export async function POST(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.tasks.manage");
     const { id } = await context.params;
     const job = await cancelJob(actor, id);
     if (!job) throw new MonoHttpError(404, "能力执行记录不存在，或不属于当前工作区");

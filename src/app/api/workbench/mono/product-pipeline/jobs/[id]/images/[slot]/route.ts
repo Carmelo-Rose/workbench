@@ -11,7 +11,7 @@ const MAX_THUMBNAIL_WIDTH = 2000;
 
 export async function GET(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "image.product-set.use");
     const { id, slot } = await context.params;
     if (!/^\d{2}$/u.test(slot)) throw new MonoHttpError(404, "成品图不存在");
     const job = getJob(actor, id);

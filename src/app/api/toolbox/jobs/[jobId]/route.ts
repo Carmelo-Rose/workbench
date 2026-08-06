@@ -13,7 +13,7 @@ type Params = { params: Promise<{ jobId: string }> };
 export async function GET(req: Request, { params }: Params) {
   let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
   try {
-    actor = workspaceActorFromWorkbenchRequest(req);
+    actor = workspaceActorFromWorkbenchRequest(req, "resources.tasks.view");
   } catch (error) {
     return monoErrorResponse(error);
   }

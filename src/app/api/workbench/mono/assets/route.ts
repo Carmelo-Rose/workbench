@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.assets.view");
     const url = new URL(request.url);
     if (url.searchParams.get("origin") !== "generated") {
       return Response.json({ assets: [] });
@@ -26,7 +26,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.assets.create");
     const input = await parseMonoJson(request, monoAssetInputSchema);
     return Response.json({ asset: createAsset(actor, input) }, { status: 201 });
   } catch (error) {

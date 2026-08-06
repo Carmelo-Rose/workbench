@@ -18,6 +18,8 @@ import { adoptComposerImageAsVideoFrame } from "@/components/workbench/VideoGene
 import { VideoAnalysisLauncher } from "@/components/workbench/VideoAnalysisLauncher";
 import { ProductPipelineLauncher } from "@/components/workbench/ProductPipelineLauncher";
 import type { CapabilityAction } from "@/lib/workbench/capabilities";
+import type { Permission } from "@/lib/authorization";
+import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 
 /**
  * 能力动作的单一执行器：欢迎页建议 chip 与 composer 的 `/` 命令共用同一套
@@ -28,6 +30,7 @@ import type { CapabilityAction } from "@/lib/workbench/capabilities";
 export type CapabilityRunInput = {
   action?: CapabilityAction;
   prompt: string;
+  permission?: Permission;
 };
 
 type CapabilityActionsContextValue = {
@@ -58,6 +61,7 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
   const videoGenerationActive = useVideoGenerationMode((state) => state.active);
   const activateVideoGeneration = useVideoGenerationMode((state) => state.activate);
   const resetVideoGeneration = useVideoGenerationMode((state) => state.reset);
+  const { canGrant } = useWorkbenchSession();
   const [videoDialogOpen, setVideoDialogOpen] = useState(false);
   const [productPipelineOpen, setProductPipelineOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -127,7 +131,8 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
     }
   };
 
-  const run = ({ action = "fill", prompt }: CapabilityRunInput) => {
+  const run = ({ action = "fill", prompt, permission }: CapabilityRunInput) => {
+    if (permission && !canGrant(permission)) return;
     // 从生图模式切到别的能力时，先清掉模板参考图和模式状态，避免底部的
     // "模板 / 比例 / 张数" 生图控制条残留在跟生图无关的对话里。
     if (action !== "image2-mode" && action !== "video-generation-mode" && image2Active) {

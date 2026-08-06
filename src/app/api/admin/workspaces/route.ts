@@ -3,7 +3,9 @@ import {
   assignWorkspaceRoles,
   createWorkspace,
   currentWorkspaceActor,
+  deleteAdminWorkspace,
   listAdminWorkspaces,
+  removeWorkspaceMember,
   tenantErrorResponse,
 } from "@/lib/server/tenant";
 
@@ -29,7 +31,22 @@ export async function POST(request: Request) {
       assignWorkspaceRoles(actor, { userId: body.userId, workspaceId: body.workspaceId, roleIds: body.roleIds });
       return NextResponse.json({ ok: true });
     }
+    if (body.action === "remove-member" && typeof body.userId === "string" && typeof body.workspaceId === "string") {
+      removeWorkspaceMember(actor, { userId: body.userId, workspaceId: body.workspaceId });
+      return NextResponse.json({ ok: true });
+    }
     return NextResponse.json({ error: "invalid workspace action" }, { status: 400 });
+  } catch (error) {
+    return tenantErrorResponse(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const id = new URL(request.url).searchParams.get("id");
+    if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
+    deleteAdminWorkspace(currentWorkspaceActor(request), id);
+    return new Response(null, { status: 204 });
   } catch (error) {
     return tenantErrorResponse(error);
   }

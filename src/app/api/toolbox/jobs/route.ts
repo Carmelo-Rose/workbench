@@ -4,6 +4,8 @@ import {
   monoErrorResponse,
   workspaceActorFromWorkbenchRequest,
 } from "@/lib/mono/http";
+import { requireGrant, tenantErrorResponse } from "@/lib/server/tenant";
+import type { Permission } from "@/lib/authorization";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +25,25 @@ export async function POST(req: NextRequest) {
 
   if (!body?.capability) {
     return NextResponse.json({ error: "缺少 capability" }, { status: 400 });
+  }
+
+  const permissionByCapability: Record<string, Permission> = {
+    erase: "video.erase.use",
+    enhance: "video.enhance.use",
+    matting: "video.cutout.use",
+    smart_erase: "video.erase.use",
+    video_enhance: "video.enhance.use",
+    product_cutout: "image.cutout.use",
+    "video-erase": "video.erase.use",
+    "video-enhance": "video.enhance.use",
+    "video-matting": "video.cutout.use",
+  };
+  const permission = permissionByCapability[body.capability];
+  if (!permission) return NextResponse.json({ error: "未知工具能力" }, { status: 400 });
+  try {
+    requireGrant(actor, permission);
+  } catch (error) {
+    return tenantErrorResponse(error);
   }
 
   try {

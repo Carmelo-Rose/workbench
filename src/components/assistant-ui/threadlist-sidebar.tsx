@@ -3,7 +3,7 @@
 import type * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckIcon, ImageIcon, LayoutDashboardIcon, ListTodoIcon, LogOutIcon, MessagesSquare, SettingsIcon, ShieldCheckIcon } from "lucide-react";
+import { CheckIcon, ImageIcon, LayoutDashboardIcon, LogOutIcon, MessagesSquare, SettingsIcon, ShieldCheckIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ThreadList } from "@/components/assistant-ui/thread-list";
 import { useWorkbenchSession } from "@/components/workbench/auth-gate";
-import { useJobCenter, useJobCenterActiveCount } from "@/lib/mono/job-center";
 import { useImage2Mode } from "@/lib/image2-mode";
 import { useVideoGenerationMode } from "@/lib/video-generation-mode";
 
@@ -36,6 +35,7 @@ export function ThreadListSidebar({
   const searchParams = useSearchParams();
   const resetImage2 = useImage2Mode((state) => state.reset);
   const resetVideoGeneration = useVideoGenerationMode((state) => state.reset);
+  const { canGrant } = useWorkbenchSession();
   const isImage2 = searchParams.get("mode") === "image2";
   const isVideo = searchParams.get("mode") === "video";
   // New Thread / picking another thread both leave the current conversation,
@@ -73,7 +73,7 @@ export function ThreadListSidebar({
         </div>
       </SidebarHeader>
       <SidebarContent className="aui-sidebar-content px-2">
-        <SidebarMenu className="mb-2">
+        {canGrant("image.generate.use") && <SidebarMenu className="mb-2">
           <SidebarMenuItem>
             <SidebarMenuButton asChild isActive={isImage2} tooltip="生成图片">
               <Link href="/?mode=image2">
@@ -82,7 +82,7 @@ export function ThreadListSidebar({
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
-        </SidebarMenu>
+        </SidebarMenu>}
         <div
           onClickCapture={(event) => {
             if ((isImage2 || isVideo) && (event.target as HTMLElement).closest("[data-slot='aui_thread-list-item-trigger']")) {
@@ -90,7 +90,7 @@ export function ThreadListSidebar({
             }
           }}
         >
-          <ThreadList onNewThread={isImage2 || isVideo ? exitMode : undefined} />
+          {canGrant("sessions.messages.view") && <ThreadList onNewThread={isImage2 || isVideo ? exitMode : undefined} />}
         </div>
       </SidebarContent>
       <SidebarFooter className="aui-sidebar-footer">
@@ -98,20 +98,18 @@ export function ThreadListSidebar({
           <SidebarMenuItem>
             <AccountFooterMenu onOpenSettings={onOpenSettings} />
           </SidebarMenuItem>
-          <JobCenterFooterItem />
         </SidebarMenu>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
   );
 }
-
 /**
  * 侧边栏永远可达（移动端通过顶部触发器打开为抽屉），所以账号/工作区切换
  * 放在这里而不是仅在桌面头部展示——否则窄屏下退出登录会完全没有入口。
  */
 function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) {
-  const { session, signOut, switchWorkspace, can } = useWorkbenchSession();
+  const { session, signOut, switchWorkspace, isAdministrator } = useWorkbenchSession();
 
   const selectWorkspace = async (workspaceId: string) => {
     if (workspaceId === session.workspace.id) return;
@@ -154,7 +152,7 @@ function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) 
             账号安全
           </Link>
         </DropdownMenuItem>
-        {can("read", "Admin") && (
+        {isAdministrator && (
           <DropdownMenuItem asChild className="rounded-lg">
             <Link href="/admin">
               <LayoutDashboardIcon className="size-4" />
@@ -172,25 +170,5 @@ function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) 
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-}
-
-/** 只在有正在跑/排队的任务时出现，避免长期占一格却永远没内容。 */
-function JobCenterFooterItem() {
-  const activeCount = useJobCenterActiveCount();
-  const openSheet = useJobCenter((s) => s.openSheet);
-  if (activeCount === 0) return null;
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton size="lg" onClick={openSheet} aria-label="打开任务中心">
-        <div className="flex aspect-square size-8 items-center justify-center rounded-lg border">
-          <ListTodoIcon className="size-4" />
-        </div>
-        <div className="flex min-w-0 flex-col gap-0.5 leading-none">
-          <span className="font-medium">任务中心</span>
-          <span className="text-muted-foreground truncate text-xs">{activeCount} 个任务进行中</span>
-        </div>
-      </SidebarMenuButton>
-    </SidebarMenuItem>
   );
 }

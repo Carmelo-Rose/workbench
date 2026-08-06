@@ -18,7 +18,7 @@ import {
   SunIcon,
 } from "lucide-react";
 import { useEffect, useState, type FC, type ReactNode } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ThreadListSidebar } from "@/components/assistant-ui/threadlist-sidebar";
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button";
 import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI";
@@ -55,7 +55,7 @@ import { CommandPalette } from "@/components/workbench/command-palette";
 import { ThreadFindBar } from "@/components/assistant-ui/thread-find";
 import { DraftPersistence } from "@/components/workbench/draft-persistence";
 import { GlobalShortcuts } from "@/components/workbench/global-shortcuts";
-import { JobCenterSheet } from "@/components/workbench/JobCenterSheet";
+import { JobCenterSheet, JobCenterTrigger } from "@/components/workbench/JobCenterSheet";
 import { useJobCenterPolling } from "@/lib/mono/job-center";
 import { CapabilityActionsProvider } from "@/components/workbench/CapabilityActions";
 import { Thread } from "@/components/assistant-ui/thread";
@@ -170,6 +170,8 @@ export const Assistant = () => {
 
 const Image2ModeSync: FC = () => {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const { canGrant } = useWorkbenchSession();
   const aui = useAui();
   const activate = useImage2Mode((state) => state.activate);
   const deactivate = useImage2Mode((state) => state.deactivate);
@@ -185,9 +187,14 @@ const Image2ModeSync: FC = () => {
   // `active` via getState() (not the subscribed hook) keeps this a one-way
   // URL-to-store sync instead of a second writer fighting the exit handler.
   useEffect(() => {
+    if (requested && !canGrant("image.generate.use")) {
+      if (useImage2Mode.getState().active) deactivate();
+      router.replace("/");
+      return;
+    }
     if (requested && !useImage2Mode.getState().active) activate();
     if (!requested && useImage2Mode.getState().active) deactivate();
-  }, [activate, deactivate, requested]);
+  }, [activate, canGrant, deactivate, requested, router]);
 
   // 消息树深处的卡片（反推结果、生图结果）拿不到 composer 的 ambient scope，
   // 它们只往 store 里落一份待写入内容，由这个顶层组件代为写进真正的 composer。
@@ -218,12 +225,13 @@ const Image2ModeSync: FC = () => {
 /** Query-driven entry point for the real Create Video mode. */
 const VideoGenerationModeSync: FC = () => {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const aui = useAui();
   const activate = useVideoGenerationMode((state) => state.activate);
   const deactivate = useVideoGenerationMode((state) => state.deactivate);
   const restoreCurrentJob = useVideoGenerationMode((state) => state.restoreCurrentJob);
   const requested = searchParams.get("mode") === "video";
-  const { session } = useWorkbenchSession();
+  const { session, canGrant } = useWorkbenchSession();
   const threadId = useAuiState((s) => s.threads.mainThreadId);
 
   // `requested` is the only dependency on purpose — see the matching comment
@@ -231,6 +239,11 @@ const VideoGenerationModeSync: FC = () => {
   // useExitVideoGenerationMode's direct deactivate()).
   useEffect(() => {
     if (requested) {
+      if (!canGrant("video.generate.use")) {
+        if (useVideoGenerationMode.getState().active) deactivate();
+        router.replace("/");
+        return;
+      }
       if (useImage2Mode.getState().active) useImage2Mode.getState().reset();
       if (!useVideoGenerationMode.getState().active) {
         activate();
@@ -239,7 +252,7 @@ const VideoGenerationModeSync: FC = () => {
       return;
     }
     if (useVideoGenerationMode.getState().active) deactivate();
-  }, [activate, aui, deactivate, requested]);
+  }, [activate, aui, canGrant, deactivate, requested, router]);
 
   // The finished-video card is a per-thread record, not a global one — redo
   // this lookup for whichever thread is open now so a new or different
@@ -431,6 +444,7 @@ const SessionActionsMenu: FC = () => {
 };
 
 const AssistantShell: FC = () => {
+  const { canGrant } = useWorkbenchSession();
   const [styleId, setStyleId] = useState<ThreadStyleId>(loadThreadStyle);
   const [companion, setCompanion] = useState<CompanionId>(loadCompanion);
   const [themePref, setThemePref] = useState<ThemePref>(loadThemePref);
@@ -441,9 +455,9 @@ const AssistantShell: FC = () => {
   const isWorking = useAuiState((s) => s.thread.isRunning);
 
   // 双后端健康轮询；未手动选过模式时跟随服务端默认。
-  useAgentStatusPolling();
+  useAgentStatusPolling(30_000, canGrant("workbench.chat.use"));
   // 任务中心角标：跨会话持续轮询，切换会话不丢正在跑的任务。
-  useJobCenterPolling();
+  useJobCenterPolling(10_000, canGrant("resources.tasks.view"));
   const status = useAgentStatus((s) => s.status);
   const adoptServerDefault = useBackendChoice((s) => s.adoptServerDefault);
   useEffect(() => {
@@ -490,6 +504,10 @@ const AssistantShell: FC = () => {
     setSettingsOpen(true);
   };
 
+  if (!canGrant("workbench.chat.use")) {
+    return <main className="bg-background flex min-h-dvh items-center justify-center p-6"><div className="max-w-sm rounded-2xl border bg-card p-6 text-center"><h1 className="font-semibold">无权使用 AI 对话</h1><p className="text-muted-foreground mt-2 text-sm">请联系管理员为当前角色开通“工作台 / AI 对话 / 使用”。</p></div></main>;
+  }
+
   return (
     <SidebarProvider className="h-dvh min-h-0 overflow-hidden">
       <ThreadListSidebar
@@ -513,6 +531,7 @@ const AssistantShell: FC = () => {
           <span className="text-border mx-1 hidden select-none md:block">·</span>
           <ThreadTitle />
           <div className="ml-auto flex items-center gap-1.5">
+            {canGrant("resources.tasks.view") && <JobCenterTrigger />}
             <ThemeToggle value={themePref} onChange={handleThemeChange} />
             <SessionActionsMenu />
           </div>
@@ -533,7 +552,7 @@ const AssistantShell: FC = () => {
       <CommandPalette onOpenSettings={openSettings} />
       <DraftPersistence />
       <GlobalShortcuts />
-      <JobCenterSheet />
+      {canGrant("resources.tasks.view") && <JobCenterSheet />}
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

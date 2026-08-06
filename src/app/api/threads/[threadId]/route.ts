@@ -20,7 +20,7 @@ function errorResponse(error: unknown): Response {
 
 export async function GET(req: Request, { params }: Params) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.view");
     const { threadId } = await params;
     const thread = getThread({ workspaceId: actor.workspaceId, userId: actor.userId }, threadId);
     if (!thread) {
@@ -34,7 +34,7 @@ export async function GET(req: Request, { params }: Params) {
 
 export async function PATCH(req: Request, { params }: Params) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.manage");
     const { threadId } = await params;
     const body = (await req.json()) as {
       title?: string;
@@ -56,7 +56,7 @@ export async function PATCH(req: Request, { params }: Params) {
 
 export async function DELETE(req: Request, { params }: Params) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.manage");
     const { threadId } = await params;
     deleteThread({ workspaceId: actor.workspaceId, userId: actor.userId }, threadId);
     return NextResponse.json({ ok: true });

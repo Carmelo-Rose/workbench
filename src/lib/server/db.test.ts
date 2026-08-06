@@ -73,7 +73,7 @@ describe("default workspace migration", () => {
       "SELECT organization_id FROM workspaces WHERE id = 'default'",
     ).get()).toEqual({ organization_id: "org_default" });
     expect(migrated.prepare("PRAGMA user_version").get())
-      .toEqual({ user_version: 15 });
+      .toEqual({ user_version: 16 });
     migrated.close();
   });
 
@@ -168,7 +168,7 @@ describe("default workspace migration", () => {
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mono_product_pipeline_jobs'",
     ).get()).toEqual({ name: "mono_product_pipeline_jobs" });
     expect(migrated.prepare("PRAGMA user_version").get())
-      .toEqual({ user_version: 15 });
+      .toEqual({ user_version: 16 });
     migrated.close();
   });
 

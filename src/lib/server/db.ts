@@ -7,7 +7,12 @@ import {
   legacyUserId,
   legacyWorkspaceId,
 } from "./tenant-ids";
-import { systemRoleDefinitions } from "../authorization";
+import {
+  expandLegacyPermission,
+  permissionDefinition,
+  systemRoleDefinitions,
+  type DataScope,
+} from "../authorization";
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS organizations (
@@ -79,6 +84,7 @@ CREATE TABLE IF NOT EXISTS roles (
 CREATE TABLE IF NOT EXISTS role_permissions (
   role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
   permission TEXT NOT NULL,
+  data_scope TEXT CHECK (data_scope IS NULL OR data_scope IN ('own','workspace')),
   PRIMARY KEY (role_id, permission)
 );
 CREATE TABLE IF NOT EXISTS organization_member_roles (
@@ -672,11 +678,15 @@ function migrateAccountsAndRoles(db: DatabaseSync): void {
      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`,
   );
   const addPermission = db.prepare(
-    "INSERT OR IGNORE INTO role_permissions (role_id, permission) VALUES (?, ?)",
+    "INSERT OR IGNORE INTO role_permissions (role_id, permission, data_scope) VALUES (?, ?, ?)",
   );
+  const roleExists = db.prepare("SELECT 1 FROM roles WHERE id = ?");
+  const clearPermissions = db.prepare("DELETE FROM role_permissions WHERE role_id = ?");
+  const currentPermissions = db.prepare("SELECT permission, data_scope FROM role_permissions WHERE role_id = ? ORDER BY permission");
   for (const organization of organizations) {
     for (const definition of systemRoleDefinitions) {
       const roleId = `sys_${organization.id}_${definition.key}`;
+      const existed = !!roleExists.get(roleId);
       addRole.run(
         roleId,
         organization.id,
@@ -687,7 +697,15 @@ function migrateAccountsAndRoles(db: DatabaseSync): void {
         now,
         now,
       );
-      for (const permission of definition.permissions) addPermission.run(roleId, permission);
+      const editableBusinessRole = definition.key === "workspace-member" || definition.key === "workspace-viewer";
+      if (existed && editableBusinessRole) continue;
+      const expected = [...definition.grants]
+        .map((grant) => ({ permission: grant.permission, data_scope: grant.dataScope ?? null }))
+        .sort((left, right) => left.permission.localeCompare(right.permission));
+      const current = currentPermissions.all(roleId) as { permission: string; data_scope: string | null }[];
+      if (existed && JSON.stringify(current) === JSON.stringify(expected)) continue;
+      clearPermissions.run(roleId);
+      for (const grant of expected) addPermission.run(roleId, grant.permission, grant.data_scope);
     }
   }
 
@@ -696,7 +714,11 @@ function migrateAccountsAndRoles(db: DatabaseSync): void {
   ).all() as { organization_id: string; user_id: string; role: string }[];
   const addOrganizationRole = db.prepare(
     `INSERT OR IGNORE INTO organization_member_roles
-      (organization_id, user_id, role_id, created_at) VALUES (?, ?, ?, ?)`,
+      (organization_id, user_id, role_id, created_at)
+     SELECT ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM organization_member_roles WHERE organization_id = ? AND user_id = ?
+      )`,
   );
   for (const membership of organizationAssignments) {
     const role = ["owner", "admin", "member"].includes(membership.role) ? membership.role : "member";
@@ -705,6 +727,8 @@ function migrateAccountsAndRoles(db: DatabaseSync): void {
       membership.user_id,
       `sys_${membership.organization_id}_organization-${role}`,
       now,
+      membership.organization_id,
+      membership.user_id,
     );
   }
 
@@ -714,7 +738,11 @@ function migrateAccountsAndRoles(db: DatabaseSync): void {
   ).all() as { workspace_id: string; user_id: string; role: string; organization_id: string }[];
   const addWorkspaceRole = db.prepare(
     `INSERT OR IGNORE INTO workspace_member_roles
-      (workspace_id, user_id, role_id, created_at) VALUES (?, ?, ?, ?)`,
+      (workspace_id, user_id, role_id, created_at)
+     SELECT ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM workspace_member_roles WHERE workspace_id = ? AND user_id = ?
+      )`,
   );
   for (const membership of workspaceAssignments) {
     const role = ["owner", "admin", "member", "viewer"].includes(membership.role) ? membership.role : "member";
@@ -723,7 +751,84 @@ function migrateAccountsAndRoles(db: DatabaseSync): void {
       membership.user_id,
       `sys_${membership.organization_id}_workspace-${role}`,
       now,
+      membership.workspace_id,
+      membership.user_id,
     );
+  }
+
+  // A custom role selected in the admin UI replaces the legacy member/viewer
+  // fallback. Older builds could keep re-attaching that fallback, which made
+  // the effective union much broader than the role an administrator selected.
+  db.exec(`
+    DELETE FROM workspace_member_roles
+     WHERE role_id IN (
+       SELECT id FROM roles WHERE is_system = 1 AND role_key IN ('workspace-member', 'workspace-viewer')
+     )
+       AND EXISTS (
+         SELECT 1
+           FROM workspace_member_roles custom_assignment
+           JOIN roles custom_role ON custom_role.id = custom_assignment.role_id
+          WHERE custom_assignment.workspace_id = workspace_member_roles.workspace_id
+            AND custom_assignment.user_id = workspace_member_roles.user_id
+            AND custom_role.is_system = 0
+       );
+    DELETE FROM organization_member_roles
+     WHERE role_id IN (
+       SELECT id FROM roles WHERE is_system = 1 AND role_key = 'organization-member'
+     )
+       AND EXISTS (
+         SELECT 1
+           FROM organization_member_roles custom_assignment
+           JOIN roles custom_role ON custom_role.id = custom_assignment.role_id
+          WHERE custom_assignment.organization_id = organization_member_roles.organization_id
+            AND custom_assignment.user_id = organization_member_roles.user_id
+            AND custom_role.is_system = 0
+       );
+  `);
+}
+
+/**
+ * v16: turn coarse permissions into operation grants. The migration is one
+ * transaction and only rewrites role_permissions; identities, assignments and
+ * business data are never rebuilt.
+ */
+function migrateModulePermissions(db: DatabaseSync): void {
+  const rolePermissionColumns = columns(db, "role_permissions");
+  if (!rolePermissionColumns.some((column) => column.name === "data_scope")) {
+    db.exec("ALTER TABLE role_permissions ADD COLUMN data_scope TEXT CHECK (data_scope IS NULL OR data_scope IN ('own','workspace'))");
+  }
+  const rows = db.prepare(
+    "SELECT role_id, permission, data_scope FROM role_permissions",
+  ).all() as { role_id: string; permission: string; data_scope: DataScope | null }[];
+  const legacyRows = rows.filter((row) => expandLegacyPermission(row.permission).length > 0 && !permissionDefinition(row.permission));
+  if (!legacyRows.length) return;
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const insert = db.prepare(
+      `INSERT INTO role_permissions (role_id, permission, data_scope) VALUES (?, ?, ?)
+       ON CONFLICT(role_id, permission) DO UPDATE SET data_scope = CASE
+         WHEN role_permissions.data_scope = 'workspace' OR excluded.data_scope = 'workspace' THEN 'workspace'
+         ELSE COALESCE(excluded.data_scope, role_permissions.data_scope)
+       END`,
+    );
+    const remove = db.prepare("DELETE FROM role_permissions WHERE role_id = ? AND permission = ?");
+    for (const row of legacyRows) {
+      for (const permission of expandLegacyPermission(row.permission)) {
+        const definition = permissionDefinition(permission)!;
+        const dataScope = definition.dataScopes.length === 0
+          ? null
+          : definition.dataScopes.length === 1
+            ? definition.dataScopes[0]
+            : "workspace";
+        insert.run(row.role_id, permission, dataScope);
+      }
+      remove.run(row.role_id, row.permission);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
 }
 
@@ -731,8 +836,12 @@ function ensureSchema(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(DDL);
+  if (!columns(db, "role_permissions").some((column) => column.name === "data_scope")) {
+    db.exec("ALTER TABLE role_permissions ADD COLUMN data_scope TEXT CHECK (data_scope IS NULL OR data_scope IN ('own','workspace'))");
+  }
   seedLegacyTenant(db);
   migrateAccountsAndRoles(db);
+  migrateModulePermissions(db);
   migrateThreads(db);
   migrateApiConfig(db);
   migrateProductModelLibraryToSubjects(db);
@@ -832,7 +941,7 @@ function ensureSchema(db: DatabaseSync): void {
     );
   `);
   db.exec(INDEX_DDL);
-  db.exec("PRAGMA user_version = 15");
+  db.exec("PRAGMA user_version = 16");
 }
 
 export function openWorkbenchDatabase(dbPath: string): DatabaseSync {

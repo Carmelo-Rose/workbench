@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.assets.create");
     if (!request.body) throw new MonoHttpError(400, "请求体为空，请直接以文件流作为 body 上传");
     const encodedName = request.headers.get("x-workbench-filename");
     const name = encodedName ? decodeURIComponent(encodedName) : undefined;

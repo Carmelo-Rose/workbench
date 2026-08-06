@@ -68,7 +68,7 @@ Image2 作为聊天 composer 模式运行，支持插件迁移来的 6 个模板
 聊天、direct Agent 工具和 MCP adapter 共用同一批次任务契约。
 
 外部平台 API 默认拒绝访问，必须设置 `MONO_PLATFORM_API_KEY`。Workbench 现在按
-“组织 → 工作区 → 员工”隔离会话、素材与运行时配置：管理员可在“设置 → 员工与工作区”
+“组织 → 工作区 → 员工”隔离会话、素材与运行时配置：管理员可在“管理后台”
 创建员工、分配角色和创建工作区。生产首次启动请配置
 `WORKBENCH_BOOTSTRAP_EMAIL` 与至少 12 位的 `WORKBENCH_BOOTSTRAP_PASSWORD`，它会
 幂等创建第一个所有者；本地开发仍可用 `MONO_LOCAL_DEVELOPMENT=true` 自动进入默认

@@ -15,6 +15,7 @@ import {
   type AbilityAction,
   type AbilitySubject,
   type Permission,
+  type PermissionGrant,
 } from "@/lib/authorization";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,6 +38,8 @@ export type RoleSummary = {
   system: boolean;
   protected: boolean;
   permissions: Permission[];
+  grants: PermissionGrant[];
+  updatedAt: number;
   assignedCount?: number;
 };
 
@@ -53,6 +56,7 @@ export type WorkbenchSession = {
     organizationRoles: RoleSummary[];
     workspaceRoles: RoleSummary[];
     permissions: Permission[];
+    grants: PermissionGrant[];
   };
   workspace: WorkbenchWorkspace;
   workspaces: WorkbenchWorkspace[];
@@ -64,6 +68,8 @@ type SessionContextValue = {
   switchWorkspace: (workspaceId: string) => Promise<void>;
   signOut: () => Promise<void>;
   can: (action: AbilityAction, subject: AbilitySubject) => boolean;
+  canGrant: (permission: Permission) => boolean;
+  isAdministrator: boolean;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -72,6 +78,11 @@ export function useWorkbenchSession(): SessionContextValue {
   const value = useContext(SessionContext);
   if (!value) throw new Error("useWorkbenchSession must be used inside AuthGate");
   return value;
+}
+
+export function isAdministratorActor(actor: WorkbenchSession["actor"]): boolean {
+  return actor.organizationRoles.some((role) => role.key === "organization-owner" || role.key === "organization-admin")
+    || actor.workspaceRoles.some((role) => role.key === "workspace-owner" || role.key === "workspace-admin");
 }
 
 async function jsonOrError<T>(response: Response): Promise<T> {
@@ -103,10 +114,13 @@ export function AuthGate({ children }: PropsWithChildren) {
   // a day-long active session without exposing the session token to JavaScript.
   useEffect(() => {
     const refreshQuietly = () => { void refresh().catch(() => undefined); };
+    const refreshWhenVisible = () => { if (document.visibilityState === "visible") refreshQuietly(); };
     window.addEventListener("focus", refreshQuietly);
-    const interval = window.setInterval(refreshQuietly, 24 * 60 * 60 * 1000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    const interval = window.setInterval(refreshQuietly, 15_000);
     return () => {
       window.removeEventListener("focus", refreshQuietly);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
       window.clearInterval(interval);
     };
   }, [refresh]);
@@ -168,7 +182,11 @@ export function AuthGate({ children }: PropsWithChildren) {
   }, []);
 
   const can = useCallback((action: AbilityAction, subject: AbilitySubject) => {
-    return !!session && createWorkbenchAbility(session.actor.permissions).can(action, subject);
+    return !!session && createWorkbenchAbility(session.actor.grants, session.actor.userId).can(action, subject);
+  }, [session]);
+
+  const canGrant = useCallback((permission: Permission) => {
+    return !!session?.actor.grants.some((grant) => grant.permission === permission);
   }, [session]);
 
   const value = useMemo<SessionContextValue | null>(() => session ? {
@@ -177,7 +195,9 @@ export function AuthGate({ children }: PropsWithChildren) {
     switchWorkspace,
     signOut,
     can,
-  } : null, [can, refresh, session, signOut, switchWorkspace]);
+    canGrant,
+    isAdministrator: isAdministratorActor(session.actor),
+  } : null, [can, canGrant, refresh, session, signOut, switchWorkspace]);
 
   if (loading) {
     return (

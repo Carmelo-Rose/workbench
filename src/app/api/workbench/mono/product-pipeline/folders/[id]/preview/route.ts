@@ -13,7 +13,7 @@ const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp"]);
 
 export async function GET(request: Request, context: Context) {
   try {
-    actorFromWorkbenchRequest(request);
+    actorFromWorkbenchRequest(request, "image.product-set.use");
     const { id } = await context.params;
     const folder = resolveProductFolder(id);
     const originalDir = path.resolve(folder.absolutePath, "原图");

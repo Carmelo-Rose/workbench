@@ -15,7 +15,7 @@ type Context = { params: Promise<{ id: string }> };
  */
 export async function GET(request: Request, context: Context) {
   try {
-    actorFromWorkbenchRequest(request);
+    actorFromWorkbenchRequest(request, "image.product-set.use");
     const { id } = await context.params;
     const folder = resolveProductFolder(id);
     return Response.json({ absolutePath: folder.absolutePath });

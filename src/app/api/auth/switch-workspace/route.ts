@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 function errorResponse(error: unknown): Response {
   if (error instanceof TenantAccessError) {
-    return NextResponse.json({ error: error.message }, { status: error.status });
+    return NextResponse.json({ error: error.message, ...(error.status === 403 ? { code: "PERMISSION_DENIED", ...(error.permission ? { permission: error.permission } : {}) } : {}) }, { status: error.status });
   }
   console.error("[auth] workspace switch failed", error);
   return NextResponse.json({ error: "Workspace switch failed" }, { status: 500 });
@@ -41,6 +41,7 @@ export async function POST(req: Request) {
         organizationRoles: session.actor.organizationRoles,
         workspaceRoles: session.actor.workspaceRoles,
         permissions: session.actor.permissions,
+        grants: session.actor.grants,
       },
       workspace: currentWorkspace(session.actor),
       workspaces: workspaceSummaries(session.actor.userId),

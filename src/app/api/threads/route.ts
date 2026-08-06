@@ -19,7 +19,7 @@ function errorResponse(error: unknown): Response {
 /** 线程列表；lastMessageAt 以 epoch ms 返回，客户端转 Date。 */
 export async function GET(req: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.view");
     return NextResponse.json({
       threads: listThreads({ workspaceId: actor.workspaceId, userId: actor.userId }),
     });
@@ -31,7 +31,7 @@ export async function GET(req: Request) {
 /** initialize：幂等创建，threadId 即 remoteId。 */
 export async function POST(req: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.manage");
     const { threadId } = (await req.json()) as { threadId?: string };
     if (!threadId || typeof threadId !== "string") {
       return NextResponse.json({ error: "threadId is required" }, { status: 400 });
@@ -48,7 +48,7 @@ export async function POST(req: Request) {
 /** 全部清空（设置页"清除所有会话"）。 */
 export async function DELETE(req: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.manage");
     deleteAllThreads({ workspaceId: actor.workspaceId, userId: actor.userId });
     return NextResponse.json({ ok: true });
   } catch (error) {

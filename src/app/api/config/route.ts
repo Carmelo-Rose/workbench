@@ -15,7 +15,7 @@ import { runWithTenantContext } from "@/lib/server/tenant-context";
 export async function GET(req: Request) {
   try {
     const actor = currentWorkspaceActor(req);
-    requirePermission(actor, "config:manage");
+    requirePermission(actor, "system.runtime-config.view");
     return runWithTenantContext(actor, () =>
       NextResponse.json({ groups: getAllConfigForDisplay(actor.workspaceId) }),
     );
@@ -31,7 +31,7 @@ const ALL_KEYS = new Set<string>(
 export async function POST(req: Request) {
   try {
     const actor = currentWorkspaceActor(req);
-    requirePermission(actor, "config:manage");
+    requirePermission(actor, "system.runtime-config.manage");
     return await runWithTenantContext(actor, async () => {
       const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
       if (!body || typeof body !== "object") {

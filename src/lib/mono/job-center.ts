@@ -17,7 +17,7 @@ type JobCenterStore = {
   refresh: () => Promise<void>;
 };
 
-/** 侧边栏角标与任务中心 Sheet 共享同一份轮询结果，跨全部任务类型。 */
+/** 任务入口与任务中心 Sheet 共享同一份轮询结果，跨全部任务类型。 */
 export const useJobCenter = create<JobCenterStore>((set, get) => ({
   jobs: [],
   loading: false,
@@ -48,10 +48,11 @@ export const useJobCenter = create<JobCenterStore>((set, get) => ({
 }));
 
 /** 在应用外壳挂一次：进入时探测，之后每 10s 及窗口聚焦时刷新。 */
-export function useJobCenterPolling(intervalMs = 10_000) {
+export function useJobCenterPolling(intervalMs = 10_000, enabled = true) {
   const refresh = useJobCenter((state) => state.refresh);
 
   useEffect(() => {
+    if (!enabled) return;
     void refresh();
     const timer = setInterval(() => void refresh(), intervalMs);
     const onFocus = () => void refresh();
@@ -60,7 +61,7 @@ export function useJobCenterPolling(intervalMs = 10_000) {
       clearInterval(timer);
       window.removeEventListener("focus", onFocus);
     };
-  }, [refresh, intervalMs]);
+  }, [enabled, refresh, intervalMs]);
 }
 
 export function useJobCenterActiveCount(): number {

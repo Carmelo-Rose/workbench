@@ -15,6 +15,7 @@ import { tenantContext } from "@/lib/server/tenant-context";
 type CollectorToolContext = {
   userId?: string;
   workspaceId?: string;
+  dataScope?: "own" | "workspace";
 };
 
 const scopePrefixSchema = z
@@ -108,7 +109,7 @@ export function createCollectorTools(context: CollectorToolContext = {}) {
     collector_list_batches: tool({
       description: "列出已导入 Workbench 的抓取结果批次（抖音/小红书搜索采集，来自 XLSX 导入）。",
       inputSchema: z.object({}),
-      execute: () => ({ batches: listCollectorBatches(resolvedWorkspaceId) }),
+      execute: () => ({ batches: listCollectorBatches(resolvedWorkspaceId, context.dataScope === "own" ? context.userId : undefined) }),
     }),
     collector_search_items: tool({
       description: "检索已导入的抖音/小红书抓取内容（标题、作者、互动数据），用于素材调研和竞品图文对比。",
@@ -124,6 +125,7 @@ export function createCollectorTools(context: CollectorToolContext = {}) {
           platform: input.platform,
           batchId: input.batchId,
           limit: input.limit,
+          userId: context.dataScope === "own" ? context.userId : undefined,
         }),
       }),
     }),

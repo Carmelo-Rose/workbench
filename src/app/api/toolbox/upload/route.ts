@@ -17,7 +17,7 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
   try {
-    actor = workspaceActorFromWorkbenchRequest(req);
+    actor = workspaceActorFromWorkbenchRequest(req, "resources.assets.create");
   } catch (error) {
     return monoErrorResponse(error);
   }

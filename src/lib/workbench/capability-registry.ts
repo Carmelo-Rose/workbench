@@ -14,6 +14,7 @@ import {
   createVideoGenerationJob,
   createVideoAnalysisJob,
 } from "@/lib/mono/service";
+import type { Permission } from "@/lib/authorization";
 
 export type CapabilityAssetKind = "image" | "video";
 
@@ -29,6 +30,7 @@ export type CapabilityAssetKind = "image" | "video";
  */
 export type CapabilityDefinition<TInput = unknown> = {
   id: string;
+  permission: Permission;
   mode: "sync" | "async";
   /** 这个能力接受哪类素材作为输入引用，供未来 UI/校验使用；本轮不强制校验。 */
   assetKinds: CapabilityAssetKind[];
@@ -51,6 +53,7 @@ export type CapabilityDefinition<TInput = unknown> = {
 export const CAPABILITY_REGISTRY: Record<string, CapabilityDefinition<any>> = {
   image_to_prompt: {
     id: "image_to_prompt",
+    permission: "image.reverse.use",
     mode: "sync",
     assetKinds: ["image"],
     chatToolDescription:
@@ -60,6 +63,7 @@ export const CAPABILITY_REGISTRY: Record<string, CapabilityDefinition<any>> = {
   },
   mono_analyze_video: {
     id: "mono_analyze_video",
+    permission: "video.analyze.use",
     mode: "async",
     assetKinds: ["video"],
     chatToolDescription:
@@ -70,6 +74,7 @@ export const CAPABILITY_REGISTRY: Record<string, CapabilityDefinition<any>> = {
   },
   mono_matting: {
     id: "mono_matting",
+    permission: "image.cutout.use",
     mode: "async",
     assetKinds: ["image", "video"],
     chatToolDescription:
@@ -80,6 +85,7 @@ export const CAPABILITY_REGISTRY: Record<string, CapabilityDefinition<any>> = {
   },
   mono_generate_image: {
     id: "mono_generate_image",
+    permission: "image.generate.use",
     mode: "async",
     assetKinds: ["image"],
     chatToolDescription:
@@ -90,6 +96,7 @@ export const CAPABILITY_REGISTRY: Record<string, CapabilityDefinition<any>> = {
   },
   mono_generate_video: {
     id: "mono_generate_video",
+    permission: "video.generate.use",
     mode: "async",
     assetKinds: ["image"],
     chatToolDescription: "创建真实的视频生成任务。输入必须引用已登记的首帧/尾帧素材 ID；能力规格以当前 provider 返回的 capability 为准。",

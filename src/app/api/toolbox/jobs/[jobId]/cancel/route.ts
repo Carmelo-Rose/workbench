@@ -13,7 +13,7 @@ type Params = { params: Promise<{ jobId: string }> };
 export async function POST(req: Request, { params }: Params) {
   let actor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
   try {
-    actor = workspaceActorFromWorkbenchRequest(req);
+    actor = workspaceActorFromWorkbenchRequest(req, "resources.tasks.manage");
   } catch (error) {
     return monoErrorResponse(error);
   }

@@ -7,10 +7,15 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const url = new URL(request.url);
+    const exporting = url.searchParams.get("export") === "1";
+    const actor = actorFromWorkbenchRequest(
+      request,
+      exporting ? "resources.subjects.export" : "resources.subjects.view",
+    );
     return Response.json({ subjects: listSubjects(actor).map((subject) => ({
       ...subject,
-      editable: subject.ownerUserId === actor.userId,
+      editable: actor.dataScope === "workspace" || subject.ownerUserId === actor.userId,
       previewUrl: `/api/workbench/mono/assets/${encodeURIComponent(subject.assetId)}/content`,
     })) });
   } catch (error) {
@@ -20,7 +25,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.subjects.create");
     const input = await parseMonoJson(request, monoSubjectInputSchema);
     const subject = createSubject(actor, input);
     return Response.json({ subject: {

@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 /** Live provider capability document; clients must not infer support from model names. */
 export async function GET(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "video.generate.use");
     return Response.json({
       workspaceId: actor.workspaceId,
       capabilities: getVideoGenerationCapabilities(actor.workspaceId),

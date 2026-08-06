@@ -171,8 +171,8 @@ export function createMonoAsset(
 
 export function getMonoAsset(actor: MonoActor, assetId: string): MonoAsset | null {
   const row = getDb().prepare(
-    "SELECT * FROM mono_assets WHERE id = ? AND workspace_id = ?",
-  ).get(assetId, actor.workspaceId) as AssetRow | undefined;
+    `SELECT * FROM mono_assets WHERE id = ? AND workspace_id = ?${actor.dataScope === "own" ? " AND user_id = ?" : ""}`,
+  ).get(assetId, actor.workspaceId, ...(actor.dataScope === "own" ? [actor.userId] : [])) as AssetRow | undefined;
   return row ? toAsset(row) : null;
 }
 
@@ -223,12 +223,16 @@ export function listMonoJobAssets(
 }
 
 export function listGeneratedMonoAssets(
-  actor: Pick<MonoActor, "workspaceId">,
+  actor: Pick<MonoActor, "workspaceId" | "userId" | "dataScope">,
   limit = 24,
   beforeCreatedAt?: number,
 ): Array<MonoJobAsset & Pick<MonoAsset, "mimeType" | "name">> {
   const conditions = ["link.workspace_id = ?", "link.role <> 'image-reference'"];
   const params: (string | number)[] = [actor.workspaceId];
+  if (actor.dataScope === "own") {
+    conditions.push("asset.user_id = ?");
+    params.push(actor.userId);
+  }
   if (beforeCreatedAt) {
     conditions.push("link.created_at < ?");
     params.push(beforeCreatedAt);
@@ -253,24 +257,24 @@ export function listGeneratedMonoAssets(
 }
 
 export function deleteMonoAssetIfUnreferenced(
-  actor: Pick<MonoActor, "workspaceId">,
+  actor: Pick<MonoActor, "workspaceId" | "userId" | "dataScope">,
   assetId: string,
 ): { deleted: boolean; storageKey?: string } {
   const db = getDb();
   const row = db.prepare(
-    "SELECT storage_key FROM mono_assets WHERE id = ? AND workspace_id = ?",
-  ).get(assetId, actor.workspaceId) as { storage_key: string | null } | undefined;
+    `SELECT storage_key FROM mono_assets WHERE id = ? AND workspace_id = ?${actor.dataScope === "own" ? " AND user_id = ?" : ""}`,
+  ).get(assetId, actor.workspaceId, ...(actor.dataScope === "own" ? [actor.userId] : [])) as { storage_key: string | null } | undefined;
   if (!row) return { deleted: false };
   const result = db.prepare(
     `DELETE FROM mono_assets
-     WHERE id = ? AND workspace_id = ?
+     WHERE id = ? AND workspace_id = ?${actor.dataScope === "own" ? " AND user_id = ?" : ""}
        AND NOT EXISTS (SELECT 1 FROM mono_subjects WHERE asset_id = ?)
        AND NOT EXISTS (
          SELECT 1 FROM mono_product_model_profiles
          WHERE anchor_asset_id = ? OR body_asset_id = ?
        )
        AND NOT EXISTS (SELECT 1 FROM mono_job_assets WHERE asset_id = ?)`,
-  ).run(assetId, actor.workspaceId, assetId, assetId, assetId, assetId);
+  ).run(assetId, actor.workspaceId, ...(actor.dataScope === "own" ? [actor.userId] : []), assetId, assetId, assetId, assetId);
   return {
     deleted: result.changes > 0,
     storageKey: result.changes > 0 ? row.storage_key ?? undefined : undefined,
@@ -329,20 +333,22 @@ export function createMonoSubject(actor: MonoActor, input: MonoSubjectInput): Mo
 }
 
 export function listMonoSubjects(actor: MonoActor): MonoSubject[] {
+  const visibility = actor.dataScope === "workspace" ? "" : actor.dataScope === "own" ? "AND owner_user_id = ?" : "AND (owner_user_id = ? OR visibility = 'workspace')";
   const rows = getDb().prepare(
     `SELECT * FROM mono_subjects
      WHERE workspace_id = ? AND kind = 'generic'
-       AND (owner_user_id = ? OR visibility = 'workspace')
+       ${visibility}
      ORDER BY updated_at DESC`,
-  ).all(actor.workspaceId, actor.userId) as SubjectRow[];
+  ).all(actor.workspaceId, ...(actor.dataScope === "workspace" ? [] : [actor.userId])) as SubjectRow[];
   return rows.map(toSubject);
 }
 
 export function getMonoSubject(actor: MonoActor, subjectId: string): MonoSubject | null {
+  const visibility = actor.dataScope === "workspace" ? "" : actor.dataScope === "own" ? " AND owner_user_id = ?" : " AND (owner_user_id = ? OR visibility = 'workspace')";
   const row = getDb().prepare(
     `SELECT * FROM mono_subjects
-     WHERE id = ? AND workspace_id = ? AND (owner_user_id = ? OR visibility = 'workspace')`,
-  ).get(subjectId, actor.workspaceId, actor.userId) as SubjectRow | undefined;
+     WHERE id = ? AND workspace_id = ?${visibility}`,
+  ).get(subjectId, actor.workspaceId, ...(actor.dataScope === "workspace" ? [] : [actor.userId])) as SubjectRow | undefined;
   return row ? toSubject(row) : null;
 }
 
@@ -363,18 +369,18 @@ export function updateMonoSubject(
   }
   if (!fields.length) return getMonoSubject(actor, subjectId);
   fields.push("updated_at = ?");
-  values.push(Date.now(), subjectId, actor.workspaceId, actor.userId);
+  values.push(Date.now(), subjectId, actor.workspaceId, ...(actor.dataScope === "workspace" ? [] : [actor.userId]));
   const result = getDb().prepare(
     `UPDATE mono_subjects SET ${fields.join(", ")}
-     WHERE id = ? AND workspace_id = ? AND owner_user_id = ?`,
+     WHERE id = ? AND workspace_id = ?${actor.dataScope === "workspace" ? "" : " AND owner_user_id = ?"}`,
   ).run(...values);
   return result.changes > 0 ? getMonoSubject(actor, subjectId) : null;
 }
 
 export function deleteMonoSubject(actor: MonoActor, subjectId: string): boolean {
   const result = getDb().prepare(
-    "DELETE FROM mono_subjects WHERE id = ? AND workspace_id = ? AND owner_user_id = ?",
-  ).run(subjectId, actor.workspaceId, actor.userId);
+    `DELETE FROM mono_subjects WHERE id = ? AND workspace_id = ?${actor.dataScope === "workspace" ? "" : " AND owner_user_id = ?"}`,
+  ).run(subjectId, actor.workspaceId, ...(actor.dataScope === "workspace" ? [] : [actor.userId]));
   return result.changes > 0;
 }
 
@@ -484,6 +490,10 @@ export function listMonoJobs(
 ): MonoJob[] {
   const conditions = ["workspace_id = ?"];
   const params: (string | number)[] = [actor.workspaceId];
+  if (actor.dataScope === "own") {
+    conditions.push("user_id = ?");
+    params.push(actor.userId);
+  }
   if (options.kinds?.length) {
     conditions.push(`kind IN (${options.kinds.map(() => "?").join(",")})`);
     params.push(...options.kinds);
@@ -501,40 +511,40 @@ export function listMonoJobs(
 
 export function setMonoJobFavorite(actor: MonoActor, jobId: string, favorite: boolean): MonoJob | null {
   getDb().prepare(
-    "UPDATE mono_jobs SET favorite = ? WHERE id = ? AND workspace_id = ?",
-  ).run(favorite ? 1 : 0, jobId, actor.workspaceId);
+    `UPDATE mono_jobs SET favorite = ? WHERE id = ? AND workspace_id = ?${actor.dataScope === "own" ? " AND user_id = ?" : ""}`,
+  ).run(favorite ? 1 : 0, jobId, actor.workspaceId, ...(actor.dataScope === "own" ? [actor.userId] : []));
   return getMonoJob(actor, jobId);
 }
 
 export function purgeMonoJob(actor: MonoActor, jobId: string): boolean {
   const result = getDb().prepare(
     `DELETE FROM mono_jobs
-     WHERE id = ? AND workspace_id = ? AND status IN ('succeeded', 'failed', 'cancelled')`,
-  ).run(jobId, actor.workspaceId);
+     WHERE id = ? AND workspace_id = ?${actor.dataScope === "own" ? " AND user_id = ?" : ""} AND status IN ('succeeded', 'failed', 'cancelled')`,
+  ).run(jobId, actor.workspaceId, ...(actor.dataScope === "own" ? [actor.userId] : []));
   return result.changes > 0;
 }
 
 export function purgeUnfavoriteMonoJobs(actor: MonoActor, kind: MonoJobKind): number {
   const result = getDb().prepare(
     `DELETE FROM mono_jobs
-     WHERE workspace_id = ? AND kind = ? AND favorite = 0
+     WHERE workspace_id = ?${actor.dataScope === "own" ? " AND user_id = ?" : ""} AND kind = ? AND favorite = 0
        AND status IN ('succeeded', 'failed', 'cancelled')`,
-  ).run(actor.workspaceId, kind);
+  ).run(actor.workspaceId, ...(actor.dataScope === "own" ? [actor.userId] : []), kind);
   return Number(result.changes);
 }
 
 export function listPurgeableMonoJobIds(actor: MonoActor, kind: MonoJobKind): string[] {
   return (getDb().prepare(
     `SELECT id FROM mono_jobs
-     WHERE workspace_id = ? AND kind = ? AND favorite = 0
+     WHERE workspace_id = ?${actor.dataScope === "own" ? " AND user_id = ?" : ""} AND kind = ? AND favorite = 0
        AND status IN ('succeeded', 'failed', 'cancelled')`,
-  ).all(actor.workspaceId, kind) as Array<{ id: string }>).map((row) => row.id);
+  ).all(actor.workspaceId, ...(actor.dataScope === "own" ? [actor.userId] : []), kind) as Array<{ id: string }>).map((row) => row.id);
 }
 
 export function getMonoJob(actor: MonoActor, jobId: string): MonoJob | null {
   const row = getDb().prepare(
-    "SELECT * FROM mono_jobs WHERE id = ? AND workspace_id = ?",
-  ).get(jobId, actor.workspaceId) as JobRow | undefined;
+    `SELECT * FROM mono_jobs WHERE id = ? AND workspace_id = ?${actor.dataScope === "own" ? " AND user_id = ?" : ""}`,
+  ).get(jobId, actor.workspaceId, ...(actor.dataScope === "own" ? [actor.userId] : [])) as JobRow | undefined;
   return row ? toJob(row) : null;
 }
 

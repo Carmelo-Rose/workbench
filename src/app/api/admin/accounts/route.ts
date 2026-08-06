@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   currentWorkspaceActor,
+  deleteAdminAccount,
   listAdminAccounts,
   resetAccountPassword,
   setAccountStatus,
@@ -55,6 +56,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true });
     }
     return NextResponse.json({ error: "invalid account action" }, { status: 400 });
+  } catch (error) {
+    return tenantErrorResponse(error);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const id = new URL(request.url).searchParams.get("id");
+    if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
+    deleteAdminAccount(currentWorkspaceActor(request), id);
+    return new Response(null, { status: 204 });
   } catch (error) {
     return tenantErrorResponse(error);
   }

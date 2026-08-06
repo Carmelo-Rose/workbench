@@ -10,7 +10,10 @@ const MAX_IMPORT_BYTES = 50 * 1024 * 1024;
 /** 导入 douyin_Playwright 的抓取结果：body 即文件内容，文件名放 x-workbench-filename。 */
 export async function POST(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const permission = request.headers.get("x-workbench-dataset") === "rankings"
+      ? "commerce.rankings.import"
+      : "commerce.collection.import";
+    const actor = actorFromWorkbenchRequest(request, permission);
     const encodedName = request.headers.get("x-workbench-filename");
     const filename = encodedName ? decodeURIComponent(encodedName) : "import.xlsx";
     const buffer = Buffer.from(await request.arrayBuffer());

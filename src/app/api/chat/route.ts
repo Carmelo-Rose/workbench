@@ -32,6 +32,8 @@ import {
   workspaceActorFromWorkbenchRequest,
 } from "@/lib/mono/http";
 import { runWithTenantContext } from "@/lib/server/tenant-context";
+import { effectiveDataScope, hasGrant, requireGrant, tenantErrorResponse } from "@/lib/server/tenant";
+import type { Permission } from "@/lib/authorization";
 import { videoEraseTool } from "@/lib/tools/video-erase";
 import { videoEnhanceTool } from "@/lib/tools/video-enhance";
 import { videoMattingTool } from "@/lib/tools/video-matting";
@@ -167,7 +169,7 @@ export async function POST(req: Request) {
   let actor: MonoActor;
   let workspaceActor: ReturnType<typeof workspaceActorFromWorkbenchRequest>;
   try {
-    workspaceActor = workspaceActorFromWorkbenchRequest(req);
+    workspaceActor = workspaceActorFromWorkbenchRequest(req, "workbench.chat.use");
     actor = monoActorFromWorkspaceActor(workspaceActor);
   } catch (error) {
     return monoErrorResponse(error);
@@ -178,12 +180,17 @@ export async function POST(req: Request) {
   const backend: BackendId = isBackendId(config?.modelName)
     ? config.modelName
     : defaultBackend();
+  const backendPermission: Permission = backend === "hermes" ? "workbench.backend.hermes.use" : "workbench.backend.direct.use";
+  try { requireGrant(workspaceActor, backendPermission); }
+  catch (error) { return tenantErrorResponse(error); }
 
   // 双链路常驻：Hermes 走网关内完整 Agent 循环（工具、记忆、技能，
   // 不注入本地 system 与工具），direct 走模型直连 + 本地工具。
   const imageAttachments = latestImageAttachments(messages);
   const image2Config = image2ChatConfigSchema.safeParse(config?.image2);
   if (image2Config.success) {
+    try { requireGrant(workspaceActor, "image.generate.use"); }
+    catch (error) { return tenantErrorResponse(error); }
     return image2Response({
       messages,
       threadId: id,
@@ -200,6 +207,8 @@ export async function POST(req: Request) {
   // 见 productPipelineResponse（与下面的 rankInsightsResponse 是同一模式）。
   const productPipelineConfig = productPipelineInputSchema.safeParse(config?.productPipeline);
   if (productPipelineConfig.success) {
+    try { requireGrant(workspaceActor, "image.product-set.use"); }
+    catch (error) { return tenantErrorResponse(error); }
     // Carried alongside the validated input rather than inside it: the label is
     // only ever echoed back to the card, and has no business in the job record.
     const folderName = (config?.productPipeline as { folderName?: unknown } | undefined)?.folderName;
@@ -212,12 +221,43 @@ export async function POST(req: Request) {
   }
 
   const requiredTool = forcedToolName(latestUserText(messages), Boolean(imageAttachments[0]));
+  const permissionByTool: Record<string, Permission> = {
+    image_to_prompt: "image.reverse.use",
+    mono_analyze_video: "video.analyze.use",
+    mono_matting: "image.cutout.use",
+    mono_generate_image: "image.generate.use",
+    mono_product_pipeline: "image.product-set.use",
+    luopan_rank_insights: "commerce.rankings.view",
+    mono_create_asset: "resources.assets.create",
+    mono_list_subjects: "resources.subjects.view",
+    mono_create_subject: "resources.subjects.create",
+    mono_update_subject: "resources.subjects.manage",
+    mono_delete_subject: "resources.subjects.manage",
+    mono_get_job: "resources.tasks.view",
+    mono_cancel_job: "resources.tasks.manage",
+    luopan_query_rounds: "commerce.rankings.view",
+    luopan_query_snapshot: "commerce.rankings.view",
+    luopan_product_trend: "commerce.rankings.view",
+    luopan_query_events: "commerce.rankings.view",
+    collector_list_batches: "commerce.collection.view",
+    collector_search_items: "commerce.collection.view",
+    video_erase: "video.erase.use",
+    video_enhance: "video.enhance.use",
+    video_matting: "video.cutout.use",
+  };
+  if (requiredTool) {
+    const requiredPermission = permissionByTool[requiredTool];
+    if (requiredPermission) {
+      try { requireGrant(workspaceActor, requiredPermission); }
+      catch (error) { return tenantErrorResponse(error); }
+    }
+  }
   if (requiredTool === "luopan_rank_insights") {
     return rankInsightsResponse({ messages, backend });
   }
 
   const attachmentUrl = imageAttachments[0];
-  const directTools = {
+  const allDirectTools = {
     image_to_prompt: createImageToPromptTool(attachmentUrl),
     ...createMonoTools({
       sessionId: id,
@@ -225,15 +265,25 @@ export async function POST(req: Request) {
       workspaceId: actor.workspaceId,
       attachmentUrl,
       videoAssetId: latestVideoAssetId(messages),
+      assetScope: effectiveDataScope(workspaceActor, "resources.assets.view"),
+      subjectViewScope: effectiveDataScope(workspaceActor, "resources.subjects.view"),
+      subjectManageScope: effectiveDataScope(workspaceActor, "resources.subjects.manage"),
+      taskViewScope: effectiveDataScope(workspaceActor, "resources.tasks.view"),
+      taskManageScope: effectiveDataScope(workspaceActor, "resources.tasks.manage"),
     }),
     ...createCollectorTools({
       userId: actor.userId,
       workspaceId: actor.workspaceId,
+      dataScope: effectiveDataScope(workspaceActor, "commerce.collection.view"),
     }),
     video_erase: videoEraseTool,
     video_enhance: videoEnhanceTool,
     video_matting: videoMattingTool,
   };
+  const directTools = Object.fromEntries(Object.entries(allDirectTools).filter(([toolName]) => {
+    const permission = permissionByTool[toolName];
+    return !permission || hasGrant(workspaceActor, permission);
+  }));
   // 已知图片反推意图时，图片已通过 attachmentUrl 交给视觉工具；不要让
   // 纯文本 CHAT_MODEL 再解析 image_url，否则工具调用前就会返回 400。
   const modelMessages = await convertToModelMessages(

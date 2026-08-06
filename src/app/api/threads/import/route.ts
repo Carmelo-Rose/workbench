@@ -8,7 +8,7 @@ import { actorFromWorkbenchRequest, monoErrorResponse } from "@/lib/mono/http";
 /** localStorage → SQLite 一次性迁移；已存在的线程/消息跳过。 */
 export async function POST(req: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(req);
+    const actor = actorFromWorkbenchRequest(req, "sessions.messages.import");
     const { snapshots } = (await req.json()) as { snapshots?: ThreadSnapshot[] };
     if (!Array.isArray(snapshots)) {
       return NextResponse.json({ error: "invalid snapshots" }, { status: 400 });

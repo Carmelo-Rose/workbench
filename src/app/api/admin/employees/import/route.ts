@@ -3,6 +3,8 @@ import { parseCsv, parseXlsx } from "@/lib/collector/xlsx";
 import {
   currentWorkspaceActor,
   importEmployees,
+  requireAdministrator,
+  requireGrant,
   previewEmployeeImport,
   tenantErrorResponse,
   type ImportRow,
@@ -56,6 +58,13 @@ function rowsFromUpload(filename: string, buffer: Buffer): ImportRow[] {
 }
 
 export async function GET(request: Request) {
+  try {
+    const actor = currentWorkspaceActor(request);
+    requireAdministrator(actor);
+    requireGrant(actor, "system.accounts.manage");
+  } catch (error) {
+    return tenantErrorResponse(error);
+  }
   if (new URL(request.url).searchParams.get("format") === "xlsx") {
     return new Response(new Uint8Array(xlsxTemplate()), {
       headers: {

@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { actorFromWorkbenchRequest, monoErrorResponse, parseMonoJson } from "@/lib/mono/http";
+import { monoActorFromWorkspaceActor, monoErrorResponse, parseMonoJson, workspaceActorFromWorkbenchRequest } from "@/lib/mono/http";
 import { runCapabilityCommand } from "@/lib/workbench/capability-bus";
+import { getCapability } from "@/lib/workbench/capability-registry";
+import { requireGrant, tenantErrorResponse } from "@/lib/server/tenant";
 import type { CapabilityCommand } from "@/lib/workbench/capability-command";
 
 export const runtime = "nodejs";
@@ -21,8 +23,16 @@ const capabilityCommandSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
     const body = await parseMonoJson(request, capabilityCommandSchema);
+    const workspaceActor = workspaceActorFromWorkbenchRequest(request);
+    const capability = getCapability(body.capabilityId);
+    if (!capability) return Response.json({ error: "未知能力" }, { status: 404 });
+    try {
+      requireGrant(workspaceActor, capability.permission);
+      if (capability.mode === "async") requireGrant(workspaceActor, "resources.tasks.create");
+    }
+    catch (error) { return tenantErrorResponse(error); }
+    const actor = monoActorFromWorkspaceActor(workspaceActor);
     const command: CapabilityCommand = {
       capabilityId: body.capabilityId,
       input: body.input,

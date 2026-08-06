@@ -42,6 +42,11 @@ type MonoToolContext = {
    * 这里优先信任服务端的确定性提取，而不是模型的复述。
    */
   videoAssetId?: string;
+  assetScope?: "own" | "workspace";
+  subjectViewScope?: "own" | "workspace";
+  subjectManageScope?: "own" | "workspace";
+  taskViewScope?: "own" | "workspace";
+  taskManageScope?: "own" | "workspace";
 };
 
 /**
@@ -73,6 +78,11 @@ export function createMonoTools(context: MonoToolContext = {}) {
     userId: context.userId,
     workspaceId: context.workspaceId,
   });
+  const assetActor = { ...actor, dataScope: context.assetScope };
+  const subjectViewActor = { ...actor, dataScope: context.subjectViewScope };
+  const subjectManageActor = { ...actor, dataScope: context.subjectManageScope };
+  const taskViewActor = { ...actor, dataScope: context.taskViewScope };
+  const taskManageActor = { ...actor, dataScope: context.taskManageScope };
 
   return {
     mono_create_asset: tool({
@@ -97,7 +107,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
     mono_list_subjects: tool({
       description: "列出当前用户可用的私有主体和工作区共享主体。",
       inputSchema: z.object({}),
-      execute: () => listSubjects(actor),
+      execute: () => listSubjects(subjectViewActor),
     }),
     mono_create_subject: tool({
       description: "把已登记的单张图片素材保存为可复用主体，默认仅创建者可见。",
@@ -108,7 +118,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
       description: "重命名主体或修改主体的私有/工作区共享状态。只有创建者可以修改。",
       inputSchema: monoSubjectPatchSchema.and(z.object({ subjectId: z.string().min(1) })),
       execute: ({ subjectId, ...patch }) => {
-        const subject = updateSubject(actor, subjectId, patch);
+        const subject = updateSubject(subjectManageActor, subjectId, patch);
         if (!subject) throw new Error("主体不存在，或只有创建者可以修改");
         return subject;
       },
@@ -116,7 +126,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
     mono_delete_subject: tool({
       description: "删除可复用主体记录，不删除底层图片素材。只有创建者可以删除。",
       inputSchema: z.object({ subjectId: z.string().min(1) }),
-      execute: ({ subjectId }) => ({ deleted: deleteSubject(actor, subjectId) }),
+      execute: ({ subjectId }) => ({ deleted: deleteSubject(subjectManageActor, subjectId) }),
     }),
     mono_matting: tool({
       description: `${getCapability("mono_matting")!.chatToolDescription}用户直接发图片附件时可都不填。`,
@@ -130,10 +140,10 @@ export function createMonoTools(context: MonoToolContext = {}) {
         const mergedInput = { ...input, assetId };
         return runJobCapability(
           "mono_matting",
-          actor,
+          assetActor,
           mergedInput,
           assetId ? [assetId] : [],
-          () => createMattingJob(actor, mergedInput),
+          () => createMattingJob(assetActor, mergedInput),
         );
       },
     }),
@@ -177,7 +187,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
       description: "查询 Mono 任务（视频分析、图片生成、抠像、商品套图）的进度和结果。查状态一律用这个，不要重新发起任务。",
       inputSchema: z.object({ jobId: z.string().min(1) }),
       execute: async ({ jobId }) => {
-        const job = getJob(actor, jobId);
+        const job = getJob(taskViewActor, jobId);
         if (!job) throw new Error("Mono 任务不存在，或不属于当前工作区");
         return lightenMonoJob(job);
       },
@@ -186,7 +196,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
       description: "取消仍在排队或运行中的 Mono 任务。",
       inputSchema: z.object({ jobId: z.string().min(1) }),
       execute: async ({ jobId }) => {
-        const job = await cancelJob(actor, jobId);
+        const job = await cancelJob(taskManageActor, jobId);
         if (!job) throw new Error("Mono 任务不存在，或不属于当前工作区");
         return lightenMonoJob(job);
       },

@@ -5,8 +5,10 @@ import type { Unstable_TriggerItem } from "@assistant-ui/react";
 import {
   SLASH_CAPABILITIES,
   SLASH_CAPABILITY_GROUPS,
+  capabilityAllowed,
   type CapabilityOption,
 } from "@/lib/workbench/capabilities";
+import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 
 type IconComponent = FC<{ className?: string }>;
 
@@ -68,26 +70,30 @@ export function useSlashCapabilityAdapter({
   iconMap,
   fallbackIcon,
 }: SlashCapabilityAdapterOptions) {
+  const { canGrant } = useWorkbenchSession();
   // 和官方 hook 一样把回调放进 ref：adapter/action 的身份保持稳定，
   // 库内部按 adapter 身份做记忆化。
   const runRef = useRef(run);
   runRef.current = run;
 
   return useMemo(
-    () => ({
+    () => {
+      const allowedIds = new Set(SLASH_CAPABILITIES.filter((option) => capabilityAllowed(option, canGrant)).map((option) => option.id));
+      const allowedCategories = CATEGORIES.filter((category) => (ITEMS_BY_CATEGORY.get(category.id) ?? []).some((item) => allowedIds.has(item.id)));
+      return ({
       adapter: {
-        categories: () => CATEGORIES,
-        categoryItems: (categoryId: string) => ITEMS_BY_CATEGORY.get(categoryId) ?? [],
+        categories: () => allowedCategories,
+        categoryItems: (categoryId: string) => (ITEMS_BY_CATEGORY.get(categoryId) ?? []).filter((item) => allowedIds.has(item.id)),
         search: (query: string) => {
           const lower = query.toLowerCase();
-          return SEARCH_POOL.filter((entry) => entry.haystack.includes(lower)).map(
+          return SEARCH_POOL.filter((entry) => allowedIds.has(entry.item.id) && entry.haystack.includes(lower)).map(
             (entry) => entry.item,
           );
         },
       } satisfies TriggerAdapter,
       action: {
         onExecute: (item: Unstable_TriggerItem) => {
-          const option = SLASH_CAPABILITIES.find((cap) => cap.id === item.id);
+          const option = SLASH_CAPABILITIES.find((cap) => cap.id === item.id && allowedIds.has(cap.id));
           if (option) runRef.current(option);
         },
         removeOnExecute: true,
@@ -102,7 +108,8 @@ export function useSlashCapabilityAdapter({
         ),
       },
       fallbackIcon,
-    }),
-    [iconMap, fallbackIcon],
+    });
+    },
+    [iconMap, fallbackIcon, canGrant],
   );
 }

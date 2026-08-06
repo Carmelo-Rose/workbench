@@ -699,6 +699,7 @@ async function dispatchClaimedJob(job: MonoJob): Promise<void> {
     organizationRoles: [],
     workspaceRoles: [],
     permissions: [],
+    grants: [],
     displayName: "Mono 异步任务",
   };
   return runWithTenantContext(tenantActor, async () => {
@@ -1346,5 +1347,6 @@ export function newMonoActor(overrides: Partial<MonoActor> = {}): MonoActor {
       overrides.workspaceId ?? activeActor?.workspaceId ?? "default",
     sessionId: overrides.sessionId,
     traceId: overrides.traceId ?? `trace_${randomUUID()}`,
+    dataScope: overrides.dataScope,
   };
 }

@@ -135,10 +135,14 @@ function toItem(row: ItemRow): CollectorItem {
 
 export function searchCollectorItems(
   workspaceId: string,
-  options: { keyword?: string; platform?: string; batchId?: string; limit?: number } = {},
+  options: { keyword?: string; platform?: string; batchId?: string; limit?: number; userId?: string } = {},
 ): CollectorItem[] {
   const conditions = ["workspace_id = ?"];
   const params: (string | number)[] = [workspaceId];
+  if (options.userId) {
+    conditions.push("user_id = ?");
+    params.push(options.userId);
+  }
   if (options.keyword) {
     conditions.push("(title LIKE ? OR author LIKE ?)");
     const pattern = `%${options.keyword}%`;
@@ -160,12 +164,12 @@ export function searchCollectorItems(
   return rows.map(toItem);
 }
 
-export function listCollectorBatches(workspaceId: string): CollectorBatch[] {
+export function listCollectorBatches(workspaceId: string, userId?: string): CollectorBatch[] {
   const rows = getDb().prepare(
     `SELECT batch_id, platform, COUNT(*) AS item_count, MAX(imported_at) AS imported_at
-     FROM collector_items WHERE workspace_id = ?
+     FROM collector_items WHERE workspace_id = ?${userId ? " AND user_id = ?" : ""}
      GROUP BY batch_id, platform ORDER BY imported_at DESC LIMIT 50`,
-  ).all(workspaceId) as { batch_id: string; platform: string; item_count: number; imported_at: number }[];
+  ).all(workspaceId, ...(userId ? [userId] : [])) as { batch_id: string; platform: string; item_count: number; imported_at: number }[];
   return rows.map((row) => ({
     batchId: row.batch_id,
     platform: row.platform,

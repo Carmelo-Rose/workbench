@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 /** Backend contract for the future 主体库「模特卡」section. */
 export async function GET(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "models.library.view");
     return Response.json({
       models: listProductModelCards(actor.workspaceId),
       pairs: listProductModelPairs(actor.workspaceId),
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "models.library.manage");
     const input = await parseMonoJson(request, createProductModelCardSchema);
     return Response.json({ model: createProductModelCard(actor, input) }, { status: 201 });
   } catch (error) {

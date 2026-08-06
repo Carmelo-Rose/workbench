@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 /** Browser-only job history. Heavy reference data URLs are stripped per item. */
 export async function GET(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.tasks.view");
     const url = new URL(request.url);
     const kindsParam = url.searchParams.get("kinds");
     const kinds = kindsParam
@@ -34,7 +34,7 @@ export async function GET(request: Request) {
 
 export async function DELETE(request: Request) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.tasks.manage");
     const kindParam = new URL(request.url).searchParams.get("kind") ?? "image_generation";
     if (!(monoJobKinds as readonly string[]).includes(kindParam)) {
       throw new MonoHttpError(400, "任务类型无效");

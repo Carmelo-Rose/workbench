@@ -345,4 +345,94 @@ describe("employee and workspace boundaries", () => {
       "账号", "姓名", "部门", "组织角色", "工作区角色",
     ]);
   });
+
+  it("merges data scopes per operation, blocks over-granting, protects assigned roles, and audits diffs", async () => {
+    const tenant = await import("./tenant");
+    const owner = tenant.ensureLocalWorkspaceActor();
+    const workspace = tenant.createWorkspace(owner, { name: `Grant scope ${crypto.randomUUID()}` });
+    const workspaceOwner = tenant.workspaceActorForUser(owner.userId, workspace.id);
+    const ownRole = tenant.createAdminRole(workspaceOwner, {
+      scope: "workspace", name: `Own assets ${crypto.randomUUID()}`,
+      grants: [{ permission: "resources.assets.view", dataScope: "own" }],
+    });
+    const wideRole = tenant.createAdminRole(workspaceOwner, {
+      scope: "workspace", name: `Workspace assets ${crypto.randomUUID()}`,
+      grants: [{ permission: "resources.assets.view", dataScope: "workspace" }],
+    });
+    const roleManager = tenant.createAdminRole(workspaceOwner, {
+      scope: "organization", name: `Role manager ${crypto.randomUUID()}`,
+      grants: [
+        { permission: "system.roles.view" },
+        { permission: "system.roles.manage" },
+      ],
+    });
+    const account = tenant.upsertAdminAccount(workspaceOwner, {
+      account: `scope-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Scope tester",
+      organizationRoleIds: [roleManager.id],
+      workspaceRoleIds: { [workspace.id]: [ownRole.id, wideRole.id] },
+    });
+    const actor = tenant.login({ account: account.account, password: "123456", workspaceId: workspace.id }).actor;
+    expect(tenant.effectiveDataScope(actor, "resources.assets.view")).toBe("workspace");
+    expect(() => tenant.createAdminRole(actor, {
+      scope: "workspace", name: "Escalated manager",
+      grants: [{ permission: "resources.assets.manage", dataScope: "workspace" }],
+    })).toThrow(tenant.TenantAccessError);
+    expect(() => tenant.deleteAdminRole(workspaceOwner, ownRole.id)).toThrow(tenant.TenantAccessError);
+    tenant.updateAdminRole(workspaceOwner, wideRole.id, {
+      name: wideRole.name,
+      grants: [{ permission: "resources.assets.view", dataScope: "own" }],
+    });
+    expect(tenant.listPermissionAudit(workspaceOwner).some((entry) => entry.targetRoleId === wideRole.id && entry.action === "role.update")).toBe(true);
+  });
+
+  it("keeps management admin-only and safely deletes members, accounts, and non-current workspaces", async () => {
+    const tenant = await import("./tenant");
+    const { getDb } = await import("./db");
+    const store = await import("../mono/store");
+    const owner = tenant.ensureLocalWorkspaceActor();
+    const workspace = tenant.createWorkspace(owner, { name: `Disposable ${crypto.randomUUID()}` });
+    const workspaceOwner = tenant.workspaceActorForUser(owner.userId, workspace.id);
+    const accountViewer = tenant.createAdminRole(workspaceOwner, {
+      scope: "organization",
+      name: `Account viewer ${crypto.randomUUID()}`,
+      grants: [{ permission: "system.accounts.view" }],
+    });
+    const limitedRole = tenant.createAdminRole(workspaceOwner, {
+      scope: "workspace",
+      name: `Limited ${crypto.randomUUID()}`,
+      grants: [
+        { permission: "workbench.chat.use" },
+        { permission: "image.generate.use" },
+      ],
+    });
+    const account = tenant.upsertAdminAccount(workspaceOwner, {
+      account: `delete-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Disposable user",
+      organizationRoleIds: [accountViewer.id],
+      workspaceRoleIds: { [workspace.id]: [limitedRole.id] },
+    });
+    const limited = tenant.login({ account: account.account, password: "123456", workspaceId: workspace.id }).actor;
+    expect(tenant.isAdministratorAccount(limited)).toBe(false);
+    expect(limited.grants.map((grant) => grant.permission)).toEqual([
+      "image.generate.use",
+      "system.accounts.view",
+      "workbench.chat.use",
+    ]);
+    expect(() => tenant.listAdminAccounts(limited)).toThrow(tenant.TenantAccessError);
+
+    tenant.removeWorkspaceMember(workspaceOwner, { userId: account.id, workspaceId: workspace.id });
+    expect(() => tenant.workspaceActorForUser(account.id, workspace.id)).toThrow(tenant.TenantAccessError);
+    tenant.deleteAdminAccount(workspaceOwner, account.id);
+    expect(tenant.listAdminAccounts(workspaceOwner).some((item) => item.id === account.id)).toBe(false);
+
+    const asset = store.createMonoAsset(workspaceOwner, {
+      sourceUrl: "https://example.test/disposable.png",
+      mimeType: "image/png",
+    });
+    tenant.deleteAdminWorkspace(owner, workspace.id);
+    expect(getDb().prepare("SELECT 1 FROM workspaces WHERE id = ?").get(workspace.id)).toBeUndefined();
+    expect(getDb().prepare("SELECT 1 FROM mono_assets WHERE id = ?").get(asset.id)).toBeUndefined();
+    expect(() => tenant.deleteAdminWorkspace(owner, owner.workspaceId)).toThrow(tenant.TenantAccessError);
+  });
 });

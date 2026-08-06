@@ -1,12 +1,40 @@
 "use client";
 
-import { CheckIcon, LoaderCircleIcon, XIcon } from "lucide-react";
+import { CheckIcon, ListTodoIcon, LoaderCircleIcon, XIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { JOB_TITLES, jobMeta } from "@/components/workbench/JobCard";
-import { useJobCenter } from "@/lib/mono/job-center";
+import { useJobCenter, useJobCenterActiveCount } from "@/lib/mono/job-center";
 import type { MonoJob } from "@/lib/mono/contracts";
 
 const terminalStatuses = new Set<MonoJob["status"]>(["succeeded", "failed", "cancelled"]);
+
+/** 仅在有排队/运行中的任务时显示，避免把任务入口长期固定在界面上。 */
+export function JobCenterTrigger() {
+  const activeCount = useJobCenterActiveCount();
+  const openSheet = useJobCenter((state) => state.openSheet);
+  if (activeCount === 0) return null;
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      className="relative rounded-full"
+      onClick={openSheet}
+      aria-label={`打开任务中心，${activeCount} 个任务进行中`}
+      title="任务中心"
+    >
+      <ListTodoIcon className="size-4" />
+      <span
+        aria-hidden="true"
+        className="bg-primary text-primary-foreground ring-background absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] leading-none font-semibold ring-2"
+      >
+        {activeCount > 9 ? "9+" : activeCount}
+      </span>
+    </Button>
+  );
+}
 
 export function JobCenterSheet() {
   const open = useJobCenter((state) => state.open);

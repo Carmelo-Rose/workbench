@@ -5,9 +5,11 @@ import {
   currentWorkspaceActor,
   ensureServiceWorkspaceActor,
   requirePermission,
+  requireGrant,
   TenantAccessError,
   type WorkspaceActor,
 } from "@/lib/server/tenant";
+import type { Permission } from "@/lib/authorization";
 
 function bearerToken(request: Request): string | null {
   const authorization = request.headers.get("authorization");
@@ -43,34 +45,32 @@ export function assertMonoApiAccess(request: Request): void {
  */
 export function workspaceActorFromWorkbenchRequest(
   request: Request,
+  permission?: Permission,
 ): WorkspaceActor {
   try {
     const actor = currentWorkspaceActor(request);
-    requirePermission(
-      actor,
-      request.method === "GET" || request.method === "HEAD"
-        ? "workspace:read"
-        : "workspace:write",
-    );
+    if (permission) requireGrant(actor, permission);
+    else requirePermission(actor, request.method === "GET" || request.method === "HEAD" ? "workspace:read" : "workspace:write");
     return actor;
   } catch (error) {
     if (error instanceof TenantAccessError) {
-      throw new MonoHttpError(error.status, error.message);
+      throw new MonoHttpError(error.status, error.message, error.permission);
     }
     throw error;
   }
 }
 
-export function monoActorFromWorkspaceActor(actor: WorkspaceActor): MonoActor {
+export function monoActorFromWorkspaceActor(actor: WorkspaceActor, permission?: Permission): MonoActor {
   return monoActorSchema.parse({
     userId: actor.userId,
     workspaceId: actor.workspaceId,
     traceId: `trace_${randomUUID()}`,
+    ...(permission ? { dataScope: actor.grants.find((grant) => grant.permission === permission)?.dataScope } : {}),
   });
 }
 
-export function actorFromWorkbenchRequest(request: Request): MonoActor {
-  return monoActorFromWorkspaceActor(workspaceActorFromWorkbenchRequest(request));
+export function actorFromWorkbenchRequest(request: Request, permission?: Permission): MonoActor {
+  return monoActorFromWorkspaceActor(workspaceActorFromWorkbenchRequest(request, permission), permission);
 }
 
 export function actorFromRequest(request: Request): MonoActor {
@@ -112,14 +112,14 @@ export async function parseMonoJson<T extends z.ZodType>(
 }
 
 export class MonoHttpError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(readonly status: number, message: string, readonly permission?: string) {
     super(message);
   }
 }
 
 export function monoErrorResponse(error: unknown): Response {
   if (error instanceof MonoHttpError) {
-    return Response.json({ error: error.message }, { status: error.status });
+    return Response.json({ error: error.message, ...(error.status === 403 ? { code: "PERMISSION_DENIED", ...(error.permission ? { permission: error.permission } : {}) } : {}) }, { status: error.status });
   }
   if (error instanceof ZodError) {
     return Response.json({ error: error.issues.map((issue) => issue.message).join("；") }, { status: 400 });

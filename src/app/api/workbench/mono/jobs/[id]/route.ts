@@ -13,7 +13,7 @@ type Context = { params: Promise<{ id: string }> };
  */
 export async function GET(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.tasks.view");
     const { id } = await context.params;
     const job = getJob(actor, id);
     if (!job) throw new MonoHttpError(404, "任务不存在或已无权访问");
@@ -27,7 +27,7 @@ const patchJobSchema = z.object({ favorite: z.boolean() });
 
 export async function PATCH(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.tasks.manage");
     const { id } = await context.params;
     const { favorite } = await parseMonoJson(request, patchJobSchema);
     const job = setJobFavorite(actor, id, favorite);
@@ -40,7 +40,7 @@ export async function PATCH(request: Request, context: Context) {
 
 export async function DELETE(request: Request, context: Context) {
   try {
-    const actor = actorFromWorkbenchRequest(request);
+    const actor = actorFromWorkbenchRequest(request, "resources.tasks.manage");
     const { id } = await context.params;
     if (new URL(request.url).searchParams.get("purge") === "true") {
       if (!await purgeJob(actor, id)) throw new MonoHttpError(409, "只有已结束的任务可以从历史中删除");

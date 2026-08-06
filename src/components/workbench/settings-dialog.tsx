@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, type FC, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FC, type ReactNode } from "react";
+import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 import {
   BotIcon,
   CableIcon,
@@ -18,7 +19,6 @@ import {
   SparklesIcon,
   SunIcon,
   Trash2Icon,
-  UsersIcon,
   WrenchIcon,
   ZapIcon,
 } from "lucide-react";
@@ -54,7 +54,6 @@ import { BACKENDS, type BackendId } from "@/lib/backends";
 import { type ThemePref } from "@/lib/theme";
 import { type DensityPref } from "@/lib/density";
 import { cn } from "@/lib/utils";
-import { WorkspaceSettings } from "@/components/workbench/workspace-settings";
 import {
   ArchivedThreadsSection,
   ThreadListRoot,
@@ -64,7 +63,6 @@ export type SettingsSection =
   | "connections"
   | "capabilities"
   | "apiConfig"
-  | "workspace"
   | "appearance"
   | "data";
 
@@ -72,7 +70,6 @@ const SECTIONS: { id: SettingsSection; name: string; icon: ReactNode }[] = [
   { id: "connections", name: "连接与模式", icon: <CableIcon /> },
   { id: "capabilities", name: "Agent 能力", icon: <SparklesIcon /> },
   { id: "apiConfig", name: "API 配置", icon: <KeyRoundIcon /> },
-  { id: "workspace", name: "员工与工作区", icon: <UsersIcon /> },
   { id: "appearance", name: "外观", icon: <PaletteIcon /> },
   { id: "data", name: "数据", icon: <DatabaseIcon /> },
 ];
@@ -102,6 +99,17 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
   onSectionChange,
   ...rest
 }) => {
+  const { canGrant } = useWorkbenchSession();
+  const sections = useMemo(() => SECTIONS.filter((item) => {
+    if (item.id === "apiConfig") return canGrant("system.runtime-config.view");
+    if (item.id === "connections") return canGrant("workbench.backend.direct.use") || canGrant("workbench.backend.hermes.use");
+    if (item.id === "capabilities") return canGrant("workbench.chat.use");
+    if (item.id === "data") return canGrant("sessions.messages.import") || canGrant("sessions.messages.export") || canGrant("sessions.messages.manage");
+    return true;
+  }), [canGrant]);
+  useEffect(() => {
+    if (!sections.some((item) => item.id === section) && sections[0]) onSectionChange(sections[0].id);
+  }, [onSectionChange, section, sections]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex h-[600px] max-h-[85dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
@@ -116,7 +124,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
             aria-label="设置分区"
             className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 sm:w-44 sm:flex-col sm:border-e sm:border-b-0"
           >
-            {SECTIONS.map((s) => (
+            {sections.map((s) => (
               <button
                 key={s.id}
                 type="button"
@@ -137,8 +145,7 @@ export const SettingsDialog: FC<SettingsDialogProps> = ({
           <div className="min-h-0 flex-1 overflow-y-auto p-5">
             {section === "connections" && <ConnectionsSection />}
             {section === "capabilities" && <CapabilitiesSection />}
-            {section === "apiConfig" && <ApiConfigSection />}
-            {section === "workspace" && <WorkspaceSettings />}
+            {section === "apiConfig" && canGrant("system.runtime-config.view") && <ApiConfigSection />}
             {section === "appearance" && <AppearanceSection {...rest} />}
             {section === "data" && <DataSection />}
           </div>
@@ -417,7 +424,8 @@ const ApiConfigGroup: FC<{
   groupId: string;
   fields: ConfigFieldView[];
   onSaved: (groups: ConfigGroups) => void;
-}> = ({ groupId, fields, onSaved }) => {
+  editable: boolean;
+}> = ({ groupId, fields, onSaved, editable }) => {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const meta = GROUP_META[groupId];
@@ -466,6 +474,7 @@ const ApiConfigGroup: FC<{
               </span>
             </div>
             <Input
+              disabled={!editable}
               type={field.secret ? "password" : "text"}
               value={draft[field.key] ?? (field.secret ? "" : field.value)}
               placeholder={field.secret ? (field.value || "未配置，输入以设置") : undefined}
@@ -477,7 +486,7 @@ const ApiConfigGroup: FC<{
           </div>
         ))}
       </div>
-      <div className="mt-3 flex items-center gap-2">
+      {editable && <div className="mt-3 flex items-center gap-2">
         <Button
           size="sm"
           className="h-7 rounded-full px-3 text-xs"
@@ -496,12 +505,13 @@ const ApiConfigGroup: FC<{
             取消修改
           </Button>
         )}
-      </div>
+      </div>}
     </div>
   );
 };
 
 const ApiConfigSection: FC = () => {
+  const { canGrant } = useWorkbenchSession();
   const [groups, setGroups] = useState<ConfigGroups | null>(null);
 
   const load = () => {
@@ -529,6 +539,7 @@ const ApiConfigSection: FC = () => {
               groupId={groupId}
               fields={fields}
               onSaved={setGroups}
+              editable={canGrant("system.runtime-config.manage")}
             />
           ))}
         </div>

@@ -9,7 +9,6 @@ import {
   MessagesSquareIcon,
   PaletteIcon,
   SparklesIcon,
-  UsersIcon,
 } from "lucide-react";
 import { useAssistantRuntime, useAuiState } from "@assistant-ui/react";
 import {
@@ -22,7 +21,8 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { capabilityIconMap } from "@/components/assistant-ui/thread";
-import { SLASH_CAPABILITIES, type CapabilityOption } from "@/lib/workbench/capabilities";
+import { SLASH_CAPABILITIES, capabilityAllowed, type CapabilityOption } from "@/lib/workbench/capabilities";
+import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 import { useCapabilityActions } from "@/components/workbench/CapabilityActions";
 import { useCommandPalette } from "@/lib/workbench/command-palette-store";
 import { useAssetLibrary } from "@/lib/mono/asset-library";
@@ -40,7 +40,6 @@ const SETTINGS_ENTRIES: { id: SettingsSection; name: string; icon: FC<{ classNam
   { id: "connections", name: "连接与模式", icon: CableIcon },
   { id: "capabilities", name: "Agent 能力", icon: SparklesIcon },
   { id: "apiConfig", name: "API 配置", icon: KeyRoundIcon },
-  { id: "workspace", name: "员工与工作区", icon: UsersIcon },
   { id: "appearance", name: "外观", icon: PaletteIcon },
   { id: "data", name: "数据", icon: DatabaseIcon },
 ];
@@ -79,6 +78,7 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
   const setQuery = useCommandPalette((s) => s.setQuery);
   const { run: runCapability } = useCapabilityActions();
   const openAssetLibrary = useAssetLibrary((s) => s.openLibrary);
+  const { canGrant } = useWorkbenchSession();
   const runtime = useAssistantRuntime();
   const threadIds = useAuiState((s) => s.threads.threadIds);
   const threadItems = useAuiState((s) => s.threads.threadItems);
@@ -100,7 +100,7 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
   const trimmedQuery = query.trim();
 
   useEffect(() => {
-    if (!open || !trimmedQuery) return;
+    if (!open || !trimmedQuery || !canGrant("sessions.messages.view")) return;
     const controller = new AbortController();
     const timer = setTimeout(() => {
       fetch(`/api/threads/search?q=${encodeURIComponent(trimmedQuery)}&limit=8`, {
@@ -116,7 +116,7 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
       clearTimeout(timer);
       controller.abort();
     };
-  }, [open, trimmedQuery]);
+  }, [canGrant, open, trimmedQuery]);
 
   const recentThreads = useMemo(() => {
     const itemsById = new Map(threadItems.map((item) => [item.id, item]));
@@ -128,27 +128,36 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
       .map(toRecentHit);
   }, [threadIds, threadItems]);
 
-  const threadHits = trimmedQuery ? results : recentThreads;
+  const threadHits = canGrant("sessions.messages.view") ? (trimmedQuery ? results : recentThreads) : [];
 
   const matchedCapabilities = useMemo<CapabilityOption[]>(() => {
-    if (!trimmedQuery) return SLASH_CAPABILITIES.slice(0, DEFAULT_CAPABILITY_LIMIT);
+    const allowed = SLASH_CAPABILITIES.filter((option) => capabilityAllowed(option, canGrant));
+    if (!trimmedQuery) return allowed.slice(0, DEFAULT_CAPABILITY_LIMIT);
     const lower = trimmedQuery.toLowerCase();
-    return SLASH_CAPABILITIES.filter(
+    return allowed.filter(
       (option) => includesQuery(option.label, lower) || includesQuery(option.hint, lower),
     );
-  }, [trimmedQuery]);
+  }, [canGrant, trimmedQuery]);
 
   const matchedSettings = useMemo(() => {
-    if (!trimmedQuery) return SETTINGS_ENTRIES;
+    const allowed = SETTINGS_ENTRIES.filter((entry) => {
+      if (entry.id === "apiConfig") return canGrant("system.runtime-config.view");
+      if (entry.id === "connections") return canGrant("workbench.backend.direct.use") || canGrant("workbench.backend.hermes.use");
+      if (entry.id === "capabilities") return canGrant("workbench.chat.use");
+      if (entry.id === "data") return canGrant("sessions.messages.import") || canGrant("sessions.messages.export") || canGrant("sessions.messages.manage");
+      return true;
+    });
+    if (!trimmedQuery) return allowed;
     const lower = trimmedQuery.toLowerCase();
-    return SETTINGS_ENTRIES.filter((entry) => includesQuery(entry.name, lower));
-  }, [trimmedQuery]);
+    return allowed.filter((entry) => includesQuery(entry.name, lower));
+  }, [canGrant, trimmedQuery]);
 
   const matchedTools = useMemo(() => {
-    if (!trimmedQuery) return TOOL_ENTRIES;
+    const allowed = canGrant("resources.assets.view") ? TOOL_ENTRIES : [];
+    if (!trimmedQuery) return allowed;
     const lower = trimmedQuery.toLowerCase();
-    return TOOL_ENTRIES.filter((entry) => includesQuery(entry.name, lower));
-  }, [trimmedQuery]);
+    return allowed.filter((entry) => includesQuery(entry.name, lower));
+  }, [canGrant, trimmedQuery]);
 
   const close = () => setOpen(false);
 
@@ -158,7 +167,7 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
   };
 
   const runAndClose = (option: CapabilityOption) => {
-    runCapability({ action: option.action, prompt: option.prompt });
+    runCapability({ action: option.action, prompt: option.prompt, permission: option.permission });
     close();
   };
 

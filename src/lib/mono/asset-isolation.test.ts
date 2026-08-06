@@ -135,4 +135,37 @@ describe("mono asset/job workspace isolation (Phase 1 baseline)", () => {
     expect(purgedFromB).toBe(false);
     expect(store.getMonoJob(actorA, job.id)).not.toBeNull();
   });
+
+  it("applies own/workspace scope independently to assets, subjects, and jobs", async () => {
+    const { newMonoActor } = await import("./service");
+    const store = await import("./store");
+
+    const workspaceId = `ws-scope-${crypto.randomUUID()}`;
+    const owner = newMonoActor({ userId: "scope-owner", workspaceId, dataScope: "own" });
+    const otherOwn = newMonoActor({ userId: "scope-other", workspaceId, dataScope: "own" });
+    const otherWorkspace = newMonoActor({ userId: "scope-other", workspaceId, dataScope: "workspace" });
+
+    const asset = store.createMonoAsset(owner, {
+      sourceUrl: "https://example.test/scoped.png",
+      mimeType: "image/png",
+    });
+    const subject = store.createMonoSubject(owner, {
+      assetId: asset.id,
+      name: "scoped subject",
+      visibility: "workspace",
+    });
+    const job = store.createMonoJob(owner, "matting", { assetId: null, mediaType: "image" });
+
+    expect(subject).not.toBeNull();
+    expect(store.getMonoAsset(otherOwn, asset.id)).toBeNull();
+    expect(store.getMonoAsset(otherWorkspace, asset.id)?.id).toBe(asset.id);
+    expect(store.listMonoSubjects(otherOwn)).toHaveLength(0);
+    expect(store.listMonoSubjects(otherWorkspace).map((item) => item.id)).toContain(subject?.id);
+    expect(store.getMonoJob(otherOwn, job.id)).toBeNull();
+    expect(store.getMonoJob(otherWorkspace, job.id)?.id).toBe(job.id);
+
+    expect(store.updateMonoSubject(otherOwn, subject!.id, { name: "blocked" })).toBeNull();
+    expect(store.updateMonoSubject(otherWorkspace, subject!.id, { name: "workspace edit" })?.name)
+      .toBe("workspace edit");
+  });
 });

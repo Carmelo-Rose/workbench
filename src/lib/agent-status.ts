@@ -37,10 +37,11 @@ export const useAgentStatus = create<AgentStatusStore>((set, get) => ({
 }));
 
 /** 在应用外壳挂一次：进入时探测，之后每 30s 及窗口聚焦时刷新。 */
-export function useAgentStatusPolling(intervalMs = 30_000) {
+export function useAgentStatusPolling(intervalMs = 30_000, enabled = true) {
   const refresh = useAgentStatus((s) => s.refresh);
 
   useEffect(() => {
+    if (!enabled) return;
     void refresh();
     const timer = setInterval(() => void refresh(), intervalMs);
     const onFocus = () => void refresh();
@@ -49,7 +50,7 @@ export function useAgentStatusPolling(intervalMs = 30_000) {
       clearInterval(timer);
       window.removeEventListener("focus", onFocus);
     };
-  }, [refresh, intervalMs]);
+  }, [enabled, refresh, intervalMs]);
 }
 
 type BackendChoiceStore = {
