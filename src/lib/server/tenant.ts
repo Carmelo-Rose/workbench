@@ -582,13 +582,24 @@ export function revokeUserSessions(userId: string): void {
   getDb().prepare("DELETE FROM workbench_sessions WHERE user_id = ?").run(userId);
 }
 
+function secureSessionCookieEnabled(): boolean {
+  if (process.env.NODE_ENV !== "production") return false;
+  const publicUrl = process.env.WORKBENCH_PUBLIC_URL;
+  if (!publicUrl) return true;
+  try {
+    return new URL(publicUrl).protocol === "https:";
+  } catch {
+    return true;
+  }
+}
+
 export function sessionCookie(token: string): string {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const secure = secureSessionCookieEnabled() ? "; Secure" : "";
   return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`;
 }
 
 export function clearedSessionCookie(): string {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const secure = secureSessionCookieEnabled() ? "; Secure" : "";
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
 }
 
