@@ -340,6 +340,11 @@ function columns(db: DatabaseSync, table: string): { name: string; pk: number }[
 }
 
 function seedLegacyTenant(db: DatabaseSync): void {
+  // An explicit false disables the historical zero-setup tenant. Without this
+  // guard, deleting the legacy local account is undone the next time the
+  // database connection runs its idempotent schema bootstrap.
+  if (process.env.MONO_LOCAL_DEVELOPMENT === "false") return;
+
   const now = Date.now();
   const localEmail = `${legacyUserId}@local.workbench`;
   db.prepare(

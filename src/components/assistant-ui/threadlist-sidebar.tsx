@@ -3,7 +3,7 @@
 import type * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckIcon, ImageIcon, LayoutDashboardIcon, LogOutIcon, MessagesSquare, SettingsIcon, ShieldCheckIcon } from "lucide-react";
+import { ImageIcon, LayoutDashboardIcon, LogOutIcon, MessagesSquare, SettingsIcon, ShieldCheckIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -109,13 +109,7 @@ export function ThreadListSidebar({
  * 放在这里而不是仅在桌面头部展示——否则窄屏下退出登录会完全没有入口。
  */
 function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) {
-  const { session, signOut, switchWorkspace, isAdministrator } = useWorkbenchSession();
-
-  const selectWorkspace = async (workspaceId: string) => {
-    if (workspaceId === session.workspace.id) return;
-    await switchWorkspace(workspaceId);
-    window.location.reload();
-  };
+  const { session, signOut, isAdministrator } = useWorkbenchSession();
 
   return (
     <DropdownMenu>
@@ -126,9 +120,6 @@ function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) 
           </div>
           <div className="flex min-w-0 flex-col gap-0.5 leading-none">
             <span className="truncate font-medium">{session.actor.displayName}</span>
-            <span className="text-muted-foreground truncate text-xs">
-              {session.workspace.name}
-            </span>
           </div>
         </SidebarMenuButton>
       </DropdownMenuTrigger>
@@ -136,16 +127,6 @@ function AccountFooterMenu({ onOpenSettings }: { onOpenSettings?: () => void }) 
         <p className="text-muted-foreground px-2 py-1.5 text-xs">
           {session.actor.displayName}
         </p>
-        {session.workspaces.map((workspace) => (
-          <DropdownMenuItem
-            key={workspace.id}
-            onSelect={() => void selectWorkspace(workspace.id)}
-            className="justify-between rounded-lg"
-          >
-            <span className="truncate">{workspace.name}</span>
-            {workspace.id === session.workspace.id && <CheckIcon className="size-4" />}
-          </DropdownMenuItem>
-        ))}
         <DropdownMenuItem asChild className="rounded-lg">
           <Link href="/security">
             <ShieldCheckIcon className="size-4" />
