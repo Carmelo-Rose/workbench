@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, FC } from "react";
+import type { FC } from "react";
 import {
   prefersReducedMotion,
   watchPrefersReducedMotion,
@@ -10,14 +10,13 @@ import {
 /**
  * Mono ink wash —— 浅色主题下空会话欢迎屏的"墨迹擦除"背景。
  *
- * 底下藏着一幅由 CSS 渐变构成的单色水墨山水（远山 / 雾带 / 近山 / 纸纹，
- * 全部灰阶、由浅色主题 token 派生），上面盖一层用 --background 实际颜色
- * 填满的 canvas。指针划过时以 destination-out 打出带涡边的墨团洞，短暂
- * 露出底画；墨洞按 easeOutCubic 长大并在 ~560ms 内自愈合。
+ * 底下藏着一幅静态水墨图，上面盖一层用 --background 实际颜色填满的 canvas。
+ * 指针划过时以 destination-out 打出带涡边的墨团洞，短暂露出底图；墨洞按
+ * easeOutCubic 长大并在 ~560ms 内自愈合。
  *
  * 无墨团时 rAF 循环自动停止，静止状态零开销。active=false 时整体 ~300ms
  * 淡出并停止响应指针。prefers-reduced-motion 与无 hover 的触屏设备降级为
- * 底画低不透明度静态显示（对齐 particle-field 的"静态一帧"思路）。
+ * 底图低不透明度静态显示（对齐 particle-field 的"静态一帧"思路）。
  */
 
 // —— 墨团 / 自愈合参数（沿用 MimoInkReveal 验证过的手感）——
@@ -29,53 +28,6 @@ const STAMP_STEP = 12; // 指针轨迹插值步长 px，保证快速划动不断
 const MAX_STAMPS = 150; // 同屏墨团上限，超出丢弃最旧的
 
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
-
-// —— 底画（隐藏的水墨山水）——
-// 全部灰阶、由浅色 token 派生；最深处（近山山脊）也只取 --foreground 的
-// ~14%，保证它是"背景"而不是抢戏的主角。
-const ink = (pct: number) =>
-  `color-mix(in oklab, var(--foreground) ${pct}%, transparent)`;
-
-/** 层 1 · 晕染底：左上一团天光淡墨 + 右上一轮晕月 + 自上而下渐浓的底色 */
-const WASH_STYLE: CSSProperties = {
-  background: [
-    `radial-gradient(120% 75% at 28% 8%, ${ink(6)}, transparent 58%)`,
-    // 晕月：淡墨圈出的一轮空心月，给上半区的擦除一点回报
-    `radial-gradient(circle at 74% 17%, transparent 26px, ${ink(10)} 30px, ${ink(4)} 40px, transparent 58px)`,
-    `linear-gradient(180deg, transparent 0%, ${ink(4)} 46%, ${ink(8)} 100%)`,
-  ].join(", "),
-};
-
-/** 层 2 · 远山：clip-path 勾出山脊线，墨色向下化开、隐入雾中 */
-const FAR_RIDGE_STYLE: CSSProperties = {
-  inset: "24% -2% 0",
-  background: `linear-gradient(180deg, ${ink(16)}, ${ink(6)} 44%, transparent 74%)`,
-  clipPath:
-    "polygon(0 30%, 9% 16%, 20% 26%, 33% 6%, 45% 22%, 58% 0%, 71% 18%, 83% 8%, 93% 20%, 100% 12%, 100% 100%, 0 100%)",
-};
-
-/** 层 3 · 雾带：一条背景色的横向留白，把远山山脚洗掉 */
-const MIST_STYLE: CSSProperties = {
-  inset: "42% 0 24%",
-  background: `linear-gradient(180deg, transparent, color-mix(in oklab, var(--background) 90%, transparent) 42% 58%, transparent)`,
-};
-
-/** 层 4 · 近山：更低、稍浓的一道山脊，同样向下化开 */
-const NEAR_RIDGE_STYLE: CSSProperties = {
-  inset: "52% -2% 0",
-  background: `linear-gradient(180deg, ${ink(24)}, ${ink(10)} 40%, transparent 82%)`,
-  clipPath:
-    "polygon(0 24%, 8% 36%, 18% 10%, 30% 30%, 44% 4%, 57% 26%, 68% 12%, 80% 32%, 91% 18%, 100% 28%, 100% 100%, 0 100%)",
-};
-
-/** 层 5 · 纸纹：两组错频点阵模拟宣纸颗粒，极淡 */
-const GRAIN_STYLE: CSSProperties = {
-  backgroundImage: [
-    `radial-gradient(circle at 26% 38%, ${ink(10)} 0 1px, transparent 1.5px)`,
-    `radial-gradient(circle at 72% 66%, ${ink(7)} 0 1px, transparent 1.5px)`,
-  ].join(", "),
-  backgroundSize: "44px 39px, 67px 58px",
-};
 
 /**
  * 把 var(--background) 解析成 canvas 可用的实际 rgb 颜色
@@ -352,14 +304,14 @@ export const InkWashField: FC<{ active: boolean }> = ({ active }) => {
       className="pointer-events-none fade-in animate-in absolute inset-0 h-full w-full transition-opacity duration-300 [mask-image:radial-gradient(115%_100%_at_50%_38%,black_30%,transparent_82%)]"
       style={{ opacity: active ? 1 : 0 }}
     >
-      {/* 底画：单色水墨山水（降级模式下以低不透明度静态显示） */}
-      <div className="absolute inset-0" style={{ opacity: degraded ? 0.4 : 1 }}>
-        <div className="absolute inset-0" style={WASH_STYLE} />
-        <div className="absolute" style={FAR_RIDGE_STYLE} />
-        <div className="absolute" style={MIST_STYLE} />
-        <div className="absolute" style={NEAR_RIDGE_STYLE} />
-        <div className="absolute inset-0" style={GRAIN_STYLE} />
-      </div>
+      {/* 鼠标墨迹下方的底图：默认被 canvas 遮罩，滑过时才显现 */}
+      <div
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+        style={{
+          backgroundImage: "url('/ink-wash-home.png')",
+          opacity: degraded ? 0.4 : 1,
+        }}
+      />
       {/* 遮罩层：--background 实色覆盖，指针擦出墨洞后自愈合 */}
       {!degraded && (
         <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />

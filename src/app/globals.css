@@ -1,7 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "tw-shimmer";
-@import "./skins.css";
 
 @source "../components";
 

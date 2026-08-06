@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { THEME_INIT_SCRIPT } from "@/lib/theme";
 import { DENSITY_INIT_SCRIPT } from "@/lib/density";
 import "./globals.css";
+import "./skins.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
