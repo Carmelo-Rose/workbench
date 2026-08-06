@@ -10,8 +10,12 @@
       "kind": "fixed-page"
     },
     "template.json": {
-      "sha256": "12029ef0b59b0fdcb41509771365851f50450200f5277ae7bc209090216b7ab6",
+      "sha256": "84cfa3ade7dc4c345bba973540918fb55e74ea20ef64d763dd0e7ace86510643",
       "kind": "template"
+    },
+    "shomarne-logo.png": {
+      "sha256": "8532fdcdb745bbd0dae02dc6cb939bb2d471330ea34c4f2e59c52c69742e9104",
+      "kind": "brand-mark"
     }
   }
 }
