@@ -62,11 +62,14 @@
     },
     {
       "id": "matting",
-      "name": "人物抠像换背景",
+      "name": "抠像换背景",
       "status": "ready",
-      "description": "人物视频抠像、替换背景（RVM，后续升级 MatAnyone）",
+      "description": "视频抠像、替换背景。human=RVM 人像专用；general=BiRefNet 首帧 + MatAnyone 传播，主体类别无关（动物/商品/任意物体）；auto 自动判定",
       "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }],
-      "params_hint": { "background": "背景颜色，white/black/green/blue/gray/red 或 #rrggbb 十六进制，默认 white" },
+      "params_hint": {
+        "background": "背景颜色，white/black/green/blue/gray/red 或 #rrggbb 十六进制，默认 white",
+        "mode": "auto（默认，采样探测有没有人再选）/ human（RVM，仅人像）/ general（MatAnyone，任意主体）"
+      },
       "adapter": {
         "cwd": "D:/hyk_sort/apps/video-toolbox/matting",
         "command": [
@@ -79,7 +82,9 @@
           "--params",
           "{params_json}"
         ],
-        "env": {},
+        "env": {
+          "MATTING_CUTOUT_DIR": "D:/hyk_sort/apps/video-toolbox/gateway/capabilities/product-cutout"
+        },
         "timeout_sec": 7200
       }
     },

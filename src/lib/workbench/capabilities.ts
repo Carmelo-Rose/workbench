@@ -151,10 +151,10 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
       {
         id: "video-matting",
         label: "抠像换背景",
-        prompt: "把这个视频里的人物抠出来，换成白色背景。",
+        prompt: "把这个视频里的主体抠出来，换成白色背景。",
         action: "video-picker",
         iconKey: "scissors",
-        hint: "选视频，抠出人物换纯色背景",
+        hint: "选视频，抠出主体换纯色背景",
         slash: true,
         permission: "video.cutout.use",
       },

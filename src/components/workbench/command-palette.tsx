@@ -167,7 +167,7 @@ export const CommandPalette: FC<{ onOpenSettings: (section: SettingsSection) => 
   };
 
   const runAndClose = (option: CapabilityOption) => {
-    runCapability({ action: option.action, prompt: option.prompt, permission: option.permission });
+    runCapability({ id: option.id, action: option.action, prompt: option.prompt, permission: option.permission });
     close();
   };
 

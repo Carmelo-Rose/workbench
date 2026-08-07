@@ -168,18 +168,24 @@ export function createMonoTools(context: MonoToolContext = {}) {
         "**会调用付费生图服务**：一次完整运行要生成 7 张模特图，每张都花钱，并且会把成品写进共享盘覆盖同名文件。" +
         "用户明确要求「跑某个货号 / 生成商品套图」时才调用，不要为了查看结果或确认状态而调用——查状态用 mono_get_job。" +
         "folderName 传用户说的货号即可（如「1234」）；名字对不上或匹配到多个时工具会报错并列出候选，把候选转达给用户确认，不要自己挑一个。" +
-        "onlySlots 只在用户要求重跑指定的失败槽位时传，取值是模特槽位号（01、03–08）。",
+        "onlySlots 只在用户要求重跑指定的失败详情槽位时传，取值是模特槽位号（01、03–08）；onlyMain 只在用户要求重跑指定失败主图时传，取值是原图文件名（不带扩展名）。若要只重跑全部主图，传 retryMain=true。",
       inputSchema: z.object({
         folderName: z.string().min(1).describe("商品文件夹名，通常就是货号，例如 1234"),
         onlySlots: z.array(z.string().regex(/^\d{2}$/u)).min(1).max(7).optional()
           .describe("只重跑这些模特槽位，例如 [\"04\",\"08\"]。不传则完整跑一遍"),
+        onlyMain: z.array(z.string().min(1)).min(1).max(200).optional()
+          .describe("只重跑这些失败主图，取原图文件名且不带扩展名，例如 [\"329A8208\"]。不传则完整跑一遍"),
+        retryMain: z.boolean().optional()
+          .describe("只重跑主图分支；不传 onlyMain 时重跑全部主图，不会重跑详情图或 SKU"),
       }),
-      execute: async ({ folderName, onlySlots }) => {
+      execute: async ({ folderName, onlySlots, onlyMain, retryMain }) => {
         const folder = await resolveProductFolderByName(folderName);
         return lightenMonoJob(createProductPipelineJob(actor, {
           folderId: folder.id,
           workflowId: WORKFLOW_ID,
           onlySlots,
+          onlyMain,
+          retryMain,
         }));
       },
     }),

@@ -23,6 +23,7 @@ import {
   ProductCutoutScheduler,
   productPipelineSchedulingSettings,
   publishImages,
+  publishMainImages,
   refineProductForeground,
   refineSkuForeground,
   requestShadowBackdrop,
@@ -31,9 +32,11 @@ import {
   runModelGenerationPhase,
   runPipelineBranches,
   runWithConcurrency,
+  selectMainSourceStems,
   selectModelSlots,
   validateProductPipelineInput,
   verifyDetailOutputs,
+  verifyMainOutputs,
 } from "./product-pipeline";
 import type { RelativeBox } from "./product-classify";
 import { productPipelineInputSchema } from "./contracts";
@@ -92,6 +95,12 @@ describe("product pipeline folder isolation", () => {
     expect(productPipelineInputSchema.safeParse({
       folderId: Buffer.from("123").toString("base64url"),
       workflowId: "hat-62604171-v1",
+    }).success).toBe(true);
+    expect(productPipelineInputSchema.safeParse({
+      folderId: Buffer.from("123").toString("base64url"),
+      workflowId: "hat-62604171-v1",
+      onlyMain: ["329A8208"],
+      retryMain: true,
     }).success).toBe(true);
   });
 });
@@ -925,6 +934,12 @@ describe("aggregated branch progress", () => {
 });
 
 describe("product pipeline onlySlots retry", () => {
+  it("selectMainSourceStems narrows retries, preserves source casing, and de-duplicates", () => {
+    expect(selectMainSourceStems(["329A8208", "329A8209"], ["329a8209", "329A8209"]))
+      .toEqual(["329A8209"]);
+    expect(() => selectMainSourceStems(["329A8208"], ["missing"])).toThrow("onlyMain");
+  });
+
   it("selectModelSlots narrows generation to exactly the requested slot", () => {
     expect(selectModelSlots(["04"]).map((slot) => slot[0])).toEqual(["04"]);
   });
@@ -990,6 +1005,22 @@ describe("product pipeline onlySlots retry", () => {
 });
 
 describe("product pipeline partial publish", () => {
+  it("publishMainImages only copies staged main files, keeping successful earlier files", async () => {
+    const root = await fixture();
+    const stage = path.join(root, "main-stage");
+    const destination = path.join(root, "主图");
+    await mkdir(stage, { recursive: true });
+    await mkdir(destination, { recursive: true });
+    await writeFile(path.join(destination, "329A8208.png"), "old-08");
+    await writeFile(path.join(destination, "329A8209.png"), "old-09");
+    await writeFile(path.join(stage, "329A8208.png"), "new-08");
+
+    await publishMainImages(stage, destination, new Set(["329A8208.png"]));
+
+    await expect(readFile(path.join(destination, "329A8208.png"), "utf8")).resolves.toBe("new-08");
+    await expect(readFile(path.join(destination, "329A8209.png"), "utf8")).resolves.toBe("old-09");
+  });
+
   it("publishImages only copies staged slots that exist, keeping the prior image for the rest", async () => {
     const root = await fixture();
     const stage = path.join(root, "stage");
@@ -1014,6 +1045,16 @@ describe("product pipeline partial publish", () => {
     await mkdir(stage, { recursive: true });
     await sharp({ create: { width: 790, height: 681, channels: 3, background: "#ffffff" } }).jpeg().toFile(path.join(stage, "商品一_02.jpg"));
     await expect(verifyDetailOutputs(stage, "商品一", [], new Set(["02"]))).resolves.toBeUndefined();
+  });
+
+  it("verifyMainOutputs accepts only completed 800px square main files", async () => {
+    const root = await fixture();
+    const stage = path.join(root, "main-stage");
+    await mkdir(stage, { recursive: true });
+    await sharp({ create: { width: 800, height: 800, channels: 3, background: "#ffffff" } })
+      .png()
+      .toFile(path.join(stage, "329A8208.png"));
+    await expect(verifyMainOutputs(stage, new Set(["329A8208.png"]), [])).resolves.toBeUndefined();
   });
 });
 

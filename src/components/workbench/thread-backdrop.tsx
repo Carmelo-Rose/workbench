@@ -2,8 +2,14 @@
 
 import { InkWashField } from "@/components/workbench/ink-wash-field";
 import { ParticleField } from "@/components/workbench/particle-field";
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import type { FC } from "react";
+
+const HOME_BACKGROUNDS = [
+  "/ink-wash-home.png",
+  "/ink-wash-home-mountain.png",
+  "/ink-wash-home-moon.png",
+] as const;
 
 /**
  * 欢迎屏背景的主题开关：暗色 → WebGL 粒子海，浅色 → 墨迹擦除。
@@ -31,11 +37,14 @@ const getServerSnapshot = (): boolean | null => null;
 
 export const ThreadBackdrop: FC<{ active: boolean }> = ({ active }) => {
   const isDark = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const [backgroundImage] = useState<string>(
+    () => HOME_BACKGROUNDS[Math.floor(Math.random() * HOME_BACKGROUNDS.length)],
+  );
 
   if (isDark === null) return null;
   return isDark ? (
     <ParticleField active={active} />
   ) : (
-    <InkWashField active={active} />
+    <InkWashField active={active} backgroundImage={backgroundImage} />
   );
 };

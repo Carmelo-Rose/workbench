@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAui, useAuiState } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ScrollFadeRow } from "@/components/assistant-ui/scroll-edge-fade";
 import { cn } from "@/lib/utils";
 import { useImage2Mode } from "@/lib/image2-mode";
 import { Image2HistorySheet } from "@/components/workbench/Image2History";
@@ -89,27 +90,29 @@ export function Image2TemplateRail() {
 
   return (
     <div className="aui-image2-template-rail w-full px-4">
-      <div className="mx-auto flex max-w-(--thread-max-width) gap-2 overflow-x-auto pb-1 scrollbar-none">
-        {MONO_IMAGE2_TEMPLATES.map((template) => (
-          <button
-            key={template.id}
-            type="button"
-            onClick={() => void selectTemplate(template)}
-            className={cn(
-              "bg-background hover:bg-muted flex w-36 shrink-0 items-center gap-2 rounded-xl border p-2 text-left transition-colors",
-              selectedTemplateId === template.id && "border-foreground/35 bg-muted",
-            )}
-          >
-            {/* Static template thumbnails are local Workbench assets. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={template.thumbnailUrl} alt="" className="size-10 shrink-0 rounded-lg object-cover" />
-            <span className="min-w-0">
-              <strong className="block truncate text-xs font-medium">{template.title}</strong>
-              <span className="text-muted-foreground mt-0.5 block truncate text-[11px]">{template.description}</span>
-            </span>
-          </button>
-        ))}
-      </div>
+      <ScrollFadeRow className="mx-auto max-w-(--thread-max-width)">
+        <div className="mx-auto flex w-max gap-2 pb-1">
+          {MONO_IMAGE2_TEMPLATES.map((template) => (
+            <button
+              key={template.id}
+              type="button"
+              onClick={() => void selectTemplate(template)}
+              className={cn(
+                "bg-background hover:bg-muted flex w-36 shrink-0 items-center gap-2 rounded-xl border p-2 text-left transition-colors",
+                selectedTemplateId === template.id && "border-foreground/35 bg-muted",
+              )}
+            >
+              {/* Static template thumbnails are local Workbench assets. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={template.thumbnailUrl} alt="" className="size-10 shrink-0 rounded-lg object-cover" />
+              <span className="min-w-0">
+                <strong className="block truncate text-xs font-medium">{template.title}</strong>
+                <span className="text-muted-foreground mt-0.5 block truncate text-[11px]">{template.description}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </ScrollFadeRow>
     </div>
   );
 }

@@ -264,7 +264,10 @@ const matchDegraded = () =>
   typeof window !== "undefined" &&
   (prefersReducedMotion() || window.matchMedia("(hover: none)").matches);
 
-export const InkWashField: FC<{ active: boolean }> = ({ active }) => {
+export const InkWashField: FC<{
+  active: boolean;
+  backgroundImage?: string;
+}> = ({ active, backgroundImage = "/ink-wash-home.png" }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const [degraded, setDegraded] = useState(matchDegraded);
@@ -308,7 +311,7 @@ export const InkWashField: FC<{ active: boolean }> = ({ active }) => {
       <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
-          backgroundImage: "url('/ink-wash-home.png')",
+          backgroundImage: `url('${backgroundImage}')`,
           opacity: degraded ? 0.4 : 1,
         }}
       />

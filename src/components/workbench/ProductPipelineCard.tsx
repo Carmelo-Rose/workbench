@@ -81,6 +81,8 @@ const branchLabel: Record<string, string> = {
 
 type SlotRecord = { slot: string; attempts?: number; warning?: string; qa?: string };
 type FailedSlot = { slot: string; reason: string };
+type MainRecord = { stem: string; name: string; warnings?: string[]; assetId?: string };
+type FailedMain = { stem: string; name: string; reason: string };
 type BranchState = { stage?: string; progress?: number };
 type PipelineResult = {
   stage?: string;
@@ -88,6 +90,8 @@ type PipelineResult = {
   relativePath?: string;
   colors?: { rank: number; shots: number }[];
   detailShots?: number;
+  mainRecords?: MainRecord[];
+  failedMain?: FailedMain[];
   slots?: SlotRecord[];
   failedSlots?: FailedSlot[];
   /** Per-branch stage and percentage, since three of them now advance at once. */
@@ -129,6 +133,14 @@ export function ProductPipelineCard({ initialJob, folderName }: { initialJob?: M
 function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folderNameHint?: string }) {
   const aui = useAui();
   const result = pipelineResult(job);
+  const legacyMainFailed = result.failedBranches?.some((item) => item.branch === "main") ?? false;
+  const retryTargetLabel = [
+    result.failedMain?.length ? `${result.failedMain.length} 张主图` : legacyMainFailed ? "全部主图" : "",
+    result.failedSlots?.length ? `${result.failedSlots.length} 张详情图` : "",
+  ].filter(Boolean).join("和");
+  const retryActionLabel = legacyMainFailed && !result.failedMain?.length && !result.failedSlots?.length
+    ? "重新生成全部主图"
+    : `只重跑失败的 ${retryTargetLabel}`;
   // The share-relative path is only present on job records that never left the
   // server; everything the browser sees has it stripped, so the caller's own
   // label is the reliable source and the rest are fallbacks.
@@ -166,10 +178,12 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
     }
   };
 
-  const retryFailedSlots = () => {
+  const retryFailedImages = () => {
     const folderId = stringValue(job.input.folderId);
     const failedIds = result.failedSlots?.map((item) => item.slot) ?? [];
-    if (!folderId || !failedIds.length) return;
+    const failedStems = result.failedMain?.map((item) => item.stem) ?? [];
+    const shouldRetryMain = failedStems.length > 0 || legacyMainFailed;
+    if (!folderId || (!failedIds.length && !shouldRetryMain)) return;
     // Each click spends real money on the image service, and this card stays on
     // screen forever once the job is terminal. A latch — not a `disabled` flag
     // cleared in a `finally` — is what stops a second click from buying a
@@ -186,9 +200,11 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
           workflowId: stringValue(job.input.workflowId) ?? "hat-62604171-v1",
           modelPairId: stringValue(job.input.modelPairId),
           folderName,
-          onlySlots: failedIds,
+          ...(failedIds.length ? { onlySlots: failedIds } : {}),
+          ...(failedStems.length ? { onlyMain: failedStems } : {}),
+          ...(shouldRetryMain ? { retryMain: true } : {}),
         },
-        `只重跑失败的 ${failedIds.length} 张${folderName ? `：${folderName}` : ""}`,
+        `${retryActionLabel}${folderName ? `：${folderName}` : ""}`,
       );
     } catch (error) {
       retryStarted.current = false;
@@ -200,6 +216,9 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
   const isActive = job.status === "queued" || job.status === "running";
   const isTerminal = !isActive;
   const modelDone = result.slots?.filter((slot) => SLOT_META.find((meta) => meta.id === slot.slot)?.kind === "model").length ?? 0;
+  const mainDone = result.mainRecords?.length ?? 0;
+  const mainFailed = result.failedMain?.length ?? 0;
+  const mainTotal = mainDone + mainFailed;
 
   return (
     <div className="space-y-3">
@@ -211,7 +230,7 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
             : job.status === "succeeded"
               ? (result.failedBranches?.length
                 ? `已完成（${result.failedBranches.map((item) => item.label ?? branchLabel[item.branch] ?? item.branch).join("、")}未发布）`
-                : result.incomplete ? "已完成（部分槽位失败）" : "已完成")
+                : result.incomplete ? "已完成（部分图片失败）" : "已完成")
               : job.status === "cancelled"
                 ? "已取消"
                 : (job.error ?? "未完成")}
@@ -270,6 +289,7 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
         {result.resumed ? <span className="bg-muted rounded-full px-2.5 py-1">已复用现有主图</span> : null}
         {result.colors?.length ? <span className="bg-muted rounded-full px-2.5 py-1">识别到 {result.colors.length} 个颜色</span> : null}
         {result.detailShots ? <span className="bg-muted rounded-full px-2.5 py-1">{result.detailShots} 张细节图</span> : null}
+        {mainTotal ? <span className="bg-muted rounded-full px-2.5 py-1">主图 {mainDone} / {mainTotal}</span> : null}
         <span className="bg-muted rounded-full px-2.5 py-1">付费槽位 {modelDone} / {MODEL_SLOT_COUNT}</span>
         <span className="bg-muted rounded-full px-2.5 py-1">已用时长 {elapsedLabel(job)}</span>
       </div>
@@ -291,10 +311,14 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
               {copied ? "已复制" : copyError ? "复制失败，请重试" : "复制文件夹路径"}
             </Button>
           ) : null}
-          {result.incomplete && result.failedSlots?.length ? (
-            <Button variant="destructive" size="sm" disabled={retrying} onClick={retryFailedSlots}>
+          {result.incomplete && (
+            result.failedSlots?.length
+            || result.failedMain?.length
+            || legacyMainFailed
+          ) ? (
+            <Button variant="destructive" size="sm" disabled={retrying} onClick={retryFailedImages}>
               {retrying ? <LoaderCircleIcon className="animate-spin" /> : <RefreshCwIcon />}
-              {retrying ? "已提交，见下方新任务" : `只重跑失败的 ${result.failedSlots.length} 张`}
+              {retrying ? "已提交，见下方新任务" : retryActionLabel}
             </Button>
           ) : null}
         </div>

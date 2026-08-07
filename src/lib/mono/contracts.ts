@@ -136,6 +136,13 @@ export const productPipelineInputSchema = z.object({
   // is re-checked server-side (product-pipeline.ts) since that set isn't
   // knowable from this schema alone.
   onlySlots: z.array(z.string().regex(/^\d{2}$/u, "槽位编号必须是两位数字")).min(1).max(11).optional(),
+  // Main-image retries are addressed by the source filename stem. The runner
+  // resolves those stems against the current eligible main shots before any
+  // paid request is made.
+  onlyMain: z.array(z.string().min(1).max(255)).min(1).max(200).optional(),
+  // Lets an older all-or-nothing main-branch failure be recovered without
+  // rerunning SKU or paid detail slots. Omit `onlyMain` to retry every main.
+  retryMain: z.boolean().optional(),
 });
 
 export const monoImageGenerationSlotSchema = z.object({

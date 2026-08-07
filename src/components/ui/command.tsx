@@ -116,6 +116,22 @@ function CommandEmpty({
   );
 }
 
+/**
+ * 分组标题的样式。⌘K 面板和 composer 的 `/` 命令菜单共用同一份，避免两处
+ * 长相漂移——`/` 走的是 assistant-ui 的 trigger popover（键盘由它托管，
+ * 挂不进 cmdk），所以只能共享类名，不能共享组件。
+ */
+export const COMMAND_HEADING_CLASS =
+  "text-muted-foreground px-2 py-1.5 text-xs font-medium";
+
+/**
+ * 条目行的**基础**样式：布局、字号、图标尺寸，不含选中态。
+ * cmdk 用 `data-[selected=true]`，trigger popover 用 `data-[highlighted]`，
+ * 选中态由各自拼上去。
+ */
+export const COMMAND_ITEM_BASE_CLASS =
+  "[&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
+
 function CommandGroup({
   className,
   ...props
@@ -153,7 +169,8 @@ function CommandItem({
     <CommandPrimitive.Item
       data-slot="command-item"
       className={cn(
-        "data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground [&_svg:not([class*='text-'])]:text-muted-foreground relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground",
+        COMMAND_ITEM_BASE_CLASS,
         className,
       )}
       {...props}

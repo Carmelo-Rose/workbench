@@ -21,7 +21,7 @@ describe("chainTargets", () => {
 
 describe("capabilityName", () => {
   it("resolves known ids to their display name and falls back to the id itself", () => {
-    expect(capabilityName("matting")).toBe("人物抠像换背景");
+    expect(capabilityName("matting")).toBe("抠像换背景");
     expect(capabilityName("unknown_id")).toBe("unknown_id");
   });
 });

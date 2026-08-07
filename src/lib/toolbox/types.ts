@@ -60,11 +60,12 @@ export const TOOLBOX_CAPABILITIES: ToolboxCapability[] = [
   },
   {
     id: "matting",
-    name: "人物抠像换背景",
+    name: "抠像换背景",
     status: "ready",
     interactive: false,
-    defaultParams: { background: "white" },
-    description: "人物视频抠像、替换背景",
+    // mode 留 auto：串联提交时没人来说这段视频里是人还是别的，交给适配器自己探。
+    defaultParams: { background: "white", mode: "auto" },
+    description: "视频抠像、替换背景（人物或任意主体）",
   },
   {
     id: "translate_dub",

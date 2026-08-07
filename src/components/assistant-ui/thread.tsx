@@ -427,7 +427,7 @@ const ThreadSuggestions: FC = () => {
                       suggestionChipClass,
                       !option.slash && "border-dashed text-muted-foreground",
                     )}
-                    onClick={() => run({ action: option.action, prompt: option.prompt, permission: option.permission })}
+                    onClick={() => run({ id: option.id, action: option.action, prompt: option.prompt, permission: option.permission })}
                   >
                     {option.slash ? <CapabilityIcon iconKey={option.iconKey} /> : null}
                     {option.label}
@@ -569,12 +569,12 @@ const Composer: FC = () => {
   const openSubjectLibraryFromDirective = (item: Unstable_TriggerItem) => {
     if (item.type === "subject-action") openSubjectLibrary();
   };
-  // `/` = 功能命令：两级菜单（先分组、再命令，敲字则跨组搜索），数据取能力注册表里
-  // 标记 slash 的真能力，选中后复用与欢迎 chip 同一套 run（填提示词 / 拉起选择器 /
-  // 开视频卡 / 切生图模式）。removeOnExecute 剥掉用户敲的 /xxx；fill 型用 setText
-  // 整体替换文本，本就不会残留。
+  // `/` = 功能命令：命令面板式的单列扁平菜单，顶部「常用」，下面按分组标题分段
+  // 一次铺开，敲字则跨组过滤。数据取能力注册表里标记 slash 的真能力，选中后复用
+  // 与欢迎 chip 同一套 run（填提示词 / 拉起选择器 / 开视频卡 / 切生图模式）。
+  // removeOnExecute 剥掉用户敲的 /xxx；fill 型用 setText 整体替换文本，本就不会残留。
   const runSlashCapability = (option: CapabilityOption) =>
-    runCapability({ action: option.action, prompt: option.prompt, permission: option.permission });
+    runCapability({ id: option.id, action: option.action, prompt: option.prompt, permission: option.permission });
   const slash = useSlashCapabilityAdapter({
     run: runSlashCapability,
     iconMap: capabilityIconMap,
@@ -631,7 +631,6 @@ const Composer: FC = () => {
           <ComposerTriggerPopover
             char="/"
             {...slash}
-            categoryItems={slash.adapter.categoryItems}
             emptyItemsLabel="没有匹配的命令"
           />
         )}

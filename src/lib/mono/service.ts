@@ -288,6 +288,8 @@ export function createProductPipelineJob(actor: MonoActor, input: ProductPipelin
     workflowId: input.workflowId,
     modelPairId: input.modelPairId ?? null,
     onlySlots: input.onlySlots ?? null,
+    onlyMain: input.onlyMain ?? null,
+    retryMain: input.retryMain ?? false,
     // The resolved relative path is retained only in the private job record;
     // API responses redact it before leaving the server.
     folderRelativePath: resolved.relativePath,

@@ -363,6 +363,8 @@ function productPipelineResponse({
     ...(config.modelPairId ? { modelPairId: config.modelPairId } : {}),
     ...(folderName ? { folderName } : {}),
     ...(config.onlySlots ? { onlySlots: config.onlySlots } : {}),
+    ...(config.onlyMain ? { onlyMain: config.onlyMain } : {}),
+    ...(config.retryMain ? { retryMain: true } : {}),
   };
   const toolCallId = `tool_${randomUUID()}`;
   const metadata = { custom: { backend: "direct", mode: "product-pipeline" } };

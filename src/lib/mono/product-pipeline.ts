@@ -98,6 +98,19 @@ export function selectModelSlots(onlySlots: readonly string[] | null | undefined
   const wanted = new Set(onlySlots);
   return MODEL_SLOTS.filter((slot) => wanted.has(slot[0]));
 }
+
+/** Narrows a main-image retry to the requested source-image stems. */
+export function selectMainSourceStems(
+  available: readonly string[],
+  onlyMain: readonly string[] | null | undefined,
+): string[] {
+  if (!onlyMain?.length) return [...available];
+  const byStem = new Map(available.map((stem) => [stem.toLocaleLowerCase(), stem]));
+  const wanted = [...new Set(onlyMain.map((stem) => stem.trim().toLocaleLowerCase()))];
+  const invalid = wanted.filter((stem) => !byStem.has(stem));
+  if (invalid.length) throw new Error(`onlyMain 包含不可重跑的主图：${invalid.join(", ")}`);
+  return wanted.map((stem) => byStem.get(stem)!);
+}
 type TemplateManifest = { version: string; files: Record<string, { sha256: string; kind: string }> };
 
 /**
@@ -517,6 +530,10 @@ export function validateProductPipelineInput(input: ProductPipelineInput): { rel
   if (input.onlySlots?.length) {
     const invalid = input.onlySlots.filter((slot) => !MODEL_SLOT_IDS.has(slot));
     if (invalid.length) throw new Error(`onlySlots 包含非法槽位：${invalid.join(", ")}`);
+  }
+  if (input.onlyMain?.length) {
+    const invalid = input.onlyMain.filter((stem) => !stem.trim() || /[\\/\0]/u.test(stem) || stem === "." || stem === "..");
+    if (invalid.length) throw new Error(`onlyMain 包含非法主图标识：${invalid.join(", ")}`);
   }
   return {
     relativePath: resolved.relativePath,
@@ -1721,36 +1738,84 @@ type BranchContext = {
  * accepts — but asking each frame's own metric is what lets this branch run
  * without waiting on the rest of the folder.
  */
-async function runMainBranch(ctx: BranchContext): Promise<{ deliverables: ProductPipelineDeliverable[]; warnings: string[] }> {
-  const shots = ctx.prepared.filter((item) => isFullArticleShot(item.metric));
-  if (!shots.length) throw new Error("没有可用于主图的商品整体图：原图不是细节特写就是抠图为空");
+export type FailedMainFrame = { stem: string; name: string; reason: string };
+type MainFrameRecord = { stem: string; name: string; warnings?: string[]; sha256: string; assetId?: string };
+type MainBranchOutcome = {
+  deliverables: ProductPipelineDeliverable[];
+  records: MainFrameRecord[];
+  failedMain: FailedMainFrame[];
+  warnings: string[];
+};
+
+/**
+ * Main images use the same partial-delivery rule as the paid detail slots:
+ * a failed source frame is recorded, while every successful frame is merged
+ * into 主图/ at the end of this run. That makes a retry cheap and prevents one
+ * transient provider rejection from hiding an otherwise usable set.
+ */
+async function runMainBranch(ctx: BranchContext): Promise<MainBranchOutcome> {
+  const eligibleShots = ctx.prepared.filter((item) => isFullArticleShot(item.metric));
+  if (!eligibleShots.length) throw new Error("没有可用于主图的商品整体图：原图不是细节特写就是抠图为空");
+  const rawOnlyMain = ctx.job.input.onlyMain;
+  const onlyMain = Array.isArray(rawOnlyMain) && rawOnlyMain.length ? rawOnlyMain.map(String) : null;
+  const selectedStems = selectMainSourceStems(eligibleShots.map((item) => item.source.stem), onlyMain);
+  const byStem = new Map(eligibleShots.map((item) => [item.source.stem, item]));
+  const shots = selectedStems.map((stem) => byStem.get(stem)!);
   const stage = path.join(ctx.stagingRoot, "主图");
   await mkdir(stage, { recursive: true });
   const destination = path.join(ctx.detailFolder, "主图");
-  // Frames the generator re-composed instead of editing in place, collected
-  // from the shots that actually became a 主图 so the operator is only asked to
-  // re-check pictures that were published.
   const warnings: string[] = [];
-  let done = 0;
-  ctx.progress.report("main", "generating_main", 2);
+  const records: MainFrameRecord[] = [];
+  const failedMain: FailedMainFrame[] = [];
+  ctx.progress.report("main", "generating_main", 2, { mainRecords: [], failedMain: [] });
   await runWithConcurrency(shots, PRODUCT_CUTOUT_CONCURRENCY, async (item) => {
     if (ctx.signal.aborted) throw new Error("任务已取消");
-    const frame = await renderMainFrame(item, ctx.folderKey, ctx.signal, ctx.job.workspaceId);
-    warnings.push(...frame.warnings);
-    // The article as located on this very generated frame. Nothing measured on
-    // another picture reaches the framing.
-    await composeSquareDeliverable(
-      frame.image,
-      frame.article,
-      path.join(stage, `${item.source.stem}.png`),
-      { framing: "main" },
-    );
-    done += 1;
-    ctx.progress.report("main", "generating_main", (done / shots.length) * 90, { mainWarnings: [...warnings] });
+    try {
+      const frame = await renderMainFrame(item, ctx.folderKey, ctx.signal, ctx.job.workspaceId);
+      warnings.push(...frame.warnings);
+      const name = `${item.source.stem}.png`;
+      const output = path.join(stage, name);
+      // The article as located on this very generated frame. Nothing measured
+      // on another picture reaches the framing.
+      await composeSquareDeliverable(frame.image, frame.article, output, { framing: "main" });
+      records.push({
+        stem: item.source.stem,
+        name,
+        ...(frame.warnings.length ? { warnings: frame.warnings } : {}),
+        sha256: await fileHash(output),
+      });
+    } catch (error) {
+      if (ctx.signal.aborted) throw error;
+      failedMain.push({
+        stem: item.source.stem,
+        name: item.source.name,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const settled = records.length + failedMain.length;
+    ctx.progress.report("main", "generating_main", 2 + (settled / Math.max(1, shots.length)) * 88, {
+      mainRecords: [...records],
+      failedMain: [...failedMain],
+      mainWarnings: [...warnings],
+      onlyMain,
+    });
   });
-  ctx.progress.report("main", "publishing_main", 92);
-  await atomicPublish(stage, destination);
-  return { deliverables: await persistProductDirectory(ctx.job, destination, "product-main"), warnings };
+
+  let deliverables: ProductPipelineDeliverable[] = [];
+  if (records.length) {
+    const producedNames = new Set(records.map((record) => record.name));
+    await verifyMainOutputs(stage, producedNames, ctx.prepared.map((item) => item.source));
+    ctx.progress.report("main", "publishing_main", 92, {
+      mainRecords: [...records], failedMain: [...failedMain], mainWarnings: [...warnings], onlyMain,
+    });
+    await publishMainImages(stage, destination, producedNames);
+    deliverables = await persistProductDirectory(ctx.job, destination, "product-main", producedNames);
+    for (const record of records) {
+      const asset = deliverables.find((item) => item.slotKey === record.name);
+      if (asset) record.assetId = asset.assetId;
+    }
+  }
+  return { deliverables, records, failedMain, warnings };
 }
 
 /** SKU: one clean catalogue angle per colourway, no recovered shadow. */
@@ -1856,14 +1921,11 @@ async function runImagesBranch(
     },
   );
   records.push(...modelRecords);
-  // A branch that produced nothing new has nothing worth publishing, and must
-  // still fail loudly rather than report a hollow "success".
-  if (!records.length) {
-    throw new Error(`模特图全部生成失败（${modelSlots.length} 个槽位），未发布任何内容：${failedSlots.map((item) => `${item.slot}(${item.reason})`).join("；")}`);
-  }
-
   ctx.progress.report("images", "compositing", 76, { slots: [...records], failedSlots });
-  for (const slot of DETAIL_SLOTS.filter((item) => item[3] !== "model")) {
+  // A detail-only retry is intentionally limited to the requested paid model
+  // frames. Static and assembled pages already on the share stay untouched.
+  const compositedSlots = onlySlots ? [] : DETAIL_SLOTS.filter((item) => item[3] !== "model");
+  for (const slot of compositedSlots) {
     const output = path.join(detailStage, `${baseName}_${slot[0]}.jpg`);
     await renderCompositedSlot(
       template,
@@ -1876,6 +1938,11 @@ async function runImagesBranch(
     );
     records.push({ slot: slot[0], attempts: 0, qa: "not-required", sha256: await fileHash(output) });
   }
+  // An all-failed targeted retry has no files to publish, but it is still a
+  // completed attempt with retryable slot-level errors. Returning that result
+  // keeps the next "重跑失败项" action available instead of hiding it behind a
+  // branch-level failure.
+  if (!records.length) return { deliverables: [], records, failedSlots, warnings };
   ctx.progress.report("images", "qa", 88, { slots: [...records], failedSlots });
   // Only the slots actually staged this run are verified/published: a failed
   // model slot (or one skipped by `onlySlots`) simply keeps whatever image is
@@ -1932,9 +1999,23 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   const masterStage = path.join(stagingRoot, "主图-原始");
   await mkdir(masterStage, { recursive: true });
 
-  const activeBranches: PipelineBranchId[] = PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL
-    ? ["prepare", "main", "sku"]
-    : ["prepare", "main", "sku", "images"];
+  const hasOnlySlots = Array.isArray(job.input.onlySlots) && job.input.onlySlots.length > 0;
+  const hasOnlyMain = Array.isArray(job.input.onlyMain) && job.input.onlyMain.length > 0;
+  // `retryMain` supports jobs created before per-frame main failures existed;
+  // `onlyMain` itself is also sufficient for new, narrowed retries.
+  const retryMain = job.input.retryMain === true || hasOnlyMain;
+  const isTargetedRetry = hasOnlySlots || retryMain;
+  // A retry must not make unrelated paid requests. The shared prepare phase is
+  // still required, but it only runs the requested delivery branch afterwards.
+  const runMain = !isTargetedRetry || retryMain;
+  const runSku = !isTargetedRetry;
+  const runImages = !PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL && (!isTargetedRetry || hasOnlySlots);
+  const activeBranches: PipelineBranchId[] = [
+    "prepare",
+    ...(runMain ? ["main" as const] : []),
+    ...(runSku ? ["sku" as const] : []),
+    ...(runImages ? ["images" as const] : []),
+  ];
   const progress = createPipelineProgress(
     (result) => updateMonoJobResult(job.id, result),
     activeBranches,
@@ -2004,18 +2085,13 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   const context: BranchContext = {
     job, signal, folderKey, stagingRoot, detailFolder, prepared, classification, progress,
   };
-  let mainOutcome: { deliverables: ProductPipelineDeliverable[]; warnings: string[] } | undefined;
+  let mainOutcome: MainBranchOutcome | undefined;
   let skuOutcome: { deliverables: ProductPipelineDeliverable[] } | undefined;
   let imagesOutcome: ImagesBranchOutcome | undefined;
-  const branches: { id: PipelineBranchId; run: () => Promise<void> }[] = [
-    { id: "main", run: async () => { mainOutcome = await runMainBranch(context); } },
-    { id: "sku", run: async () => { skuOutcome = await runSkuBranch(context); } },
-  ];
-  // TEMPORARY (shadow-backdrop trial only): skip paid model-image generation
-  // and the images/ detail set entirely so a run only exercises 主图/SKU.
-  // Remove this branch — and the `PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL` constant
-  // above — once the online shadow generation is confirmed.
-  if (!PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL) {
+  const branches: { id: PipelineBranchId; run: () => Promise<void> }[] = [];
+  if (runMain) branches.push({ id: "main", run: async () => { mainOutcome = await runMainBranch(context); } });
+  if (runSku) branches.push({ id: "sku", run: async () => { skuOutcome = await runSkuBranch(context); } });
+  if (runImages) {
     branches.push({
       id: "images",
       run: async () => {
@@ -2047,10 +2123,12 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     ...classification.warnings,
     ...(mainOutcome?.warnings ?? []),
     ...(imagesOutcome?.warnings ?? []),
+    ...(mainOutcome?.failedMain ?? []).map((item) => `主图 ${item.name} 未能完成：${item.reason}`),
     ...failures.map((item) => `${BRANCH_LABEL[item.branch]}未能完成，其余目录已照常发布：${item.reason}`),
     ...(PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL ? ["PRODUCT_PIPELINE_SHADOW_ONLY_TRIAL：本次运行跳过了 images 详情图生成"] : []),
   ];
   const failedSlots = imagesOutcome?.failedSlots ?? [];
+  const failedMain = mainOutcome?.failedMain ?? [];
   return {
     stage: "completed",
     progress: 100,
@@ -2060,6 +2138,8 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     modelPairName: modelPair?.displayName,
     colors,
     detailShots: detailShotCount,
+    mainRecords: mainOutcome?.records ?? [],
+    failedMain,
     slots: imagesOutcome?.records ?? [],
     deliverables: [
       ...(mainOutcome?.deliverables ?? []),
@@ -2068,7 +2148,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     ],
     warnings,
     resumed: false,
-    incomplete: failedSlots.length > 0 || failures.length > 0,
+    incomplete: failedSlots.length > 0 || failedMain.length > 0 || failures.length > 0,
     failedSlots,
     failedBranches: failures.map((item) => ({ ...item, label: BRANCH_LABEL[item.branch] })),
   };
@@ -2112,10 +2192,13 @@ async function persistProductDirectory(
   job: MonoJob,
   directory: string,
   role: "product-main" | "product-sku",
+  onlyNames?: ReadonlySet<string>,
 ): Promise<ProductPipelineDeliverable[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = entries.filter(
-    (entry) => entry.isFile() && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()),
+    (entry) => entry.isFile()
+      && IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())
+      && (!onlyNames || onlyNames.has(entry.name)),
   );
   return Promise.all(files.map((entry) =>
     persistProductFile(job, path.join(directory, entry.name), role, entry.name)));
@@ -2442,6 +2525,42 @@ export async function requestShadowBackdrop(
   }
   throw new Error(`主图阴影三次都没拿到有效结果：${lastFailure}`);
 }
+
+/** Validates only the main images completed by this run before they are merged onto the share. */
+export async function verifyMainOutputs(
+  stage: string,
+  producedNames: ReadonlySet<string>,
+  sources: SourceImage[],
+): Promise<void> {
+  for (const name of producedNames) {
+    const meta = await sharp(path.join(stage, name)).metadata();
+    if (meta.width !== SQUARE_CANVAS_SIZE || meta.height !== SQUARE_CANVAS_SIZE) {
+      throw new Error(`主图 ${name} 尺寸校验失败`);
+    }
+  }
+  await assertSourcesUnchanged(sources);
+}
+
+/**
+ * Publishes only the main files staged by this run. Existing successful files
+ * stay in place during a retry, exactly as detail-slot retries do.
+ */
+export async function publishMainImages(
+  stage: string,
+  destination: string,
+  producedNames: ReadonlySet<string>,
+): Promise<void> {
+  const merge = `${stage}-merged`;
+  await mkdir(merge, { recursive: true });
+  try {
+    await cp(destination, merge, { recursive: true, errorOnExist: false });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  for (const name of producedNames) await cp(path.join(stage, name), path.join(merge, name));
+  await atomicPublish(merge, destination);
+}
+
 /** Validates only the slots actually staged this run — a failed or `onlySlots`-skipped model slot has no file here, and that is expected. */
 export async function verifyDetailOutputs(
   stage: string,

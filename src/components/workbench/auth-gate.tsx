@@ -19,6 +19,12 @@ import {
 } from "@/lib/authorization";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InkWashField } from "@/components/workbench/ink-wash-field";
+
+const LOGIN_BACKGROUNDS = [
+  "/ink-wash-login.png",
+  "/ink-wash-home-mountain.png",
+] as const;
 
 export type WorkbenchWorkspace = {
   id: string;
@@ -93,6 +99,9 @@ async function jsonOrError<T>(response: Response): Promise<T> {
 
 export function AuthGate({ children }: PropsWithChildren) {
   const [session, setSession] = useState<WorkbenchSession | null>(null);
+  const [loginBackground] = useState<string>(
+    () => LOGIN_BACKGROUNDS[Math.floor(Math.random() * LOGIN_BACKGROUNDS.length)],
+  );
   const [loading, setLoading] = useState(true);
   const [account, setAccount] = useState("");
   const [password, setPassword] = useState("");
@@ -209,22 +218,19 @@ export function AuthGate({ children }: PropsWithChildren) {
 
   if (!session || !value) {
     return (
-      <main className="bg-background flex min-h-dvh items-center justify-center p-6">
+      <main className="bg-background relative flex min-h-dvh items-center justify-center overflow-hidden p-6">
+        <InkWashField active backgroundImage={loginBackground} />
         <form
           onSubmit={signIn}
-          className="w-full max-w-sm rounded-2xl border bg-card p-6 shadow-sm"
+          className="relative z-10 w-full max-w-sm rounded-2xl border bg-card/95 p-6 shadow-sm backdrop-blur-sm"
         >
           <p className="text-muted-foreground text-xs">WORKBENCH</p>
           <h1 className="mt-1 text-xl font-semibold">登录工作区</h1>
-          <p className="text-muted-foreground mt-2 text-sm">
-            使用管理员为你创建的员工账号登录。
-          </p>
           <div className="mt-6 grid gap-3">
             <label className="grid gap-1.5 text-sm font-medium">
-              邮箱
+              账号
               <Input
                 autoComplete="username"
-                placeholder="账号 / 工号"
                 value={account}
                 onChange={(event) => setAccount(event.target.value)}
                 required

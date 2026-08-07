@@ -787,6 +787,26 @@ export const VideoEnhanceToolUI = makeAssistantToolUI<
   ),
 });
 
+const MATTING_MODE_LABELS: Record<string, string> = {
+  human: "仅人像",
+  general: "任意主体",
+};
+
+/**
+ * 卡片抬头只写用户真的指定过的东西。mode 默认 auto、由后端采样判定，写上去既
+ * 没信息量又会让人以为自己选过；实际走的哪条路，进度文案里的「人像抠像 / 通用
+ * 抠像」已经说了。
+ */
+function mattingArgsSummary(args?: VideoMattingArgs): string | undefined {
+  const parts = [
+    args?.background ? `背景：${args.background}` : null,
+    args?.mode && MATTING_MODE_LABELS[args.mode]
+      ? `模式：${MATTING_MODE_LABELS[args.mode]}`
+      : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
 /** 抠像换背景的对话卡片：无交互步骤，工具直接提交任务、卡片直接进入轮询。 */
 export const VideoMattingToolUI = makeAssistantToolUI<
   VideoMattingArgs,
@@ -799,7 +819,7 @@ export const VideoMattingToolUI = makeAssistantToolUI<
       title={capabilityName("matting")}
       toolCallId={toolCallId}
       capability="matting"
-      argsSummary={args?.background ? `背景：${args.background}` : undefined}
+      argsSummary={mattingArgsSummary(args)}
       result={result ?? undefined}
     />
   ),

@@ -10,6 +10,8 @@ export type ProductPipelineRunConfig = {
   /** Display label only — echoed straight back to the card, never stored on the job. */
   folderName?: string;
   onlySlots?: string[];
+  onlyMain?: string[];
+  retryMain?: boolean;
 };
 
 /**

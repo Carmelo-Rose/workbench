@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   memo,
   useEffect,
   useLayoutEffect,
@@ -19,6 +20,10 @@ import {
   type Unstable_TriggerItem,
 } from "@assistant-ui/react";
 import { ChevronLeftIcon, ChevronRightIcon, SparklesIcon } from "lucide-react";
+import {
+  COMMAND_HEADING_CLASS,
+  COMMAND_ITEM_BASE_CLASS,
+} from "@/components/ui/command";
 import { cn } from "@/lib/utils";
 
 type IconComponent = FC<{ className?: string }>;
@@ -66,12 +71,6 @@ type ComposerTriggerPopoverBaseProps = Omit<
    * something inline (e.g. "create subject").
    */
   onActionItem?: (item: Unstable_TriggerItem) => void;
-  /**
-   * 传入分组条目的取数函数就切到二级联动布局：左列分组、右列跟着高亮的分组
-   * 铺开条目，鼠标移过去即可看到、直接点就能选。不传则保持单列钻取。
-   * 一般直接把 adapter 的 `categoryItems` 传进来。
-   */
-  categoryItems?: (categoryId: string) => readonly Unstable_TriggerItem[];
 };
 
 type ComposerTriggerPopoverProps = ComposerTriggerPopoverBaseProps &
@@ -101,17 +100,24 @@ type CategoriesProps = {
   iconMap: Record<string, IconComponent> | undefined;
   fallbackIcon: IconComponent;
   emptyLabel: string;
-  /**
-   * 给了就走二级联动布局：左列分组、右列直接铺开当前分组的条目。
-   * 不给则保持单列钻取（分组 → 点进去看条目 → 返回）。
-   */
-  categoryItems: ((categoryId: string) => readonly Unstable_TriggerItem[]) | undefined;
 };
 
-const ITEM_ROW_CLASS =
-  "hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-2 text-start transition-colors outline-none";
+/**
+ * 条目行：复用 ⌘K 命令面板的行样式（`COMMAND_ITEM_BASE_CLASS`），只把选中态的
+ * 选择器从 cmdk 的 `data-[selected=true]` 换成本库的 `data-[highlighted]`。
+ *
+ * 之所以只共享类名而不直接挂 cmdk 组件：`CommandItem` 需要 `Command` 根上下文，
+ * 且 cmdk 要自己拥有一个聚焦的 input 来接管方向键——而 `/` 场景下焦点始终在
+ * composer 上，没有独立输入框，两套键盘系统会打架。
+ */
+const ITEM_ROW_CLASS = cn(
+  COMMAND_ITEM_BASE_CLASS,
+  // 不加 transition-colors：⌘K 面板（CommandItem）的高亮也是瞬时切换，方向键
+  // 连续按时过渡动画会跟不上手速，显得卡顿。
+  "hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent w-full cursor-pointer text-start",
+);
 
-/** 条目行的内容（图标/预览图 + 标题 + 说明），钻取列表与联动右列共用。 */
+/** 条目行的内容（图标/预览图 + 标题 + 可选说明）。 */
 const ItemContent: FC<{
   item: Unstable_TriggerItem;
   iconMap: Record<string, IconComponent> | undefined;
@@ -126,92 +132,63 @@ const ItemContent: FC<{
       : undefined;
   return (
     <>
-      <span className="flex items-center gap-2 text-sm font-medium">
-        {previewUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={previewUrl} alt="" className="size-6 rounded-md object-cover" />
-        ) : (
-          <Icon className="text-primary size-3.5" />
-        )}
-        {item.label}
-      </span>
-      {item.description && (
-        <span
-          className={cn(
-            "text-muted-foreground text-xs leading-tight",
-            previewUrl ? "ms-8" : "ms-5.5",
-          )}
-        >
-          {item.description}
-        </span>
+      {previewUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={previewUrl} alt="" className="size-6 shrink-0 rounded-md object-cover" />
+      ) : (
+        // 不传 className：由 COMMAND_ITEM_BASE_CLASS 统一给 size-4 + muted，
+        // 和 ⌘K 面板里的图标完全一致。
+        <Icon />
       )}
+      {/* `/` 命令没有 description（单行）；`@` 的主体/参考图仍带说明，两行。 */}
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate">{item.label}</span>
+        {item.description && (
+          <span className="text-muted-foreground truncate text-xs">
+            {item.description}
+          </span>
+        )}
+      </span>
     </>
   );
 };
 
 /**
- * 一级分组列表。联动模式下右列跟着「当前高亮的分组」走 —— 鼠标扫过和方向键
- * 都只是改高亮，所以移上去就能看到组里有什么，既不用点、也不会把分组列表顶掉。
- * 点分组不再钻取（内容已经在右边了），键盘回车仍然钻取，进单列视图。
+ * 一级分组列表（单列钻取：分组 → 点进去看条目 → 返回）。
+ *
+ * `/` 命令菜单不再走这条路——它的 adapter 故意返回空分类，让库恒定处在搜索
+ * 模式、一次铺开全部能力（见 `slash-capability-adapter.ts` 的说明），库的
+ * `TriggerPopoverCategories` 在 `isSearchMode` 下自己返回 null。这里保留是给
+ * `@` 提及菜单用的。
  */
 const CategoryList: FC<
   CategoriesProps & { categories: readonly { id: string; label: string }[] }
-> = ({ categories, iconMap, fallbackIcon, emptyLabel, categoryItems }) => {
-  const { highlightedIndex, selectItem } = unstable_useTriggerPopoverScopeContext();
-  const activeCategory = categoryItems
-    ? (categories[highlightedIndex] ?? categories[0])
-    : undefined;
-  const activeItems =
-    categoryItems && activeCategory ? categoryItems(activeCategory.id) : [];
-
-  return (
-    <div
-      data-slot="composer-trigger-popover-categories"
-      className={cn("flex", categoryItems ? "items-stretch" : "flex-col py-1")}
-    >
-      <div className={cn("flex flex-col py-1", categoryItems && "w-36 shrink-0")}>
-        {categories.map((cat) => {
-          const Icon = resolveIcon(cat.id, iconMap, fallbackIcon);
-          return (
-            <ComposerPrimitive.Unstable_TriggerPopoverCategoryItem
-              key={cat.id}
-              categoryId={cat.id}
-              // 联动模式下点击不钻取：右列已经是这一组的内容，塌成单列反而是倒退。
-              onClick={categoryItems ? (event) => event.preventDefault() : undefined}
-              className="hover:bg-accent focus:bg-accent data-[highlighted]:bg-accent flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm transition-colors outline-none"
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <Icon className="text-muted-foreground size-4 shrink-0" />
-                <span className="truncate">{cat.label}</span>
-              </span>
-              <ChevronRightIcon className="text-muted-foreground size-4 shrink-0" />
-            </ComposerPrimitive.Unstable_TriggerPopoverCategoryItem>
-          );
-        })}
-        {categories.length === 0 && (
-          <div className="text-muted-foreground px-3 py-2 text-sm">
-            {emptyLabel}
-          </div>
-        )}
-      </div>
-
-      {categoryItems && categories.length > 0 && (
-        <div className="min-w-0 flex-1 border-s py-1">
-          {activeItems.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={ITEM_ROW_CLASS}
-              onClick={() => selectItem(item)}
-            >
-              <ItemContent item={item} iconMap={iconMap} fallbackIcon={fallbackIcon} />
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
+> = ({ categories, iconMap, fallbackIcon, emptyLabel }) => (
+  <div
+    data-slot="composer-trigger-popover-categories"
+    className="flex flex-col p-1"
+  >
+    {categories.map((cat) => {
+      const Icon = resolveIcon(cat.id, iconMap, fallbackIcon);
+      return (
+        <ComposerPrimitive.Unstable_TriggerPopoverCategoryItem
+          key={cat.id}
+          categoryId={cat.id}
+          className={cn(ITEM_ROW_CLASS, "justify-between")}
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <Icon />
+            <span className="truncate">{cat.label}</span>
+          </span>
+          <ChevronRightIcon className="text-muted-foreground shrink-0" />
+        </ComposerPrimitive.Unstable_TriggerPopoverCategoryItem>
+      );
+    })}
+    {categories.length === 0 && (
+      <div className="text-muted-foreground px-2 py-1.5 text-sm">{emptyLabel}</div>
+    )}
+  </div>
+);
 
 const Categories: FC<CategoriesProps> = (props) => (
   <ComposerPrimitive.Unstable_TriggerPopoverCategories>
@@ -229,6 +206,11 @@ type ItemsProps = {
   onActionItem: ((item: Unstable_TriggerItem) => void) | undefined;
 };
 
+/** 分组标题取自 `metadata.group`；没有就不分段（`@` 菜单即如此）。 */
+function groupOf(item: Unstable_TriggerItem | undefined): string | undefined {
+  return typeof item?.metadata?.group === "string" ? item.metadata.group : undefined;
+}
+
 const Items: FC<ItemsProps> = ({
   triggerChar,
   iconMap,
@@ -239,7 +221,17 @@ const Items: FC<ItemsProps> = ({
   onActionItem,
 }) => {
   const aui = useAui();
-  const { isLoading, query, close } = unstable_useTriggerPopoverScopeContext();
+  const { isLoading, query, close, highlightedIndex } =
+    unstable_useTriggerPopoverScopeContext();
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // 库自己不把高亮项滚进视野。改成扁平列表后这是十几行的滚动列表（容器有
+  // max-height），方向键一路按下去会走出可视区，必须补上。
+  useEffect(() => {
+    listRef.current
+      ?.querySelector("[data-highlighted]")
+      ?.scrollIntoView({ block: "nearest" });
+  }, [highlightedIndex]);
 
   const runAction = (item: Unstable_TriggerItem) => {
     // Best-effort: strip the still-uncommitted "@query" text left behind
@@ -256,38 +248,45 @@ const Items: FC<ItemsProps> = ({
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverItems>
       {(items) => (
-        <div
-          data-slot="composer-trigger-popover-items"
-          className="flex flex-col"
-        >
+        <div data-slot="composer-trigger-popover-items" className="flex flex-col">
           <ComposerPrimitive.Unstable_TriggerPopoverBack className="text-muted-foreground hover:bg-accent flex cursor-pointer items-center gap-1.5 border-b px-3 py-2 text-xs tracking-wide uppercase transition-colors">
             <ChevronLeftIcon className="size-3.5" />
             {backLabel}
           </ComposerPrimitive.Unstable_TriggerPopoverBack>
 
-          <div className="py-1">
+          <div ref={listRef} className="p-1">
             {items.map((item, index) => {
               const actionOnly = item.metadata?.actionOnly === true;
+              const group = groupOf(item);
+              const startsGroup = group !== undefined && group !== groupOf(items[index - 1]);
               return (
-                <ComposerPrimitive.Unstable_TriggerPopoverItem
-                  key={item.id}
-                  item={item}
-                  index={index}
-                  onClick={actionOnly ? (event) => {
-                    // Skip the library's default select handler (which would
-                    // otherwise always insert a directive chip — see
-                    // `onActionItem` doc comment above).
-                    event.preventDefault();
-                    runAction(item);
-                  } : undefined}
-                  className={ITEM_ROW_CLASS}
-                >
-                  <ItemContent item={item} iconMap={iconMap} fallbackIcon={fallbackIcon} />
-                </ComposerPrimitive.Unstable_TriggerPopoverItem>
+                <Fragment key={item.id}>
+                  {startsGroup && (
+                    <div className={cn(COMMAND_HEADING_CLASS, index > 0 && "mt-1")}>
+                      {group}
+                    </div>
+                  )}
+                  <ComposerPrimitive.Unstable_TriggerPopoverItem
+                    item={item}
+                    // 必须是扁平数组下标：库用它和 highlightedIndex 比对。
+                    // 分组标题只是穿插的普通节点，不占索引。
+                    index={index}
+                    onClick={actionOnly ? (event) => {
+                      // Skip the library's default select handler (which would
+                      // otherwise always insert a directive chip — see
+                      // `onActionItem` doc comment above).
+                      event.preventDefault();
+                      runAction(item);
+                    } : undefined}
+                    className={ITEM_ROW_CLASS}
+                  >
+                    <ItemContent item={item} iconMap={iconMap} fallbackIcon={fallbackIcon} />
+                  </ComposerPrimitive.Unstable_TriggerPopoverItem>
+                </Fragment>
               );
             })}
             {items.length === 0 && (
-              <div className="text-muted-foreground px-3 py-2 text-sm">
+              <div className="text-muted-foreground px-2 py-1.5 text-sm">
                 {isLoading ? loadingLabel : emptyLabel}
               </div>
             )}
@@ -391,7 +390,6 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
   emptyItemsLabel = "没有匹配项",
   loadingLabel = "加载中…",
   onActionItem,
-  categoryItems,
   className,
   style,
   directive,
@@ -418,9 +416,7 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
       data-slot="composer-trigger-popover"
       data-side={placement.side}
       className={cn(
-        "aui-composer-trigger-popover bg-popover text-popover-foreground absolute start-0 z-50 overflow-y-auto rounded-xl border shadow-lg",
-        // 二级联动要并排放两列，单列钻取维持原来的窄面板。
-        categoryItems ? "w-[27rem] max-w-[calc(100vw-2rem)]" : "w-64",
+        "aui-composer-trigger-popover bg-popover text-popover-foreground absolute start-0 z-50 w-72 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-xl border shadow-lg",
         placement.side === "top" ? "bottom-full mb-2" : "top-full mt-2",
         className,
       )}
@@ -444,7 +440,6 @@ const ComposerTriggerPopoverImpl: FC<ComposerTriggerPopoverProps> = ({
         iconMap={iconMap}
         fallbackIcon={fallbackIcon}
         emptyLabel={emptyCategoriesLabel}
-        categoryItems={categoryItems}
       />
       <Items
         triggerChar={char}

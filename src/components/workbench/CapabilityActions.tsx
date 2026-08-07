@@ -18,6 +18,7 @@ import { adoptComposerImageAsVideoFrame } from "@/components/workbench/VideoGene
 import { VideoAnalysisLauncher } from "@/components/workbench/VideoAnalysisLauncher";
 import { ProductPipelineLauncher } from "@/components/workbench/ProductPipelineLauncher";
 import type { CapabilityAction } from "@/lib/workbench/capabilities";
+import { recordRecentCapability } from "@/lib/workbench/recent-capabilities";
 import type { Permission } from "@/lib/authorization";
 import { useWorkbenchSession } from "@/components/workbench/auth-gate";
 
@@ -28,6 +29,11 @@ import { useWorkbenchSession } from "@/components/workbench/auth-gate";
  * 通过 useCapabilityActions() 拿到 run()。
  */
 export type CapabilityRunInput = {
+  /**
+   * 能力注册表里的 id。用来记「最近用过」，喂给 `/` 菜单顶部的「常用」分段。
+   * 三个入口（`/` 命令、欢迎页 chip、⌘K 面板）都走这里，所以从哪儿用都算数。
+   */
+  id?: string;
   action?: CapabilityAction;
   prompt: string;
   permission?: Permission;
@@ -131,8 +137,10 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
     }
   };
 
-  const run = ({ action = "fill", prompt, permission }: CapabilityRunInput) => {
+  const run = ({ id, action = "fill", prompt, permission }: CapabilityRunInput) => {
     if (permission && !canGrant(permission)) return;
+    // 记在权限闸之后：没权限的能力压根没执行，不该进「常用」。
+    if (id) recordRecentCapability(id);
     // 从生图模式切到别的能力时，先清掉模板参考图和模式状态，避免底部的
     // "模板 / 比例 / 张数" 生图控制条残留在跟生图无关的对话里。
     if (action !== "image2-mode" && action !== "video-generation-mode" && image2Active) {
