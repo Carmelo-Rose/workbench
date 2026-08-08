@@ -8,4 +8,5 @@ if exist .env (
   )
 )
 call .venv\Scripts\activate.bat
-python -m uvicorn app:app --host 0.0.0.0 --port 8100
+rem pythonw keeps the gateway off the interactive desktop; the launcher can exit cleanly.
+start "" /b pythonw.exe -m uvicorn app:app --host 0.0.0.0 --port 8100
