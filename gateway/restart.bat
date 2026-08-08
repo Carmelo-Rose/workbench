@@ -14,7 +14,7 @@ rem Start-Sleep rather than timeout: timeout refuses to run when stdin is redire
 rem exactly what happens when this script is driven over SSH.
 powershell -NoProfile -Command "Start-Sleep -Seconds 3"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='cmd.exe /c %~dp0start.bat'; CurrentDirectory='%~dp0'} | Out-Null"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File \"%~dp0launch-hidden.ps1\"'; CurrentDirectory='%~dp0'} | Out-Null"
 powershell -NoProfile -Command "Start-Sleep -Seconds 15"
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { 'gateway back up: ' + (Invoke-WebRequest 'http://127.0.0.1:8100/health' -UseBasicParsing -TimeoutSec 10).Content } catch { 'gateway did NOT come back -- check start.bat manually' }"
