@@ -1,7 +1,8 @@
 @echo off
 rem One-time setup for video_enhance env (server: D:\hyk_sort\workspace\video-toolbox\enhance).
-rem Precondition: weights\realesr-general-x4v3.pth already downloaded (GitHub release CDN is
-rem GFW-blocked here; use the local Clash proxy at 127.0.0.1:7890 to fetch it).
+rem Precondition: weights\realesr-general-x4v3.pth, realesr-general-wdn-x4v3.pth and
+rem GFPGANv1.4.pth are already downloaded. Also pre-download facexlib detection/parsing
+rem weights into its package cache. GitHub release CDN is GFW-blocked here; use Clash 127.0.0.1:7890.
 rem ASCII only: cmd parses bat files in OEM codepage.
 cd /d %~dp0
 echo [1/4] venv > install.log

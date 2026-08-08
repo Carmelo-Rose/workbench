@@ -81,6 +81,16 @@ export const CAPABILITY_GROUPS: CapabilityGroup[] = [
         permission: "image.reverse.use",
       },
       {
+        id: "image-enhance",
+        label: "修复增强",
+        prompt: "把这张图片做修复增强，放大 4 倍。",
+        action: "image-picker",
+        iconKey: "wand",
+        hint: "选一张图片，超分放大并去噪",
+        slash: true,
+        permission: "image.enhance.use",
+      },
+      {
         id: "generate-image",
         label: "生成图片",
         prompt:

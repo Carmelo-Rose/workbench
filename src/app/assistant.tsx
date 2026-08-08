@@ -24,6 +24,7 @@ import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button
 import { ImageToPromptToolUI } from "@/components/workbench/ImageToPromptToolUI";
 import {
   VideoEnhanceToolUI,
+  ImageEnhanceToolUI,
   VideoEraseToolUI,
   VideoMattingToolUI,
 } from "@/components/workbench/toolbox/JobToolUI";
@@ -155,6 +156,7 @@ export const Assistant = () => {
       <CollectorSearchToolUI />
       <VideoEraseToolUI />
       <VideoEnhanceToolUI />
+      <ImageEnhanceToolUI />
       <VideoMattingToolUI />
       <BackendModelContext />
       <Image2ModeSync />

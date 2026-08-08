@@ -6,6 +6,7 @@ import {
 } from "@/lib/mono/http";
 import { requireGrant, tenantErrorResponse } from "@/lib/server/tenant";
 import type { Permission } from "@/lib/authorization";
+import { toolboxCapabilityPermissions } from "@/lib/toolbox/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -31,9 +32,7 @@ export async function POST(req: NextRequest) {
     erase: "video.erase.use",
     enhance: "video.enhance.use",
     matting: "video.cutout.use",
-    smart_erase: "video.erase.use",
-    video_enhance: "video.enhance.use",
-    product_cutout: "image.cutout.use",
+    ...toolboxCapabilityPermissions,
     "video-erase": "video.erase.use",
     "video-enhance": "video.enhance.use",
     "video-matting": "video.cutout.use",

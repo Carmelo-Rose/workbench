@@ -54,6 +54,7 @@ export const permissionRegistry = [
   entry("video.generate.use", "video", "视频创作", "video-generation", "视频生成", "use", "使用"),
   entry("video.erase.use", "video", "视频创作", "video-erase", "智能擦除", "use", "使用"),
   entry("video.enhance.use", "video", "视频创作", "video-enhance", "修复增强", "use", "使用"),
+  entry("image.enhance.use", "image", "图片创作", "image-enhance", "图片修复增强", "use", "使用"),
   entry("video.cutout.use", "video", "视频创作", "video-cutout", "视频抠图", "use", "使用"),
 
   entry("commerce.rankings.view", "commerce", "电商数据", "rankings", "榜单分析", "view", "查看", { dataScopes: ["workspace"] }),
@@ -111,6 +112,7 @@ const businessOperate: Permission[] = [
   "workbench.chat.use", "workbench.backend.direct.use", "workbench.backend.hermes.use",
   "sessions.messages.manage", "sessions.messages.import", "sessions.messages.export",
   "image.reverse.use", "image.generate.use", "image.product-set.use", "image.cutout.use",
+  "image.enhance.use",
   "video.analyze.use", "video.generate.use", "video.erase.use", "video.enhance.use", "video.cutout.use",
   "commerce.rankings.import", "commerce.collection.import",
   "resources.assets.create", "resources.assets.manage", "resources.assets.export",

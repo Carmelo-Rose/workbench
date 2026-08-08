@@ -14,12 +14,14 @@ import type { AttachmentAdapter } from "@assistant-ui/react";
 const MAX_VIDEO_BYTES = 1024 * 1024 * 1024; // 1GB
 
 /** add() 与 send() 之间用附件 id 关联上传结果（组件重载即失效，够用）。 */
-const uploadedVideos = new Map<string, { fileId: string }>();
+const uploadedFiles = new Map<string, { fileId: string; kind: "image" | "video" }>();
 
 const isVideoFile = (file: File) =>
   file.type.startsWith("video/") || /\.(mp4|mov|webm|mkv|avi)$/i.test(file.name);
+const isImageFile = (file: File) =>
+  file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|avif)$/i.test(file.name);
 
-async function uploadVideo(file: File): Promise<string> {
+async function uploadToGateway(file: File): Promise<string> {
   const res = await fetch("/api/toolbox/upload", {
     method: "POST",
     headers: {
@@ -51,6 +53,10 @@ export function videoAttachmentMarker(name: string, fileId: string, bytes: numbe
   const mb = (bytes / 1024 / 1024).toFixed(1);
   return `[视频附件 ${name}｜fileId=${fileId}｜${mb}MB｜已上传至视频工具箱]`;
 }
+export function imageAttachmentMarker(name: string, fileId: string, bytes: number) {
+  const mb = (bytes / 1024 / 1024).toFixed(1);
+  return `[图片附件 ${name}｜fileId=${fileId}｜${mb}MB｜已上传至工具箱]`;
+}
 
 /**
  * 上面那行标记的配套解析式（捕获组：文件名 / fileId / 大小），
@@ -59,6 +65,8 @@ export function videoAttachmentMarker(name: string, fileId: string, bytes: numbe
  */
 export const VIDEO_MARKER_RE =
   /\[视频附件 (.+?)｜fileId=([a-f0-9]{12})｜([\d.]+MB)｜[^\]]*\]/g;
+export const IMAGE_MARKER_RE =
+  /\[图片附件 (.+?)｜fileId=([a-f0-9]{12})｜([\d.]+MB)｜[^\]]*\]/g;
 
 export const workbenchAttachmentAdapter: AttachmentAdapter = {
   accept: "*",
@@ -73,7 +81,7 @@ export const workbenchAttachmentAdapter: AttachmentAdapter = {
       content: [],
     };
 
-    if (!isVideoFile(file)) {
+    if (!isVideoFile(file) && !isImageFile(file)) {
       // 非视频：复刻 vercelAttachmentAdapter 的默认行为，send 时才转 data URL。
       yield {
         ...base,
@@ -83,43 +91,44 @@ export const workbenchAttachmentAdapter: AttachmentAdapter = {
       return;
     }
 
-    if (file.size > MAX_VIDEO_BYTES) {
+    if (isVideoFile(file) && file.size > MAX_VIDEO_BYTES) {
       throw new Error("视频超过 1GB 上限，请先压缩或裁剪");
     }
 
     yield {
       ...base,
-      type: "file",
+      type: isImageFile(file) ? "image" : "file",
       status: { type: "running", reason: "uploading", progress: 0 },
     };
 
-    const fileId = await uploadVideo(file);
-    uploadedVideos.set(id, { fileId });
+    try {
+      const fileId = await uploadToGateway(file);
+      uploadedFiles.set(id, { fileId, kind: isVideoFile(file) ? "video" : "image" });
+    } catch (error) {
+      // A failed image upload must not block visual-model workflows that use its data URL.
+      if (isVideoFile(file)) throw error;
+    }
 
     yield {
       ...base,
-      type: "file",
+      type: isImageFile(file) ? "image" : "file",
       status: { type: "requires-action", reason: "composer-send" },
     };
   },
 
   async send(attachment) {
-    const uploaded = uploadedVideos.get(attachment.id);
+    const uploaded = uploadedFiles.get(attachment.id);
     if (uploaded) {
-      uploadedVideos.delete(attachment.id);
+      uploadedFiles.delete(attachment.id);
+      const marker = uploaded.kind === "video" ? videoAttachmentMarker : imageAttachmentMarker;
+      const markerPart = { type: "text" as const, text: marker(attachment.name, uploaded.fileId, attachment.file.size) };
+      const content = uploaded.kind === "image"
+        ? [{ type: "file" as const, mimeType: attachment.contentType ?? "", filename: attachment.name, data: await getFileDataURL(attachment.file) }, markerPart]
+        : [markerPart];
       return {
         ...attachment,
         status: { type: "complete" },
-        content: [
-          {
-            type: "text",
-            text: videoAttachmentMarker(
-              attachment.name,
-              uploaded.fileId,
-              attachment.file.size,
-            ),
-          },
-        ],
+        content,
       };
     }
 
@@ -138,6 +147,6 @@ export const workbenchAttachmentAdapter: AttachmentAdapter = {
   },
 
   async remove(attachment) {
-    uploadedVideos.delete(attachment.id);
+    uploadedFiles.delete(attachment.id);
   },
 };

@@ -71,12 +71,13 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
   const [videoDialogOpen, setVideoDialogOpen] = useState(false);
   const [productPipelineOpen, setProductPipelineOpen] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
-  const reverseImageInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const mattingInputRef = useRef<HTMLInputElement>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   // 擦除与增强共用一个 file input，靠这里暂存的提示词区分是哪一个。
   const pendingVideoPromptRef = useRef<string>("");
+  const pendingImagePromptRef = useRef<string>("");
 
   // 导入错误几秒后自动消失，避免残留遮挡。
   useEffect(() => {
@@ -92,11 +93,11 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
   };
 
   // 反推需要先选图：选完把附件 + 指令一起放进输入框，仍由用户点发送确认。
-  const reverseImage = async (file: File) => {
+  const toolboxImage = async (file: File) => {
     if (aui.thread().getState().isRunning) return;
     const composer = aui.composer();
     await composer.addAttachment(file);
-    composer.setText("反推这张图片，生成可复用的 AI 生图提示词。");
+    composer.setText(pendingImagePromptRef.current);
   };
 
   const mattingImage = async (file: File) => {
@@ -174,7 +175,8 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
         })();
         return;
       case "image-picker":
-        reverseImageInputRef.current?.click();
+        pendingImagePromptRef.current = prompt;
+        imageInputRef.current?.click();
         return;
       case "video-dialog":
         setVideoDialogOpen(true);
@@ -203,14 +205,14 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
     <CapabilityActionsContext.Provider value={{ run }}>
       {children}
       <input
-        ref={reverseImageInputRef}
+        ref={imageInputRef}
         type="file"
         accept="image/*"
         className="hidden"
         onChange={(event) => {
           const file = event.target.files?.[0];
           event.target.value = "";
-          if (file) void reverseImage(file);
+          if (file) void toolboxImage(file);
         }}
       />
       <input

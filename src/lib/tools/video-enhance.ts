@@ -6,6 +6,8 @@ import { chainTargets } from "@/lib/toolbox/types";
 export type VideoEnhanceArgs = {
   videoFileId: string;
   outscale?: number | string;
+  faceEnhance?: boolean | string;
+  denoise?: number | string;
   note?: string;
 };
 
@@ -38,17 +40,22 @@ export const videoEnhanceTool = tool({
       .union([z.number(), z.string()])
       .optional()
       .describe("放大倍数，2 或 4（数字或数字字符串均可）；用户没有明确要求时默认 4"),
+    faceEnhance: z.union([z.boolean(), z.string()]).optional().describe("Whether to enable GFPGAN face restoration for portrait videos."),
+    denoise: z.union([z.number(), z.string()]).optional().describe("Denoise strength from 0 to 1; defaults to 1."),
     note: z
       .string()
       .optional()
       .describe("可选，一句话描述本次增强目的，仅作为卡片上的提示文案"),
   }),
-  execute: async ({ videoFileId, outscale, note }): Promise<VideoEnhanceResult> => {
+  execute: async ({ videoFileId, outscale, faceEnhance, denoise, note }): Promise<VideoEnhanceResult> => {
     const safeOutscale = Number(outscale) === 2 ? 2 : 4;
+    const safeFace = faceEnhance === true || faceEnhance === "true";
+    const rawDenoise = Number(denoise);
+    const safeDenoise = Number.isFinite(rawDenoise) ? Math.min(1, Math.max(0, rawDenoise)) : 1;
     try {
       const job = await submitJob({
         capability: "video_enhance",
-        params: { outscale: safeOutscale },
+        params: { outscale: safeOutscale, face_enhance: safeFace, denoise: safeDenoise },
         inputs: { video: videoFileId },
       });
       return {
