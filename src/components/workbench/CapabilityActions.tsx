@@ -112,7 +112,17 @@ export const CapabilityActionsProvider: FC<PropsWithChildren> = ({
     if (aui.thread().getState().isRunning) return;
     const composer = aui.composer();
     composer.setText(pendingVideoPromptRef.current);
-    await composer.addAttachment(file);
+    try {
+      await composer.addAttachment(file);
+    } catch (error) {
+      // add() 是个异步生成器，上传失败时的抛出不会自动反映到 UI——
+      // 不catch 的话就是一个静默的 unhandled rejection：卡片停在上传中转圈，
+      // 用户以为没反应（线上表现）或者只有 dev 才看到裸错误覆盖层（本地表现）。
+      await composer.clearAttachments();
+      setImportError(
+        error instanceof Error ? error.message : "视频上传失败，请重试",
+      );
+    }
   };
 
   // 导入抓取结果（douyin_Playwright 的 XLSX/CSV），成功后把分析指令填进输入框。
