@@ -16,45 +16,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+from common import (
+    GFPGAN_WEIGHTS_PATH,
+    TILE_FALLBACKS,
+    TILE_SIZE,
+    WEIGHTS_PATH,
+    build_face_enhancer,
+    build_upsampler,
+    progress,
+)
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-
-BASE_DIR = Path(__file__).resolve().parent
-WEIGHTS_PATH = BASE_DIR / "weights" / "realesr-general-x4v3.pth"
-
-# A 512 tile split a 720x1280 frame into six model calls on the 22G 2080 Ti.
-# 1536 keeps that frame whole; larger sources safely fall back on OOM.
-TILE_SIZE = 1536
-TILE_FALLBACKS = (1024, 768, 512, 256)
-TILE_PAD = 10
 
 # A 4x 720x1280 video is 2880x5120 (5K).  Keep that master, but also create
 # a smaller H.264 rendition for browser previews and normal local playback.
 COMPATIBLE_MAX_SIDE = 1920
 H264_NVENC_MAX_SIDE = 4096
-
-
-def progress(percent: int, stage: str) -> None:
-    print(f"PROGRESS {percent} {stage}", flush=True)
-
-
-def build_upsampler(half: bool, tile_size: int):
-    import torch
-    from basicsr.archs.srvgg_arch import SRVGGNetCompact
-    from realesrgan import RealESRGANer
-
-    model = SRVGGNetCompact(
-        num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=32, upscale=4, act_type="prelu"
-    )
-    return RealESRGANer(
-        scale=4,
-        model_path=str(WEIGHTS_PATH),
-        model=model,
-        tile=tile_size,
-        tile_pad=TILE_PAD,
-        pre_pad=10,
-        half=half and torch.cuda.is_available(),
-    )
 
 
 def video_encoder_args(ffmpeg: str, width: int, height: int) -> list[str]:
@@ -125,13 +103,16 @@ def enhance_and_encode(
     dest: Path,
     output_width: int,
     output_height: int,
+    face_enhance: bool,
+    denoise: float,
 ) -> None:
     """Enhance and encode concurrently, without a disk-backed frame sequence."""
     import cv2
     import torch
 
     tile_size = TILE_SIZE
-    upsampler = build_upsampler(half=True, tile_size=tile_size)
+    upsampler = build_upsampler(half=True, tile_size=tile_size, denoise=denoise)
+    face_enhancer = build_face_enhancer(upsampler, outscale) if face_enhance else None
     cap = cv2.VideoCapture(str(video))
     if not cap.isOpened():
         raise RuntimeError("无法读取视频")
@@ -145,17 +126,29 @@ def enhance_and_encode(
             if not ok:
                 break
             try:
-                output, _ = upsampler.enhance(frame, outscale=outscale)
+                if face_enhancer:
+                    _, _, output = face_enhancer.enhance(
+                        frame, has_aligned=False, only_center_face=False, paste_back=True
+                    )
+                else:
+                    output, _ = upsampler.enhance(frame, outscale=outscale)
             except torch.cuda.OutOfMemoryError:
                 next_tile = next((size for size in TILE_FALLBACKS if size < tile_size), None)
                 if next_tile is None:
                     raise
                 print(f"显存不足，分块从 {tile_size} 降至 {next_tile} 后重试", flush=True)
+                del face_enhancer
                 del upsampler
                 torch.cuda.empty_cache()
                 tile_size = next_tile
-                upsampler = build_upsampler(half=True, tile_size=tile_size)
-                output, _ = upsampler.enhance(frame, outscale=outscale)
+                upsampler = build_upsampler(half=True, tile_size=tile_size, denoise=denoise)
+                face_enhancer = build_face_enhancer(upsampler, outscale) if face_enhance else None
+                if face_enhancer:
+                    _, _, output = face_enhancer.enhance(
+                        frame, has_aligned=False, only_center_face=False, paste_back=True
+                    )
+                else:
+                    output, _ = upsampler.enhance(frame, outscale=outscale)
 
             assert encoder.stdin is not None
             encoder.stdin.write(output.tobytes())
@@ -163,7 +156,8 @@ def enhance_and_encode(
             idx += 1
             pct = 10 + int(idx / frame_count * 78) if frame_count else 10
             if pct != last_pct:
-                progress(pct, f"超分中 {idx}/{frame_count} 帧")
+                prefix = "超分+人脸修复中" if face_enhance else "超分中"
+                progress(pct, f"{prefix} {idx}/{frame_count} 帧")
                 last_pct = pct
     except Exception:
         encoder.kill()
@@ -267,12 +261,17 @@ def main() -> int:
     outscale = float(params.get("outscale", 4))
     if outscale not in (2.0, 4.0):
         outscale = 4.0
+    face_enhance = bool(params.get("face_enhance", False))
+    denoise = min(1.0, max(0.0, float(params.get("denoise", 1.0))))
 
     if not video.is_file():
         print(f"输入视频不存在：{video}", flush=True)
         return 2
     if not WEIGHTS_PATH.is_file():
         print(f"缺少模型权重：{WEIGHTS_PATH}", flush=True)
+        return 2
+    if face_enhance and not GFPGAN_WEIGHTS_PATH.is_file():
+        print(f"缺少人脸修复权重：{GFPGAN_WEIGHTS_PATH}", flush=True)
         return 2
 
     progress(2, "读取视频信息")
@@ -298,6 +297,8 @@ def main() -> int:
         encoded,
         int(width * outscale),
         int(height * outscale),
+        face_enhance,
+        denoise,
     )
 
     progress(92, "合并原音轨")

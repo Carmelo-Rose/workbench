@@ -41,9 +41,9 @@
       "id": "video_enhance",
       "name": "视频修复增强",
       "status": "ready",
-      "description": "分辨率放大、去噪、压缩伪影修复（Real-ESRGAN）",
+      "description": "分辨率放大、去噪、压缩伪影修复与可选人脸修复（Real-ESRGAN + GFPGAN）",
       "inputs_spec": [{ "field": "video", "required": true, "kind": "video" }],
-      "params_hint": { "outscale": "放大倍数，2 或 4，默认 4" },
+      "params_hint": { "outscale": "放大倍数，2 或 4，默认 4", "face_enhance": "是否开启人脸修复", "denoise": "去噪强度 0-1，默认 1" },
       "adapter": {
         "cwd": "D:/hyk_sort/apps/video-toolbox/enhance",
         "command": [
@@ -58,6 +58,20 @@
         ],
         "env": {},
         "timeout_sec": 7200
+      }
+    },
+    {
+      "id": "image_enhance",
+      "name": "图片修复增强",
+      "status": "ready",
+      "description": "图片放大、去噪、压缩伪影修复与可选人脸修复（Real-ESRGAN + GFPGAN）",
+      "inputs_spec": [{ "field": "image", "required": true, "kind": "image" }],
+      "params_hint": { "outscale": "放大倍数，2 或 4，默认 4", "face_enhance": "是否开启人脸修复", "denoise": "去噪强度 0-1，默认 1" },
+      "adapter": {
+        "cwd": "D:/hyk_sort/apps/video-toolbox/enhance",
+        "command": ["{cwd}/.venv/Scripts/python.exe", "toolbox_run_image.py", "--input", "{input.image}", "--output-dir", "{output_dir}", "--params", "{params_json}"],
+        "env": {},
+        "timeout_sec": 900
       }
     },
     {

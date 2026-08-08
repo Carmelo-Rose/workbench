@@ -6,6 +6,7 @@ describe("chainTargets", () => {
     expect(chainTargets("smart_erase").map((c) => c.id)).toEqual(["video_enhance", "matting"]);
     expect(chainTargets("video_enhance").map((c) => c.id)).toEqual(["matting"]);
     expect(chainTargets("matting").map((c) => c.id)).toEqual(["video_enhance"]);
+    expect(chainTargets("image_enhance").map((c) => c.id)).toEqual([]);
   });
 
   it("never surfaces interactive or planned capabilities as a chain target", () => {
@@ -16,6 +17,7 @@ describe("chainTargets", () => {
     expect(allTargetIds.has("translate_dub")).toBe(false);
     expect(allTargetIds.has("lip_sync")).toBe(false);
     expect(allTargetIds.has("motion_transfer")).toBe(false);
+    expect(allTargetIds.has("image_enhance")).toBe(false);
   });
 });
 

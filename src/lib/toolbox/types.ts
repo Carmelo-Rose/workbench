@@ -30,6 +30,8 @@ export type ToolboxCapability = {
   status: "ready" | "planned";
   /** true 表示提交前需要用户在卡片里操作（如首帧框选），因此不能被自动串联。 */
   interactive: boolean;
+  /** The source media accepted by this capability and emitted by its job. */
+  mediaKind: "image" | "video";
   /** 无交互能力的默认参数，串联提交时直接用。 */
   defaultParams?: Record<string, unknown>;
   description: string;
@@ -48,6 +50,7 @@ export const TOOLBOX_CAPABILITIES: ToolboxCapability[] = [
     name: "智能擦除",
     status: "ready",
     interactive: true,
+    mediaKind: "video",
     description: "去除字幕、水印、台标、贴纸等固定区域内容",
   },
   {
@@ -55,14 +58,25 @@ export const TOOLBOX_CAPABILITIES: ToolboxCapability[] = [
     name: "视频修复增强",
     status: "ready",
     interactive: false,
+    mediaKind: "video",
     defaultParams: { outscale: 4 },
     description: "分辨率放大、去噪、压缩伪影修复",
+  },
+  {
+    id: "image_enhance",
+    name: "图片修复增强",
+    status: "ready",
+    interactive: false,
+    mediaKind: "image",
+    defaultParams: { outscale: 4, face_enhance: false, denoise: 1 },
+    description: "图片放大、去噪、压缩伪影修复与人脸修复",
   },
   {
     id: "matting",
     name: "抠像换背景",
     status: "ready",
     interactive: false,
+    mediaKind: "video",
     // mode 留 auto：串联提交时没人来说这段视频里是人还是别的，交给适配器自己探。
     defaultParams: { background: "white", mode: "auto" },
     description: "视频抠像、替换背景（人物或任意主体）",
@@ -72,6 +86,7 @@ export const TOOLBOX_CAPABILITIES: ToolboxCapability[] = [
     name: "视频翻译配音",
     status: "planned",
     interactive: false,
+    mediaKind: "video",
     description: "识别 → 翻译/改文案 → 配音 → 合成",
   },
   {
@@ -79,6 +94,7 @@ export const TOOLBOX_CAPABILITIES: ToolboxCapability[] = [
     name: "口型重新同步",
     status: "planned",
     interactive: true,
+    mediaKind: "video",
     description: "按新配音重新生成口型",
   },
   {
@@ -86,6 +102,7 @@ export const TOOLBOX_CAPABILITIES: ToolboxCapability[] = [
     name: "人物动作迁移",
     status: "planned",
     interactive: true,
+    mediaKind: "video",
     description: "保留动作替换人物",
   },
 ];
@@ -101,7 +118,10 @@ export function capabilityName(id: string): string {
  */
 export function chainTargets(currentId: string): ToolboxCapability[] {
   return TOOLBOX_CAPABILITIES.filter(
-    (c) => c.status === "ready" && !c.interactive && c.id !== currentId,
+    (c) => {
+      const current = TOOLBOX_CAPABILITIES.find((item) => item.id === currentId);
+      return c.status === "ready" && !c.interactive && c.id !== currentId && c.mediaKind === current?.mediaKind;
+    },
   );
 }
 
@@ -120,6 +140,16 @@ export function isTerminalStatus(status: JobStatus): boolean {
 }
 
 const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".mkv", ".avi"];
+const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif"];
+
+export function primaryMediaArtifact(
+  artifacts: JobArtifact[],
+): { artifact: JobArtifact; kind: "image" | "video" } | undefined {
+  const video = artifacts.find((a) => VIDEO_EXTENSIONS.some((ext) => a.name.toLowerCase().endsWith(ext)));
+  if (video) return { artifact: video, kind: "video" };
+  const image = artifacts.find((a) => IMAGE_EXTENSIONS.some((ext) => a.name.toLowerCase().endsWith(ext)));
+  return image ? { artifact: image, kind: "image" } : undefined;
+}
 
 /** 从产物列表中挑出主视频（用于卡片内预览），其余作为附件下载展示。 */
 export function primaryVideoArtifact(

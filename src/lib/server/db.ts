@@ -714,6 +714,17 @@ function migrateAccountsAndRoles(db: DatabaseSync): void {
     }
   }
 
+  // workspace-member is intentionally editable, so the generic system-role
+  // refresh above preserves existing grants. Backfill this newly introduced
+  // default capability for historical member roles as well; INSERT OR IGNORE
+  // keeps the migration idempotent on every dev-server schema check.
+  db.prepare(
+    `INSERT OR IGNORE INTO role_permissions (role_id, permission, data_scope)
+     SELECT id, 'image.enhance.use', NULL
+       FROM roles
+      WHERE is_system = 1 AND scope = 'workspace' AND role_key = 'workspace-member'`,
+  ).run();
+
   const organizationAssignments = db.prepare(
     `SELECT organization_id, user_id, role FROM organization_members`,
   ).all() as { organization_id: string; user_id: string; role: string }[];

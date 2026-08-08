@@ -1,11 +1,11 @@
 "use client";
 
 import { memo } from "react";
-import { FilmIcon } from "lucide-react";
+import { FilmIcon, ImageIcon } from "lucide-react";
 import type { TextMessagePartComponent } from "@assistant-ui/react";
 import { Badge } from "@/components/assistant-ui/badge";
 import { DirectiveText } from "@/components/assistant-ui/directive-text";
-import { VIDEO_MARKER_RE } from "./attachment-adapter";
+import { IMAGE_MARKER_RE, VIDEO_MARKER_RE } from "./attachment-adapter";
 
 /**
  * 用户气泡里的 Text 渲染器：把视频附件标记
@@ -20,7 +20,7 @@ import { VIDEO_MARKER_RE } from "./attachment-adapter";
 const VideoMarkerTextImpl: TextMessagePartComponent = (props) => {
   const { text } = props;
   // 全局正则带 lastIndex 状态，每次渲染重新起一个实例避免串场。
-  const re = new RegExp(VIDEO_MARKER_RE.source, "g");
+  const re = new RegExp(`${VIDEO_MARKER_RE.source}|${IMAGE_MARKER_RE.source}`, "g");
   const nodes: React.ReactNode[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
@@ -30,16 +30,18 @@ const VideoMarkerTextImpl: TextMessagePartComponent = (props) => {
       const segment = text.slice(cursor, match.index);
       nodes.push(<DirectiveText key={cursor} {...props} text={segment} />);
     }
-    const [, name, , size] = match;
+    const isImage = match[0].startsWith("[图片附件");
+    const name = isImage ? match[4] : match[1];
+    const size = isImage ? match[6] : match[3];
     nodes.push(
       <Badge
         key={`m${match.index}`}
         variant="muted"
         size="sm"
-        data-slot="video-attachment-chip"
+        data-slot={isImage ? "image-attachment-chip" : "video-attachment-chip"}
         className="mx-0.5 max-w-full items-baseline align-middle [&_svg]:self-center"
       >
-        <FilmIcon />
+        {isImage ? <ImageIcon /> : <FilmIcon />}
         <span className="truncate">{name}</span>
         <span className="opacity-60">{size}</span>
       </Badge>,

@@ -36,6 +36,7 @@ import { effectiveDataScope, hasGrant, requireGrant, tenantErrorResponse } from 
 import type { Permission } from "@/lib/authorization";
 import { videoEraseTool } from "@/lib/tools/video-erase";
 import { videoEnhanceTool } from "@/lib/tools/video-enhance";
+import { imageEnhanceTool } from "@/lib/tools/image-enhance";
 import { videoMattingTool } from "@/lib/tools/video-matting";
 
 export const maxDuration = 60;
@@ -243,6 +244,7 @@ export async function POST(req: Request) {
     collector_search_items: "commerce.collection.view",
     video_erase: "video.erase.use",
     video_enhance: "video.enhance.use",
+    image_enhance: "image.enhance.use",
     video_matting: "video.cutout.use",
   };
   if (requiredTool) {
@@ -278,6 +280,7 @@ export async function POST(req: Request) {
     }),
     video_erase: videoEraseTool,
     video_enhance: videoEnhanceTool,
+    image_enhance: imageEnhanceTool,
     video_matting: videoMattingTool,
   };
   const directTools = Object.fromEntries(Object.entries(allDirectTools).filter(([toolName]) => {

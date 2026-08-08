@@ -15,6 +15,7 @@ import {
   capabilityName,
   chainTargets,
   isTerminalStatus,
+  primaryMediaArtifact,
   primaryVideoArtifact,
   type JobInfo,
   type ToolboxRegion,
@@ -22,6 +23,7 @@ import {
 import type { VideoEraseArgs, VideoEraseResult } from "@/lib/tools/video-erase";
 import type { VideoEnhanceArgs, VideoEnhanceResult } from "@/lib/tools/video-enhance";
 import type { VideoMattingArgs, VideoMattingResult } from "@/lib/tools/video-matting";
+import type { ImageEnhanceArgs, ImageEnhanceResult } from "@/lib/tools/image-enhance";
 
 /**
  * 视频工具箱的通用任务卡片：所有异步视频能力（擦除/抠像/口型/增强…）共用。
@@ -444,15 +446,16 @@ const JobStep: FC<{
 
   const chain = async (capability: string, defaultParams?: Record<string, unknown>) => {
     if (!job) return;
-    const video = primaryVideoArtifact(job.artifacts);
-    if (!video) return;
+    const media = primaryMediaArtifact(job.artifacts);
+    const target = chainTargets(job.capability).find((item) => item.id === capability);
+    if (!media || !target) return;
     setBusy(true);
     setActionError(undefined);
     try {
       const next = await postJob({
         capability,
         params: defaultParams ?? {},
-        inputs: { video: `job:${job.id}/${video.path}` },
+        inputs: { [target.mediaKind]: `job:${job.id}/${media.artifact.path}` },
       });
       onChain(capability, next.id);
     } catch (e) {
@@ -502,55 +505,67 @@ const JobStep: FC<{
   } else {
     // 4x enhancement returns a high-resolution master plus a browser-friendly rendition.
     // The card plays the compatible file, while chaining continues to use the master.
-    const masterVideo = primaryVideoArtifact(job.artifacts);
+    const masterMedia = primaryMediaArtifact(job.artifacts);
     const compatibleVideo =
       job.capability === "video_enhance"
         ? job.artifacts.find((a) => a.path === "enhanced_compatible.mp4")
         : undefined;
-    const video = compatibleVideo ?? masterVideo;
-    const others = job.artifacts.filter((a) => a !== video && a !== masterVideo);
+    const compatibleImage =
+      job.capability === "image_enhance"
+        ? job.artifacts.find((a) => a.path === "enhanced_preview.jpg")
+        : undefined;
+    const media = compatibleVideo ?? compatibleImage ?? masterMedia?.artifact;
+    const mediaKind = compatibleVideo ? "video" : compatibleImage ? "image" : masterMedia?.kind;
+    const others = job.artifacts.filter((a) => a !== media && a !== masterMedia?.artifact);
     const duration = finishedDuration(job);
-    const targets = masterVideo ? chainTargets(job.capability) : [];
+    const targets = masterMedia ? chainTargets(job.capability) : [];
     body = (
       <div className="space-y-3">
-        {video ? (
+        {media && mediaKind === "video" ? (
           <video
             controls
             preload="metadata"
             className="max-h-72 w-full rounded-lg border border-black/5 bg-black/5 object-contain"
-            src={artifactUrl(job.id, video.path)}
+            src={artifactUrl(job.id, media.path)}
+          />
+        ) : media && mediaKind === "image" ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            className="max-h-72 w-full rounded-lg border border-black/5 bg-black/5 object-contain"
+            src={artifactUrl(job.id, media.path)}
+            alt="增强后的图片"
           />
         ) : (
           <p className="text-sm text-black/50">任务完成，但没有产出文件</p>
         )}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-black/50">
           {duration ? <span>耗时 {duration}</span> : null}
-          {compatibleVideo ? (
+          {compatibleVideo || compatibleImage ? (
             <>
               <a
-                href={artifactUrl(job.id, compatibleVideo.path)}
-                download={compatibleVideo.name}
+                href={artifactUrl(job.id, (compatibleVideo ?? compatibleImage)!.path)}
+                download={(compatibleVideo ?? compatibleImage)!.name}
                 className="underline underline-offset-2 hover:text-black/80"
               >
                 下载兼容版
               </a>
-              {masterVideo ? (
+              {masterMedia ? (
                 <a
-                  href={artifactUrl(job.id, masterVideo.path)}
-                  download={masterVideo.name}
+                  href={artifactUrl(job.id, masterMedia.artifact.path)}
+                  download={masterMedia.artifact.name}
                   className="underline underline-offset-2 hover:text-black/80"
                 >
                   下载原始 4 倍版
                 </a>
               ) : null}
             </>
-          ) : video ? (
+          ) : media ? (
             <a
-              href={artifactUrl(job.id, video.path)}
-              download={video.name}
+              href={artifactUrl(job.id, media.path)}
+              download={media.name}
               className="underline underline-offset-2 hover:text-black/80"
             >
-              下载 {video.name}
+              下载 {media.name}
             </a>
           ) : null}
           {others.map((a) => (
@@ -620,6 +635,7 @@ const JobStep: FC<{
 export type JobCardResult = {
   jobId?: string;
   videoFileId?: string;
+  imageFileId?: string;
   note?: string;
   error?: string;
 };
@@ -781,7 +797,32 @@ export const VideoEnhanceToolUI = makeAssistantToolUI<
       title={capabilityName("video_enhance")}
       toolCallId={toolCallId}
       capability="video_enhance"
-      argsSummary={args?.outscale ? `放大 ${args.outscale} 倍` : undefined}
+      argsSummary={[
+        args?.outscale ? `放大 ${args.outscale} 倍` : undefined,
+        args?.faceEnhance === true || args?.faceEnhance === "true" ? "人脸修复" : undefined,
+        args?.denoise !== undefined ? `去噪 ${args.denoise}` : undefined,
+      ].filter(Boolean).join(" · ") || undefined}
+      result={result ?? undefined}
+    />
+  ),
+});
+
+export const ImageEnhanceToolUI = makeAssistantToolUI<
+  ImageEnhanceArgs,
+  ImageEnhanceResult
+>({
+  toolName: "image_enhance",
+  display: "standalone",
+  render: ({ args, result, toolCallId }) => (
+    <JobCard
+      title={capabilityName("image_enhance")}
+      toolCallId={toolCallId}
+      capability="image_enhance"
+      argsSummary={[
+        args?.outscale ? `放大 ${args.outscale} 倍` : undefined,
+        args?.faceEnhance === true || args?.faceEnhance === "true" ? "人脸修复" : undefined,
+        args?.denoise !== undefined ? `去噪 ${args.denoise}` : undefined,
+      ].filter(Boolean).join(" · ") || undefined}
       result={result ?? undefined}
     />
   ),
