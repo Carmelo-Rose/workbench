@@ -5,4 +5,4 @@
 config/product-pipeline/**/*.json text eol=lf
 
 # Production ComfyUI nodes are compared byte-for-byte on the Windows host.
-config/comfyui-custom-nodes/**/*.py text eol=crlf
+config/comfyui-custom-nodes/**/*.py text eol=lf
