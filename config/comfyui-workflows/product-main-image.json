@@ -1,0 +1,91 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "{{INPUT_IMAGE}}" }
+  },
+  "2": {
+    "class_type": "WhiteField_ScaleLongEdge",
+    "inputs": { "image": ["1", 0], "long_edge": "{{MASK_LONG_EDGE}}" }
+  },
+  "3": {
+    "class_type": "LayerMask: LoadBiRefNetModelV2",
+    "inputs": { "version": "BiRefNet-General" }
+  },
+  "4": {
+    "class_type": "LayerMask: BiRefNetUltraV2",
+    "inputs": {
+      "image": ["2", 0],
+      "birefnet_model": ["3", 0],
+      "detail_method": "GuidedFilter",
+      "detail_erode": 2,
+      "detail_dilate": 2,
+      "black_point": 0.01,
+      "white_point": 0.99,
+      "process_detail": true,
+      "device": "cuda",
+      "max_megapixels": 2.0
+    }
+  },
+  "5": {
+    "class_type": "WhiteField_FitBackdrop",
+    "inputs": {
+      "image": ["2", 0],
+      "mask": ["4", 1],
+      "exclude_px": "{{EXCLUDE_PX}}",
+      "known_percentile": 55.0,
+      "sigma_frac": 0.16,
+      "levels": 4,
+      "fit_side": 640
+    }
+  },
+  "6": {
+    "class_type": "WhiteField_ScaleLongEdge",
+    "inputs": { "image": ["1", 0], "long_edge": "{{DELIVER_LONG_EDGE}}" }
+  },
+  "7": {
+    "class_type": "WhiteField_Normalize",
+    "inputs": {
+      "image": ["6", 0],
+      "mask": ["4", 1],
+      "backdrop": ["5", 0],
+      "dilate_px": "{{DILATE_PX}}",
+      "feather_px": "{{FEATHER_PX}}",
+      "white_at": "{{WHITE_AT}}",
+      "shadow_gain": "{{SHADOW_GAIN}}",
+      "hole_white": "{{HOLE_WHITE}}",
+      "hole_feather": 2.0,
+      "remove_dust": true,
+      "dust_max_area": 400,
+      "dust_max_dim": 25,
+      "dust_min_gap": 30
+    }
+  },
+  "9": {
+    "class_type": "WhiteField_Report",
+    "inputs": {
+      "source": ["6", 0],
+      "result": ["7", 0],
+      "mask": ["4", 1],
+      "core_erode_px": 15,
+      "far_px": "{{EXCLUDE_PX}}"
+    }
+  },
+  "14": {
+    "class_type": "WhiteField_SquareCrop",
+    "inputs": {
+      "image": ["7", 0],
+      "mask": ["4", 1],
+      "fill": "{{SQUARE_FILL}}",
+      "out_side": "{{SQUARE_SIDE}}",
+      "max_centre_offset": 0.06,
+      "live_level": 235.0
+    }
+  },
+  "15": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["14", 0],
+      "filename_prefix": "{{OUTPUT_PREFIX}}"
+    }
+  }
+}

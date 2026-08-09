@@ -954,10 +954,10 @@ async function runMatting(job: MonoJob, signal: AbortSignal): Promise<Record<str
 
   // 图片走 BiRefNet、视频走 RVM 之类的选择完全由工作流文件决定。
   const workflow = await loadComfyWorkflow(`matting-${mediaType}`, values);
-  const outputs = await runComfyWorkflow(workflow, signal, (stage) => updateMonoJobResult(job.id, { stage }));
+  const result = await runComfyWorkflow(workflow, signal, (stage) => updateMonoJobResult(job.id, { stage }));
 
   updateMonoJobResult(job.id, { stage: "downloading" });
-  const primary = outputs[0];
+  const primary = result.outputs[0];
   const stored = await saveObjectBuffer(await downloadComfyOutput(primary, signal), primary.filename);
   const resultAsset = createStoredAsset(actor, {
     storageKey: stored.key,
@@ -970,7 +970,7 @@ async function runMatting(job: MonoJob, signal: AbortSignal): Promise<Record<str
     url: `/api/workbench/mono/assets/${encodeURIComponent(resultAsset.id)}/content`,
     filename: primary.filename,
     mediaType,
-    outputs: outputs.length,
+    outputs: result.outputs.length,
     provider: "comfyui",
   };
 }
