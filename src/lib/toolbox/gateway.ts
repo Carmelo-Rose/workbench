@@ -1,4 +1,5 @@
 import type { JobInfo } from "@/lib/toolbox/types";
+import { getConfigValue } from "@/lib/server/api-config";
 import { tenantContext } from "@/lib/server/tenant-context";
 
 /**
@@ -6,9 +7,13 @@ import { tenantContext } from "@/lib/server/tenant-context";
  * 浏览器不直连网关，一律经 /api/toolbox/* 代理，这里是代理与工具共用的唯一出口。
  */
 
-export function gatewayBase(): string {
+export function gatewayBase(actor?: GatewayActor): string {
+  const resolvedActor = actor ?? tenantContext()?.actor;
   return (
-    process.env.TOOLBOX_GATEWAY_URL?.replace(/\/+$/, "") ??
+    (resolvedActor
+      ? getConfigValue("TOOLBOX_GATEWAY_URL", resolvedActor.workspaceId)
+      : process.env.TOOLBOX_GATEWAY_URL
+    )?.replace(/\/+$/, "") ??
     "http://192.168.1.198:8100"
   );
 }
@@ -16,8 +21,10 @@ export function gatewayBase(): string {
 type GatewayActor = { userId: string; workspaceId: string };
 
 export function gatewayHeaders(actor?: GatewayActor): Record<string, string> {
-  const token = process.env.TOOLBOX_TOKEN;
   const resolvedActor = actor ?? tenantContext()?.actor;
+  const token = resolvedActor
+    ? getConfigValue("TOOLBOX_TOKEN", resolvedActor.workspaceId)
+    : process.env.TOOLBOX_TOKEN;
   return {
     ...(token ? { "x-toolbox-token": token } : {}),
     ...(resolvedActor
@@ -50,7 +57,7 @@ async function gatewayFetch(
   }
   let res: Response;
   try {
-    res = await fetch(`${gatewayBase()}${path}`, {
+    res = await fetch(`${gatewayBase(resolvedActor)}${path}`, {
       ...init,
       headers: { ...gatewayHeaders(resolvedActor), ...init?.headers },
       cache: "no-store",

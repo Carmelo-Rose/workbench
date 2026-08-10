@@ -344,6 +344,72 @@ describe("product pipeline cutout concurrency", () => {
     await Promise.all(tasks);
   });
 
+  it("holds every cutout back while local main-image generation owns the card", async () => {
+    const scheduler = new ProductCutoutScheduler({ globalCutouts: 12, perFolderCutouts: 6 });
+    const started: string[] = [];
+    let releaseGeneration!: () => void;
+    const generating = new Promise<void>((resolve) => { releaseGeneration = resolve; });
+    const generation = scheduler.runExclusive(async () => {
+      started.push("generate");
+      await generating;
+    });
+
+    await waitFor(() => started.length === 1, "generation never took the card");
+    const cutouts = ["A", "B"].map((folder) => scheduler.run(folder, async () => { started.push(folder); }));
+    // Deliberately given room to misbehave: without the exclusive hold both
+    // folders are far inside the twelve-slot ceiling and would start at once.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(started).toEqual(["generate"]);
+    expect(scheduler.getStats().active).toBe(0);
+
+    releaseGeneration();
+    await Promise.all([generation, ...cutouts]);
+    expect(started.slice(1).sort()).toEqual(["A", "B"]);
+  });
+
+  it("waits for the cutouts already running before generation takes the card", async () => {
+    const scheduler = new ProductCutoutScheduler({ globalCutouts: 12, perFolderCutouts: 6 });
+    const order: string[] = [];
+    let releaseCutout!: () => void;
+    const holding = new Promise<void>((resolve) => { releaseCutout = resolve; });
+    const cutout = scheduler.run("A", async () => {
+      order.push("cutout");
+      await holding;
+    });
+    await waitFor(() => order.length === 1, "the cutout never started");
+
+    const generation = scheduler.runExclusive(async () => { order.push("generate"); });
+    // A queued exclusive request also stops new grants, otherwise a folder with
+    // work left keeps the queue non-empty and generation never gets its turn.
+    const queued = scheduler.run("A", async () => { order.push("queued"); });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual(["cutout"]);
+
+    releaseCutout();
+    await Promise.all([cutout, generation, queued]);
+    expect(order).toEqual(["cutout", "generate", "queued"]);
+  });
+
+  it("releases the card when a cancelled generation never gets its turn", async () => {
+    const scheduler = new ProductCutoutScheduler({ globalCutouts: 12, perFolderCutouts: 6 });
+    const controller = new AbortController();
+    let releaseCutout!: () => void;
+    const holding = new Promise<void>((resolve) => { releaseCutout = resolve; });
+    const cutout = scheduler.run("A", async () => { await holding; });
+    await waitFor(() => scheduler.getStats().active === 1, "the cutout never started");
+
+    const generation = scheduler.runExclusive(async () => { throw new Error("should never run"); }, controller.signal);
+    controller.abort();
+    await expect(generation).rejects.toThrow("任务已取消");
+
+    releaseCutout();
+    await cutout;
+    // The abandoned request must not leave the arbiter waiting for a hold that
+    // will never be taken.
+    await scheduler.run("A", async () => { /* the queue still drains */ });
+    expect(scheduler.getStats().active).toBe(0);
+  });
+
   it("allows safe environment tuning while retaining the agreed hard ceilings", () => {
     expect(productPipelineSchedulingSettings({
       PRODUCT_PIPELINE_ACTIVE_FOLDERS: "2",
@@ -1061,6 +1127,9 @@ describe("product pipeline partial publish", () => {
 describe("online shadow backdrop generation", () => {
   const originalBaseUrl = process.env.MONO_IMAGE_BASE_URL;
   const originalApiKey = process.env.MONO_IMAGE_API_KEY;
+  const originalProvider = process.env.PRODUCT_MAIN_IMAGE_PROVIDER;
+  const originalComfyUrl = process.env.COMFYUI_URL;
+  const originalWorkflowDir = process.env.COMFYUI_WORKFLOWS_DIR;
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -1068,6 +1137,12 @@ describe("online shadow backdrop generation", () => {
     else process.env.MONO_IMAGE_BASE_URL = originalBaseUrl;
     if (originalApiKey === undefined) delete process.env.MONO_IMAGE_API_KEY;
     else process.env.MONO_IMAGE_API_KEY = originalApiKey;
+    if (originalProvider === undefined) delete process.env.PRODUCT_MAIN_IMAGE_PROVIDER;
+    else process.env.PRODUCT_MAIN_IMAGE_PROVIDER = originalProvider;
+    if (originalComfyUrl === undefined) delete process.env.COMFYUI_URL;
+    else process.env.COMFYUI_URL = originalComfyUrl;
+    if (originalWorkflowDir === undefined) delete process.env.COMFYUI_WORKFLOWS_DIR;
+    else process.env.COMFYUI_WORKFLOWS_DIR = originalWorkflowDir;
   });
 
   async function sourceFixture(root: string, width = 60, height = 40): Promise<{
@@ -1138,5 +1213,99 @@ describe("online shadow backdrop generation", () => {
     );
     const generateCalls = fetchMock.mock.calls.filter(([endpoint]) => endpoint === "https://image.example.test/v1/api/generate");
     expect(generateCalls).toHaveLength(3);
+  });
+
+  it("routes the configured ComfyUI provider through the checked-in main-image workflow", async () => {
+    process.env.PRODUCT_MAIN_IMAGE_PROVIDER = "comfyui";
+    process.env.COMFYUI_URL = "https://comfy.example.test";
+    const root = await fixture();
+    const source = await sourceFixture(root, 90, 60);
+    const resultPng = await sharp({ create: { width: 12, height: 12, channels: 4, background: { r: 18, g: 52, b: 86, alpha: 1 } } })
+      .png()
+      .toBuffer();
+    const fetchMock = vi.fn().mockImplementation((endpoint: string, init?: RequestInit) => {
+      if (endpoint === "https://comfy.example.test/upload/image") {
+        return Promise.resolve(new Response(JSON.stringify({ name: "hat.jpg", subfolder: "" }), { status: 200 }));
+      }
+      if (endpoint === "https://comfy.example.test/prompt") {
+        return Promise.resolve(new Response(JSON.stringify({ prompt_id: "comfy-main-prompt" }), { status: 200 }));
+      }
+      if (endpoint === "https://comfy.example.test/history/comfy-main-prompt") {
+        return Promise.resolve(new Response(JSON.stringify({
+          "comfy-main-prompt": {
+            status: { completed: true, status_str: "success" },
+            outputs: { "14": { images: [{ filename: "main.png", subfolder: "", type: "output" }] } },
+          },
+        }), { status: 200 }));
+      }
+      if (endpoint.startsWith("https://comfy.example.test/view?")) {
+        return Promise.resolve(new Response(new Uint8Array(resultPng), { status: 200 }));
+      }
+      void init;
+      return Promise.resolve(new Response("unexpected endpoint", { status: 500 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const backdrop = await requestShadowBackdrop(source, new AbortController().signal, "ws-test");
+
+    const promptCall = fetchMock.mock.calls.find(([endpoint]) => endpoint === "https://comfy.example.test/prompt");
+    expect(promptCall).toBeDefined();
+    const workflow = JSON.parse(promptCall![1].body as string).prompt as Record<string, { inputs: Record<string, unknown> }>;
+    expect(workflow["1"].inputs.unet_name).toBe("flux1-dev-kontext_fp8_scaled.safetensors");
+    expect(workflow["5"].inputs.image).toBe("hat.jpg");
+    const { info } = await sharp(backdrop).raw().toBuffer({ resolveWithObject: true });
+    expect(info).toMatchObject({ width: 12, height: 12, channels: 3 });
+  });
+
+  it("uploads under a content-addressed name so one shoot cannot overwrite another's input", async () => {
+    process.env.PRODUCT_MAIN_IMAGE_PROVIDER = "comfyui";
+    process.env.COMFYUI_URL = "https://comfy.example.test";
+    const root = await fixture();
+    const resultPng = await sharp({ create: { width: 8, height: 8, channels: 3, background: "#123456" } }).png().toBuffer();
+    const uploadNames: string[] = [];
+    const fetchMock = vi.fn().mockImplementation((endpoint: string, init?: RequestInit) => {
+      if (endpoint === "https://comfy.example.test/upload/image") {
+        uploadNames.push(((init!.body as FormData).get("image") as File).name);
+        return Promise.resolve(new Response(JSON.stringify({ name: "stored.jpg", subfolder: "" }), { status: 200 }));
+      }
+      if (endpoint === "https://comfy.example.test/prompt") {
+        return Promise.resolve(new Response(JSON.stringify({ prompt_id: "p" }), { status: 200 }));
+      }
+      if (endpoint === "https://comfy.example.test/history/p") {
+        return Promise.resolve(new Response(JSON.stringify({
+          p: {
+            status: { completed: true, status_str: "success" },
+            outputs: { "14": { images: [{ filename: "main.png", subfolder: "", type: "output" }] } },
+          },
+        }), { status: 200 }));
+      }
+      return Promise.resolve(new Response(new Uint8Array(resultPng), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Two folders of the same shoot, both holding a `hat.jpg` — the case that
+    // silently published one product's picture under the other's stem.
+    const base = await sourceFixture(root);
+    const signal = new AbortController().signal;
+    await requestShadowBackdrop({ ...base, hash: "a".repeat(64) }, signal, "ws-test");
+    await requestShadowBackdrop({ ...base, hash: "b".repeat(64) }, signal, "ws-test");
+
+    expect(uploadNames).toHaveLength(2);
+    expect(uploadNames[0]).not.toBe(uploadNames[1]);
+    expect(uploadNames.every((name) => name.startsWith("hat-") && name.endsWith(".jpg"))).toBe(true);
+  });
+
+  it("keeps ComfyUI failures explicit after the same three retries", async () => {
+    process.env.PRODUCT_MAIN_IMAGE_PROVIDER = "comfyui";
+    process.env.COMFYUI_URL = "https://comfy.example.test";
+    const root = await fixture();
+    const source = await sourceFixture(root);
+    const fetchMock = vi.fn(() => Promise.resolve(new Response("offline", { status: 503 })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(requestShadowBackdrop(source, new AbortController().signal, "ws-test")).rejects.toThrow(
+      "主图阴影三次都没拿到有效结果",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

@@ -27,7 +27,12 @@ export const API_CONFIG_GROUPS = {
   },
   monoImage: {
     label: "生图服务（Mono）",
-    keys: ["MONO_IMAGE_BASE_URL", "MONO_IMAGE_API_KEY", "MONO_IMAGE_MODEL"] as const,
+    keys: [
+      "MONO_IMAGE_BASE_URL",
+      "MONO_IMAGE_API_KEY",
+      "MONO_IMAGE_MODEL",
+      "PRODUCT_MAIN_IMAGE_PROVIDER",
+    ] as const,
   },
   videoGeneration: {
     label: "视频生成服务（Mono）",
@@ -43,6 +48,10 @@ export const API_CONFIG_GROUPS = {
     label: "大视频云存储（TOS）",
     keys: ["TOS_AK", "TOS_SK", "TOS_REGION", "TOS_BUCKET"] as const,
   },
+  toolbox: {
+    label: "媒体工具箱网关",
+    keys: ["TOOLBOX_GATEWAY_URL", "TOOLBOX_TOKEN"] as const,
+  },
 } as const;
 
 export type ApiConfigGroupId = keyof typeof API_CONFIG_GROUPS;
@@ -56,6 +65,7 @@ const SECRET_KEYS = new Set<string>([
   "VIDEO_GENERATION_API_KEY",
   "TOS_AK",
   "TOS_SK",
+  "TOOLBOX_TOKEN",
 ]);
 
 /** 读取单个 key 的当前生效值：db 覆盖优先，否则回落到环境变量。 */

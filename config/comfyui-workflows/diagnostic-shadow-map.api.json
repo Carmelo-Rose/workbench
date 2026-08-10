@@ -1,0 +1,69 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{{INPUT_IMAGE}}"
+    }
+  },
+  "2": {
+    "class_type": "LayerMask: RmBgUltra V2",
+    "inputs": {
+      "image": ["1", 0],
+      "detail_method": "PyMatting",
+      "detail_erode": 1,
+      "detail_dilate": 1,
+      "black_point": 0.01,
+      "white_point": 0.99,
+      "process_detail": false,
+      "device": "cuda",
+      "max_megapixels": 2.0
+    }
+  },
+  "3": {
+    "class_type": "Image Shadows and Highlights",
+    "inputs": {
+      "image": ["1", 0],
+      "shadow_threshold": "{{SHADOW_THRESHOLD}}",
+      "shadow_factor": "{{SHADOW_FACTOR}}",
+      "shadow_smoothing": 0.25,
+      "highlight_threshold": 255,
+      "highlight_factor": 0,
+      "highlight_smoothing": 0.25,
+      "simplify_isolation": 0
+    }
+  },
+  "4": {
+    "class_type": "MaskToImage",
+    "inputs": {
+      "mask": ["2", 1]
+    }
+  },
+  "5": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["3", 0],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_adjusted"
+    }
+  },
+  "6": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["3", 1],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_shadow_map"
+    }
+  },
+  "7": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["3", 2],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_highlight_map"
+    }
+  },
+  "8": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["4", 0],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_raw_mask"
+    }
+  }
+}

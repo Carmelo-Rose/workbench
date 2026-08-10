@@ -20,6 +20,7 @@ from common import (
     GFPGAN_WEIGHTS_PATH,
     TILE_FALLBACKS,
     TILE_SIZE,
+    WDN_WEIGHTS_PATH,
     WEIGHTS_PATH,
     build_face_enhancer,
     build_upsampler,
@@ -31,7 +32,14 @@ sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # A 4x 720x1280 video is 2880x5120 (5K).  Keep that master, but also create
 # a smaller H.264 rendition for browser previews and normal local playback.
-COMPATIBLE_MAX_SIDE = 1920
+#
+# 1920 used to collide with most source videos (many are already 1080p on
+# their long side): after a 4x upscale it gets scaled right back down to the
+# same size as the input, so the inline preview looked identical to the
+# original. 3840 (4K) still fits comfortably under H264_NVENC_MAX_SIDE, and
+# leaves headroom for the preview to actually look upscaled for typical
+# 1080p/1440p sources.
+COMPATIBLE_MAX_SIDE = 3840
 H264_NVENC_MAX_SIDE = 4096
 
 
@@ -261,8 +269,11 @@ def main() -> int:
     outscale = float(params.get("outscale", 4))
     if outscale not in (2.0, 4.0):
         outscale = 4.0
+    # 逐帧跑 GFPGAN 会明显拉长处理时间，视频这条路默认继续关闭，按需显式开启。
     face_enhance = bool(params.get("face_enhance", False))
-    denoise = min(1.0, max(0.0, float(params.get("denoise", 1.0))))
+    # 默认 1.0 等于纯 x4v3 满强度降噪，实测会把画面磨得过度平滑、发"塑料感"。
+    # 0.5 兼顾去噪和保留质感，是 enhance 能力（图片/视频共享）冒烟测试用的同一个值。
+    denoise = min(1.0, max(0.0, float(params.get("denoise", 0.5))))
 
     if not video.is_file():
         print(f"输入视频不存在：{video}", flush=True)
@@ -272,6 +283,9 @@ def main() -> int:
         return 2
     if face_enhance and not GFPGAN_WEIGHTS_PATH.is_file():
         print(f"缺少人脸修复权重：{GFPGAN_WEIGHTS_PATH}", flush=True)
+        return 2
+    if denoise < 1.0 and not WDN_WEIGHTS_PATH.is_file():
+        print(f"缺少降噪混合权重：{WDN_WEIGHTS_PATH}", flush=True)
         return 2
 
     progress(2, "读取视频信息")

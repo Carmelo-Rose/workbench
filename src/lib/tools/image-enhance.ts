@@ -7,19 +7,19 @@ export type ImageEnhanceArgs = { imageFileId: string; outscale?: number | string
 export type ImageEnhanceResult = { jobId?: string; imageFileId?: string; note?: string; continueTargets?: string[]; error?: string };
 
 export const imageEnhanceTool = tool({
-  description: "Enhance an uploaded image with Real-ESRGAN and optional GFPGAN face restoration.",
+  description: "Enhance an uploaded image with Real-ESRGAN and GFPGAN face restoration (face restoration on by default).",
   inputSchema: z.object({
     imageFileId: z.string().describe("The image attachment fileId."),
     outscale: z.union([z.number(), z.string()]).optional().describe("Scale: 2 or 4; defaults to 4."),
-    faceEnhance: z.union([z.boolean(), z.string()]).optional().describe("Enable face restoration for portraits."),
-    denoise: z.union([z.number(), z.string()]).optional().describe("Denoise strength from 0 to 1; defaults to 1."),
+    faceEnhance: z.union([z.boolean(), z.string()]).optional().describe("Enable GFPGAN face restoration; defaults to true. Pass false when the caller needs pixel-faithful faces (e.g. ID photos) instead of AI-restored ones."),
+    denoise: z.union([z.number(), z.string()]).optional().describe("Denoise strength from 0 to 1; defaults to 0.5."),
     note: z.string().optional(),
   }),
   execute: async ({ imageFileId, outscale, faceEnhance, denoise, note }): Promise<ImageEnhanceResult> => {
     const safeOutscale = Number(outscale) === 2 ? 2 : 4;
-    const safeFace = faceEnhance === true || faceEnhance === "true";
+    const safeFace = faceEnhance === undefined ? true : faceEnhance === true || faceEnhance === "true";
     const rawDenoise = Number(denoise);
-    const safeDenoise = Number.isFinite(rawDenoise) ? Math.min(1, Math.max(0, rawDenoise)) : 1;
+    const safeDenoise = Number.isFinite(rawDenoise) ? Math.min(1, Math.max(0, rawDenoise)) : 0.5;
     try {
       const job = await submitJob({ capability: "image_enhance", params: { outscale: safeOutscale, face_enhance: safeFace, denoise: safeDenoise }, inputs: { image: imageFileId } });
       return { jobId: job.id, imageFileId, ...(note ? { note } : {}), continueTargets: chainTargets("image_enhance").map((c) => c.name) };

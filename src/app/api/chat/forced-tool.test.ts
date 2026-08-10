@@ -36,6 +36,11 @@ describe("forcedToolName (Phase 1 baseline)", () => {
     ["帮我生成一张猫的图片", false, "mono_generate_image"],
     ["generate an image of a cat", false, "mono_generate_image"],
 
+    ["please upscale this image", true, "image_enhance"],
+    ["enhance the image quality", true, "image_enhance"],
+    ["enhance the video\n[视频附件 demo.mp4｜fileId=abcdef123456｜1.0MB｜已上传至视频工具箱]", false, "video_enhance"],
+    ["please upscale this image", false, undefined],
+
     ["罗盘商品卡榜今天有什么新进榜", false, "luopan_rank_insights"],
     ["榜单最近有什么异动", false, "luopan_rank_insights"],
 

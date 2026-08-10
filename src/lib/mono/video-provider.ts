@@ -17,17 +17,30 @@ import { uploadImageToTosAndGetUrl } from "./tos";
 export const videoProviderIds = ["comfyui", "dashscope-wan"] as const;
 export type VideoProviderId = (typeof videoProviderIds)[number];
 
-export type VideoGenerationCapabilities = {
-  configured: boolean;
-  provider: VideoProviderId | null;
-  message?: string;
+export type VideoModelOption = {
+  id: string;
+  label: string;
   modes: Array<"text-to-video" | "image-to-video">;
-  models: Array<{ id: string; label: string; modes: Array<"text-to-video" | "image-to-video"> }>;
+  provider: VideoProviderId;
+  /** Only meaningful for image-to-video models; absent/false means first-frame only. */
+  supportsLastFrame?: boolean;
+};
+
+export type VideoProviderCapabilities = {
   durations: number[];
   resolutions: Array<"480p" | "720p">;
   variants: number[];
   aspectRatios: string[];
-  supportsLastFrame: boolean;
+};
+
+export type VideoGenerationCapabilities = {
+  configured: boolean;
+  /** Every provider with valid credentials right now — comfyui and dashscope-wan can both be live at once. */
+  providers: VideoProviderId[];
+  message?: string;
+  modes: Array<"text-to-video" | "image-to-video">;
+  models: VideoModelOption[];
+  providerCapabilities: Partial<Record<VideoProviderId, VideoProviderCapabilities>>;
 };
 
 export type ResolvedVideoGeneration = {
@@ -63,68 +76,95 @@ const COMFY_MODEL = "wan2.2-ti2v-5b";
 const DEFAULT_T2V_MODEL = "wan2.7-t2v-2026-06-12";
 const DEFAULT_I2V_MODEL = "wan2.7-i2v-2026-04-25";
 
-function configuredProvider(workspaceId?: string): VideoProviderId | null {
-  const configured = getConfigValue("VIDEO_GENERATION_PROVIDER", workspaceId);
-  if (configured === "comfyui") return process.env.COMFYUI_URL ? "comfyui" : null;
-  if (configured === "dashscope-wan") {
-    return getConfigValue("VIDEO_GENERATION_BASE_URL", workspaceId) && getConfigValue("VIDEO_GENERATION_API_KEY", workspaceId)
-      ? "dashscope-wan"
-      : null;
+/**
+ * Local ComfyUI and cloud DashScope (Bailian) are independent backends and can
+ * both be live at once — each is gated only by its own credentials, never by
+ * the other's. VIDEO_GENERATION_PROVIDER no longer switches between them; it
+ * just orders the merged model list so "auto" resolves to the admin's
+ * preferred provider when more than one is configured.
+ */
+function availableProviders(workspaceId?: string): VideoProviderId[] {
+  const available: VideoProviderId[] = [];
+  if (process.env.COMFYUI_URL) available.push("comfyui");
+  if (
+    getConfigValue("VIDEO_GENERATION_BASE_URL", workspaceId) &&
+    getConfigValue("VIDEO_GENERATION_API_KEY", workspaceId)
+  ) {
+    available.push("dashscope-wan");
   }
-  return null;
+  const preferred = getConfigValue("VIDEO_GENERATION_PROVIDER", workspaceId) as VideoProviderId | undefined;
+  if (preferred && videoProviderIds.includes(preferred)) {
+    available.sort((a, b) => (a === preferred ? -1 : b === preferred ? 1 : 0));
+  }
+  return available;
 }
 
-export function getVideoGenerationCapabilities(workspaceId?: string): VideoGenerationCapabilities {
-  const provider = configuredProvider(workspaceId);
-  if (!provider) {
-    return {
-      configured: false,
-      provider: null,
-      message: "视频生成未配置。请在设置中选择 provider 并填写所需凭证。",
-      modes: [], models: [], durations: [], resolutions: [], variants: [], aspectRatios: [], supportsLastFrame: false,
-    };
-  }
+type ProviderEnvelope = VideoProviderCapabilities & { models: VideoModelOption[] };
+
+function providerEnvelope(provider: VideoProviderId, workspaceId?: string): ProviderEnvelope {
   if (provider === "comfyui") {
     return {
-      configured: true,
-      provider,
-      modes: ["text-to-video", "image-to-video"],
-      models: [{ id: COMFY_MODEL, label: "Wan 2.2 TI2V-5B（本地）", modes: ["text-to-video", "image-to-video"] }],
-      durations: [5], resolutions: ["480p"], variants: [1], aspectRatios: ["16:9", "9:16", "1:1"], supportsLastFrame: false,
+      models: [{ id: COMFY_MODEL, label: "Wan 2.2 TI2V-5B（本地）", modes: ["text-to-video", "image-to-video"], provider }],
+      durations: [5], resolutions: ["480p"], variants: [1], aspectRatios: ["16:9", "9:16", "1:1"],
     };
   }
   const t2v = getConfigValue("VIDEO_GENERATION_T2V_MODEL", workspaceId) ?? DEFAULT_T2V_MODEL;
   const i2v = getConfigValue("VIDEO_GENERATION_I2V_MODEL", workspaceId) ?? DEFAULT_I2V_MODEL;
   return {
-    configured: true,
-    provider,
-    modes: ["text-to-video", "image-to-video"],
     models: [
-      { id: t2v, label: "Wan 2.7 文生视频", modes: ["text-to-video"] },
-      { id: i2v, label: "Wan 2.7 图生视频", modes: ["image-to-video"] },
+      { id: t2v, label: "Wan 2.7 文生视频", modes: ["text-to-video"], provider },
+      { id: i2v, label: "Wan 2.7 图生视频", modes: ["image-to-video"], provider, supportsLastFrame: true },
+      // 百炼免费额度模型：与 Wan 2.7 共用同一个 video-synthesis 接口和请求体形状。
+      { id: "happyhorse-1.1-t2v", label: "HappyHorse 1.1 文生视频", modes: ["text-to-video"], provider },
+      { id: "happyhorse-1.1-i2v", label: "HappyHorse 1.1 图生视频", modes: ["image-to-video"], provider },
     ],
     durations: [5, 10], resolutions: ["720p"], variants: [1],
-    aspectRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"], supportsLastFrame: true,
+    aspectRatios: ["16:9", "9:16", "1:1", "4:3", "3:4"],
   };
+}
+
+export function getVideoGenerationCapabilities(workspaceId?: string): VideoGenerationCapabilities {
+  const providers = availableProviders(workspaceId);
+  if (providers.length === 0) {
+    return {
+      configured: false,
+      providers: [],
+      message: "视频生成未配置。请在设置中配置本地 ComfyUI 或云端 DashScope（百炼）凭证。",
+      modes: [], models: [], providerCapabilities: {},
+    };
+  }
+  const modes = new Set<"text-to-video" | "image-to-video">();
+  const models: VideoModelOption[] = [];
+  const providerCapabilities: Partial<Record<VideoProviderId, VideoProviderCapabilities>> = {};
+  for (const provider of providers) {
+    const { models: providerModels, ...capabilities } = providerEnvelope(provider, workspaceId);
+    providerCapabilities[provider] = capabilities;
+    for (const model of providerModels) {
+      models.push(model);
+      for (const mode of model.modes) modes.add(mode);
+    }
+  }
+  return { configured: true, providers, modes: [...modes], models, providerCapabilities };
 }
 
 export function resolveVideoGeneration(input: MonoVideoGenerationInput, workspaceId?: string): ResolvedVideoGeneration {
   const capabilities = getVideoGenerationCapabilities(workspaceId);
-  if (!capabilities.configured || !capabilities.provider) throw new Error(capabilities.message ?? "视频生成未配置");
-  if (!capabilities.modes.includes(input.mode)) throw new Error("当前 provider 不支持该视频生成模式");
-  if (!capabilities.durations.includes(input.durationSeconds)) throw new Error("当前 provider 不支持该视频时长");
-  if (!capabilities.resolutions.includes(input.resolution)) throw new Error("当前 provider 不支持该清晰度");
-  if (!capabilities.variants.includes(input.variants)) throw new Error("当前 provider 不支持该生成数量");
-  if (input.lastFrameAssetId && !capabilities.supportsLastFrame) throw new Error("当前本地模型暂不支持尾帧；云模型支持后开放");
-  if (input.mode === "text-to-video" && input.aspectRatio && !capabilities.aspectRatios.includes(input.aspectRatio)) {
-    throw new Error("当前 provider 不支持该画面比例");
+  if (!capabilities.configured) throw new Error(capabilities.message ?? "视频生成未配置");
+  if (!capabilities.modes.includes(input.mode)) throw new Error("当前没有已配置的 provider 支持该视频生成模式");
+  const candidates = capabilities.models.filter((candidate) => candidate.modes.includes(input.mode));
+  const modelId = input.model === "auto" ? candidates[0]?.id : input.model;
+  const model = candidates.find((candidate) => candidate.id === modelId);
+  if (!model) throw new Error("所选模型不支持当前生成模式");
+  const providerCaps = capabilities.providerCapabilities[model.provider];
+  if (!providerCaps) throw new Error("所选模型的 provider 未配置");
+  if (!providerCaps.durations.includes(input.durationSeconds)) throw new Error("当前模型不支持该视频时长");
+  if (!providerCaps.resolutions.includes(input.resolution)) throw new Error("当前模型不支持该清晰度");
+  if (!providerCaps.variants.includes(input.variants)) throw new Error("当前模型不支持该生成数量");
+  if (input.lastFrameAssetId && !model.supportsLastFrame) throw new Error("当前模型暂不支持尾帧");
+  if (input.mode === "text-to-video" && input.aspectRatio && !providerCaps.aspectRatios.includes(input.aspectRatio)) {
+    throw new Error("当前模型不支持该画面比例");
   }
-  const candidates = capabilities.models.filter((model) => model.modes.includes(input.mode));
-  const model = input.model === "auto" ? candidates[0]?.id : input.model;
-  if (!model || !candidates.some((candidate) => candidate.id === model)) {
-    throw new Error("所选模型不支持当前生成模式");
-  }
-  return { provider: capabilities.provider, model, capabilities };
+  return { provider: model.provider, model: model.id, capabilities };
 }
 
 function apiBase(): string {
@@ -305,7 +345,7 @@ const dashscopeProvider: VideoProvider = {
     return {
       buffer: Buffer.from(await response.arrayBuffer()),
       mimeType: response.headers.get("content-type")?.split(";", 1)[0] || "video/mp4",
-      filename: `wan2.7-${Date.now()}.mp4`,
+      filename: `dashscope-video-${Date.now()}.mp4`,
     };
   },
 };

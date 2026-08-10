@@ -40,8 +40,8 @@ export const videoEnhanceTool = tool({
       .union([z.number(), z.string()])
       .optional()
       .describe("放大倍数，2 或 4（数字或数字字符串均可）；用户没有明确要求时默认 4"),
-    faceEnhance: z.union([z.boolean(), z.string()]).optional().describe("Whether to enable GFPGAN face restoration for portrait videos."),
-    denoise: z.union([z.number(), z.string()]).optional().describe("Denoise strength from 0 to 1; defaults to 1."),
+    faceEnhance: z.union([z.boolean(), z.string()]).optional().describe("Enable GFPGAN face restoration for portrait videos; defaults to false (runs per-frame, noticeably slower)."),
+    denoise: z.union([z.number(), z.string()]).optional().describe("Denoise strength from 0 to 1; defaults to 0.5."),
     note: z
       .string()
       .optional()
@@ -51,7 +51,7 @@ export const videoEnhanceTool = tool({
     const safeOutscale = Number(outscale) === 2 ? 2 : 4;
     const safeFace = faceEnhance === true || faceEnhance === "true";
     const rawDenoise = Number(denoise);
-    const safeDenoise = Number.isFinite(rawDenoise) ? Math.min(1, Math.max(0, rawDenoise)) : 1;
+    const safeDenoise = Number.isFinite(rawDenoise) ? Math.min(1, Math.max(0, rawDenoise)) : 0.5;
     try {
       const job = await submitJob({
         capability: "video_enhance",

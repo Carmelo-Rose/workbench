@@ -68,7 +68,7 @@ export const TOOLBOX_CAPABILITIES: ToolboxCapability[] = [
     status: "ready",
     interactive: false,
     mediaKind: "image",
-    defaultParams: { outscale: 4, face_enhance: false, denoise: 1 },
+    defaultParams: { outscale: 4, face_enhance: true, denoise: 0.5 },
     description: "图片放大、去噪、压缩伪影修复与人脸修复",
   },
   {

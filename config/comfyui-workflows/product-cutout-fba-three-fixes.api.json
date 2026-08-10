@@ -1,0 +1,179 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{{INPUT_IMAGE}}"
+    }
+  },
+  "2": {
+    "class_type": "LayerMask: RmBgUltra V2",
+    "inputs": {
+      "image": ["1", 0],
+      "detail_method": "PyMatting",
+      "detail_erode": 1,
+      "detail_dilate": 1,
+      "black_point": 0.01,
+      "white_point": 0.99,
+      "process_detail": false,
+      "device": "cuda",
+      "max_megapixels": 2.0
+    }
+  },
+  "3": {
+    "class_type": "FBA_Matting",
+    "inputs": {
+      "image": ["1", 0],
+      "mask": ["2", 1],
+      "max_side": 1920,
+      "trimap_erode": 4,
+      "trimap_dilate": 12,
+      "weights_path": "D:\\hyk_sort\\prod-data\\comfyui-neo\\fba-test\\FBA.pth",
+      "device": "cuda:0"
+    }
+  },
+  "4": {
+    "class_type": "FBA_CleanAlpha",
+    "inputs": {
+      "mask": ["3", 1],
+      "threshold": 0.80,
+      "erode": 4,
+      "soften": 0.35
+    }
+  },
+  "5": {
+    "class_type": "FBA_ForegroundClean",
+    "inputs": {
+      "foreground": ["3", 0],
+      "alpha": ["4", 0],
+      "coarse_mask": ["2", 1],
+      "source": ["3", 3],
+      "luma_min": 0.68,
+      "saturation_max": 0.16,
+      "min_area": 24,
+      "large_area": 640,
+      "boundary_radius": 5
+    }
+  },
+  "6": {
+    "class_type": "FBA_EdgeColorRefill",
+    "inputs": {
+      "foreground": ["5", 0],
+      "alpha": ["5", 1],
+      "edge_px": "{{EDGE_REFILL_PX}}",
+      "strength": "{{EDGE_REFILL_STRENGTH}}"
+    }
+  },
+  "7": {
+    "class_type": "FBA_BottomContactShadow",
+    "inputs": {
+      "alpha": ["5", 1],
+      "band_px": "{{SHADOW_BAND_PX}}",
+      "width_scale": "{{SHADOW_WIDTH_SCALE}}",
+      "height_scale": "{{SHADOW_HEIGHT_SCALE}}",
+      "offset_px": "{{SHADOW_OFFSET_PX}}",
+      "blur": "{{SHADOW_BLUR}}"
+    }
+  },
+  "8": {
+    "class_type": "FBA_FitCanvas",
+    "inputs": {
+      "foreground": ["6", 0],
+      "alpha": ["5", 1],
+      "shadow": ["7", 0],
+      "canvas_width": 1920,
+      "canvas_height": 1280,
+      "target_long_side": "{{TARGET_LONG_SIDE}}",
+      "center_x": "{{CENTER_X}}",
+      "center_y": "{{CENTER_Y}}",
+      "shadow_strength": "{{SHADOW_STRENGTH}}"
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["8", 0],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_white_three_fixes"
+    }
+  },
+  "10": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["8", 1],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_dark_three_fixes"
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["8", 2],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_alpha_three_fixes"
+    }
+  },
+  "12": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["8", 3],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_shadow_three_fixes"
+    }
+  },
+  "13": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["5", 2],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_removed_debug_three_fixes"
+    }
+  },
+  "14": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["6", 1],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_edge_debug_three_fixes"
+    }
+  },
+  "15": {
+    "class_type": "MaskToImage",
+    "inputs": {
+      "mask": ["2", 1]
+    }
+  },
+  "16": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["15", 0],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_rmbg_debug_three_fixes"
+    }
+  },
+  "17": {
+    "class_type": "MaskToImage",
+    "inputs": {
+      "mask": ["4", 0]
+    }
+  },
+  "18": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["17", 0],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_fba_alpha_debug_three_fixes"
+    }
+  },
+  "19": {
+    "class_type": "MaskToImage",
+    "inputs": {
+      "mask": ["5", 1]
+    }
+  },
+  "20": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["19", 0],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_clean_alpha_debug_three_fixes"
+    }
+  },
+  "21": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["3", 0],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_fba_foreground_debug_three_fixes"
+    }
+  }
+}

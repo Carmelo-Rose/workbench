@@ -34,17 +34,28 @@ import {
   type VideoGenerationKind,
 } from "@/lib/video-generation-mode";
 
-type VideoCapabilities = {
-  configured: boolean;
-  provider: string | null;
-  message?: string;
+type VideoModelOption = {
+  id: string;
+  label: string;
   modes: VideoGenerationKind[];
-  models: Array<{ id: string; label: string; modes: VideoGenerationKind[] }>;
+  provider: string;
+  supportsLastFrame?: boolean;
+};
+
+type VideoProviderCapabilities = {
   durations: number[];
   resolutions: string[];
   variants: number[];
   aspectRatios: string[];
-  supportsLastFrame: boolean;
+};
+
+type VideoCapabilities = {
+  configured: boolean;
+  providers: string[];
+  message?: string;
+  modes: VideoGenerationKind[];
+  models: VideoModelOption[];
+  providerCapabilities: Record<string, VideoProviderCapabilities>;
 };
 
 type CapabilityResponse = { workspaceId: string; capabilities: VideoCapabilities };
@@ -54,6 +65,16 @@ const kindLabels: Record<VideoGenerationKind, string> = {
   "text-to-video": "文生视频",
   "image-to-video": "图生视频",
 };
+
+const providerLabels: Record<string, string> = {
+  comfyui: "本地服务机",
+  "dashscope-wan": "百炼云端",
+};
+
+/** Falls back to the first candidate for the mode when the draft hasn't picked a concrete model yet ("auto"). */
+function pickActiveModel(models: VideoModelOption[], modelId: string): VideoModelOption | undefined {
+  return (modelId === "auto" ? undefined : models.find((model) => model.id === modelId)) ?? models[0];
+}
 
 function useObjectUrl(file?: File) {
   const url = useMemo(() => file ? URL.createObjectURL(file) : undefined, [file]);
@@ -183,18 +204,29 @@ export function VideoGenerationModeControl() {
   const aui = useAui();
   const exit = useExitVideoGenerationMode();
   const capabilities = value?.capabilities;
+  const models = useMemo(
+    () => capabilities?.models.filter((model) => model.modes.includes(draft.kind)) ?? [],
+    [capabilities, draft.kind],
+  );
+  const activeModel = pickActiveModel(models, draft.model);
+  const activeCaps = activeModel ? capabilities?.providerCapabilities[activeModel.provider] : undefined;
 
   useEffect(() => {
     if (!capabilities?.configured) return;
     if (!capabilities.modes.includes(draft.kind)) setKind(capabilities.modes[0] ?? "text-to-video");
-    if (!capabilities.durations.includes(draft.durationSeconds)) setDurationSeconds(capabilities.durations[0] ?? 5);
-    if (!capabilities.resolutions.includes(draft.resolution)) setResolution(capabilities.resolutions[0] ?? "480p");
-    if (!capabilities.variants.includes(draft.variants)) setVariants(capabilities.variants[0] ?? 1);
-  }, [capabilities, draft.durationSeconds, draft.kind, draft.resolution, draft.variants, setDurationSeconds, setKind, setResolution, setVariants]);
+  }, [capabilities, draft.kind, setKind]);
+
+  useEffect(() => {
+    if (!activeCaps) return;
+    if (!activeCaps.durations.includes(draft.durationSeconds)) setDurationSeconds(activeCaps.durations[0] ?? 5);
+    if (!activeCaps.resolutions.includes(draft.resolution)) setResolution(activeCaps.resolutions[0] ?? "480p");
+    if (!activeCaps.variants.includes(draft.variants)) setVariants(activeCaps.variants[0] ?? 1);
+  }, [activeCaps, draft.durationSeconds, draft.resolution, draft.variants, setDurationSeconds, setResolution, setVariants]);
 
   if (!active) return null;
   const modes = capabilities?.modes ?? [];
-  const models = capabilities?.models.filter((model) => model.modes.includes(draft.kind)) ?? [];
+  const providerSummary = capabilities?.providers.map((provider) => providerLabels[provider] ?? provider).join(" / ");
+  const multiProvider = (capabilities?.providers.length ?? 0) > 1;
   const reuse = (job: MonoJob) => {
     const prompt = restoreFromInput(job.input);
     if (prompt !== undefined) aui.composer().setText(prompt);
@@ -205,7 +237,7 @@ export function VideoGenerationModeControl() {
       <Popover>
         <PopoverTrigger asChild><button type="button" className="hover:bg-muted-foreground/10 flex h-7 shrink-0 items-center gap-1.5 rounded-l-full pl-2.5 pr-2 transition-colors"><FilmIcon className="size-3.5" /><span>生成视频</span></button></PopoverTrigger>
         <PopoverContent side="top" align="start" className="w-72 p-2">
-          <div className="mb-2 px-1"><strong className="block text-sm">生成视频</strong><p className="text-muted-foreground mt-0.5 text-xs">{capabilities?.configured ? `当前 provider：${capabilities.provider}` : capabilities?.message ?? error ?? "正在读取能力…"}</p></div>
+          <div className="mb-2 px-1"><strong className="block text-sm">生成视频</strong><p className="text-muted-foreground mt-0.5 text-xs">{capabilities?.configured ? `已接入：${providerSummary}` : capabilities?.message ?? error ?? "正在读取能力…"}</p></div>
           {capabilities?.configured ? <>
             <div className="mb-2 grid grid-cols-2 gap-1 rounded-lg bg-muted/70 p-1">
               {modes.map((kind) => <button key={kind} type="button" onClick={() => setKind(kind)} className={cn("rounded-md px-2 py-1.5 text-xs", draft.kind === kind ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground")}>{kindLabels[kind]}</button>)}
@@ -213,19 +245,19 @@ export function VideoGenerationModeControl() {
             <p className="text-muted-foreground px-1 py-1 text-xs">模型</p>
             <div className="space-y-0.5">
               <button type="button" onClick={() => setModel("auto")} className="hover:bg-muted flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm"><span>自动（管理员指定 provider）</span>{draft.model === "auto" ? <CheckIcon className="size-3.5" /> : null}</button>
-              {models.map((model) => <button key={model.id} type="button" onClick={() => setModel(model.id)} className="hover:bg-muted flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm"><span>{model.label}</span>{draft.model === model.id ? <CheckIcon className="size-3.5" /> : null}</button>)}
+              {models.map((model) => <button key={model.id} type="button" onClick={() => setModel(model.id)} className="hover:bg-muted flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-sm"><span>{model.label}</span><span className="flex items-center gap-1.5">{multiProvider ? <span className="text-muted-foreground text-[10px]">{providerLabels[model.provider] ?? model.provider}</span> : null}{draft.model === model.id ? <CheckIcon className="size-3.5" /> : null}</span></button>)}
             </div>
             <div className="mt-2 border-t pt-2"><VideoHistory onReuse={reuse} /></div>
           </> : null}
         </PopoverContent>
       </Popover>
-      {draft.kind === "text-to-video" ? <><span className="bg-muted-foreground/20 h-3.5 w-px shrink-0" /><VideoQuickOption label="画面比例" value={draft.aspectRatio} options={(capabilities?.aspectRatios.filter((value): value is VideoAspectRatio => videoAspectRatios.includes(value as VideoAspectRatio)) ?? videoAspectRatios)} onChange={setAspectRatio} /></> : null}
+      {draft.kind === "text-to-video" ? <><span className="bg-muted-foreground/20 h-3.5 w-px shrink-0" /><VideoQuickOption label="画面比例" value={draft.aspectRatio} options={(activeCaps?.aspectRatios.filter((value): value is VideoAspectRatio => videoAspectRatios.includes(value as VideoAspectRatio)) ?? videoAspectRatios)} onChange={setAspectRatio} /></> : null}
       <span className="bg-muted-foreground/20 h-3.5 w-px shrink-0" />
-      <VideoQuickOption label="时长" value={draft.durationSeconds} options={capabilities?.durations ?? videoDurations} display={`${draft.durationSeconds} 秒`} onChange={setDurationSeconds} />
+      <VideoQuickOption label="时长" value={draft.durationSeconds} options={activeCaps?.durations ?? videoDurations} display={`${draft.durationSeconds} 秒`} onChange={setDurationSeconds} />
       <span className="bg-muted-foreground/20 h-3.5 w-px shrink-0" />
-      <VideoQuickOption label="清晰度" value={draft.resolution} options={capabilities?.resolutions ?? videoResolutions} onChange={setResolution} />
+      <VideoQuickOption label="清晰度" value={draft.resolution} options={activeCaps?.resolutions ?? videoResolutions} onChange={setResolution} />
       <span className="bg-muted-foreground/20 h-3.5 w-px shrink-0" />
-      <VideoQuickOption label="生成数量" value={draft.variants} options={capabilities?.variants ?? [1]} display={`${draft.variants} 条`} onChange={setVariants} />
+      <VideoQuickOption label="生成数量" value={draft.variants} options={activeCaps?.variants ?? [1]} display={`${draft.variants} 条`} onChange={setVariants} />
       <button type="button" onClick={exit} aria-label="退出生成视频模式" title="退出生成视频模式" className="text-muted-foreground hover:bg-muted-foreground/10 hover:text-foreground mx-1 flex size-5 shrink-0 items-center justify-center rounded-full"><XIcon className="size-3" /></button>
     </span>
   );
@@ -252,11 +284,12 @@ export function VideoGenerationSlots() {
   const { value } = useVideoCapabilities(active && draft.kind === "image-to-video");
   if (!active || draft.kind !== "image-to-video") return null;
   const chooseFrame = (slot: "firstFrame" | "lastFrame", event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) setFrame(slot, file); };
-  const canUseLastFrame = Boolean(value?.capabilities.supportsLastFrame);
+  const models = value?.capabilities.models.filter((model) => model.modes.includes("image-to-video")) ?? [];
+  const canUseLastFrame = Boolean(pickActiveModel(models, draft.model)?.supportsLastFrame);
   return <div className="flex items-center gap-2 px-2 pt-1" aria-label="图生视频素材">
     <FrameSlot label="首帧" file={draft.firstFrame} assetId={draft.firstFrameAssetId} onChoose={(event) => chooseFrame("firstFrame", event)} onRemove={() => setFrame("firstFrame")} />
     {canUseLastFrame ? <FrameSlot label="尾帧" optional file={draft.lastFrame} assetId={draft.lastFrameAssetId} onChoose={(event) => chooseFrame("lastFrame", event)} onRemove={() => setFrame("lastFrame")} /> : null}
-    <p className="text-muted-foreground min-w-0 text-xs leading-5">首帧必填，比例跟随首帧。{canUseLastFrame ? "尾帧可选，用于约束收镜。" : "尾帧将在云模型支持后开放。"}</p>
+    <p className="text-muted-foreground min-w-0 text-xs leading-5">首帧必填，比例跟随首帧。{canUseLastFrame ? "尾帧可选，用于约束收镜。" : "当前模型暂不支持尾帧。"}</p>
   </div>;
 }
 

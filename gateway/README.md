@@ -2,7 +2,31 @@
 
 跑在 AILAB 服务机（192.168.1.198）上的视频工具箱 Job 网关：为 workbench 提供统一的异步视频处理协议。每个能力独立 venv、以子进程方式执行；`product_cutout` 可由 Workbench 的公平调度并行运行，网关仍以 12 个任务作为最终 GPU 硬上限。
 
-源码在 workbench 仓库 `gateway/` 目录维护，部署时同步到服务机 `D:\hyk_sort\apps\video-toolbox\gateway`。
+源码在 workbench 仓库 `gateway/` 目录维护。**服务机上真正跑的部署目录是
+`D:\hyk_sort\workspace\workbench-prod\gateway`**——`workbench-prod` 是整个
+workbench 仓库的一份完整 git clone（`origin` 指向 GitHub `Carmelo-Rose/workbench`），
+不只放 gateway，同一目录下还有 `next start` 跑着的生产前端。更新网关代码的方式是
+在服务机对 `workbench-prod` 执行 `git pull`，然后跑 `gateway\restart.bat`
+重启 uvicorn（脚本细节见下面「部署（服务机）」）——**没有任何自动同步机制**
+（没有对应的计划任务、没有 robocopy/rsync），改了本地代码不 pull 到服务机、
+或 pull 了不重启，都不会生效。
+
+`D:\hyk_sort\apps\video-toolbox\gateway` 和
+`D:\hyk_sort\prod-data\video-toolbox-gateway\persistent` 是这套 `workbench-prod`
+部署方式启用之前的旧网关目录/旧数据目录，**已废弃，待清理**：两边的任务记录
+都停在 2026-08-07 16:42 前后（那是切换到 `workbench-prod` 的时间点），之后再没有
+新任务写入过。不要在这两个位置改代码或查最新数据。
+
+**这条「已废弃」只针对网关自身**（`gateway/` 下的 `app.py` / `store.py` /
+`capabilities.json` 等）。各能力的 adapter 工作目录——`capabilities.json` 里
+`cwd` 指向的 `D:/hyk_sort/apps/video-toolbox/enhance`、`erase`、`matting` 等——
+是独立于网关部署位置的共享路径，一直有效、没有搬动；改这些能力脚本本身照旧
+直接改 `apps/video-toolbox/<capability>/` 下的文件，网关以子进程方式调用，
+改完即生效、无需重启网关。但如果要改 `capabilities.json` 本身（新增能力、
+调整某个能力的 adapter 配置），必须改
+`D:\hyk_sort\workspace\workbench-prod\gateway\capabilities.json` 才是线上真正
+读取的那份——`apps\video-toolbox\gateway\capabilities.json` 早就是死文件，
+改了不会生效。
 
 ## 模型许可
 
@@ -65,11 +89,19 @@ Workbench 传入的 `productFolderKey` 是不可逆摘要，不含 UNC 路径。
 ## 部署（服务机）
 
 ```bat
-cd D:\hyk_sort\apps\video-toolbox\gateway
+cd D:\hyk_sort\workspace\workbench-prod
+git pull
+cd gateway
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
-start.bat
+restart.bat
 ```
+
+日常改代码后只需要 `git pull` + `restart.bat`，不必重建 venv。`restart.bat` 用
+WMI `Win32_Process.Create` 停旧进程、拉起新的 `launch-hidden.ps1`：这是因为服务机
+上从未注册过 `video-toolbox-gateway` 这个计划任务，`schtasks /run` 会失败；用
+`Start-Process` 也不行——SSH 会话一断，那样启动的子进程就跟着退出，只有 WMI 拉起
+的进程能在 WMI 服务下存活。`start.bat` 仍保留，供手工前台调试用。
 
 `matting` 的 general 模式另有一个独立 venv（`.venv-general`，MatAnyone 的依赖树
 与 RVM 没有交集，分开装以免动到已上线的 human 模式），一次性安装：

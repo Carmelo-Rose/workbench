@@ -1,0 +1,157 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "{{INPUT_IMAGE}}"
+    }
+  },
+  "2": {
+    "class_type": "LayerMask: RmBgUltra V2",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "detail_method": "PyMatting",
+      "detail_erode": 1,
+      "detail_dilate": 1,
+      "black_point": 0.01,
+      "white_point": 0.99,
+      "process_detail": false,
+      "device": "cuda",
+      "max_megapixels": 2.0
+    }
+  },
+  "3": {
+    "class_type": "FBA_Matting",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "mask": [
+        "2",
+        1
+      ],
+      "max_side": 1920,
+      "trimap_erode": 4,
+      "trimap_dilate": 12,
+      "weights_path": "D:\\hyk_sort\\prod-data\\comfyui-neo\\fba-test\\FBA.pth",
+      "device": "cuda:0"
+    }
+  },
+  "4": {
+    "class_type": "FBA_CleanAlpha",
+    "inputs": {
+      "mask": [
+        "3",
+        1
+      ],
+      "threshold": 0.86,
+      "erode": 5,
+      "soften": 0.25
+    }
+  },
+  "5": {
+    "class_type": "GrowMask",
+    "inputs": {
+      "mask": [
+        "4",
+        0
+      ],
+      "expand": 3,
+      "tapered_corners": true
+    }
+  },
+  "6": {
+    "class_type": "LayerMask: ShadowHighlightMaskV2",
+    "inputs": {
+      "image": [
+        "3",
+        3
+      ],
+      "shadow_level_offset": 0,
+      "shadow_range": 0.14,
+      "highlight_level_offset": 0,
+      "highlight_range": 0.25,
+      "mask": [
+        "5",
+        0
+      ]
+    }
+  },
+  "7": {
+    "class_type": "MaskBlur+",
+    "inputs": {
+      "mask": [
+        "6",
+        0
+      ],
+      "amount": 6,
+      "device": "gpu"
+    }
+  },
+  "8": {
+    "class_type": "FBA_FitCanvas",
+    "inputs": {
+      "foreground": [
+        "3",
+        0
+      ],
+      "alpha": [
+        "4",
+        0
+      ],
+      "shadow": [
+        "7",
+        0
+      ],
+      "canvas_width": 1920,
+      "canvas_height": 1280,
+      "target_long_side": "{{TARGET_LONG_SIDE}}",
+      "center_x": "{{CENTER_X}}",
+      "center_y": "{{CENTER_Y}}",
+      "shadow_strength": "{{SHADOW_STRENGTH}}"
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_white_source_shadow"
+    }
+  },
+  "10": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "8",
+        1
+      ],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_dark_source_shadow"
+    }
+  },
+  "11": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "8",
+        2
+      ],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_alpha_source_shadow"
+    }
+  },
+  "12": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "8",
+        3
+      ],
+      "filename_prefix": "{{OUTPUT_PREFIX}}_shadow_source_shadow"
+    }
+  }
+}

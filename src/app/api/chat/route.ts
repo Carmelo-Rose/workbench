@@ -132,6 +132,20 @@ function hermesTenantSessionId(actor: MonoActor, threadId: string): string {
 
 export function forcedToolName(userText: string, hasImageAttachment: boolean) {
   const text = userText.toLowerCase();
+  const enhancementIntent =
+    /(修复增强|修复|增强|放大|超分|去噪|清晰|画质|压缩伪影|upscale|enhance|denoise)/i.test(text);
+  const hasVideoToolboxAttachment = /\[视频附件 [^\]]*fileId=[a-f0-9]{12}/i.test(userText);
+
+  // Enhancement jobs already have a toolbox fileId in the message. Do not
+  // leave their dispatch to a text-only chat model: it may reject the source
+  // image before it gets a chance to call the enhancement tool.
+  if (hasVideoToolboxAttachment && enhancementIntent) {
+    return "video_enhance" as const;
+  }
+  if (hasImageAttachment && enhancementIntent) {
+    return "image_enhance" as const;
+  }
+
   if (
     hasImageAttachment &&
     /(分析|识别|反推|提示词|prompt|describe|analy[sz]e)/i.test(text)
@@ -290,7 +304,8 @@ export async function POST(req: Request) {
   // 已知图片反推意图时，图片已通过 attachmentUrl 交给视觉工具；不要让
   // 纯文本 CHAT_MODEL 再解析 image_url，否则工具调用前就会返回 400。
   const modelMessages = await convertToModelMessages(
-    backend === "direct" && requiredTool === "image_to_prompt"
+    backend === "direct" &&
+      (requiredTool === "image_to_prompt" || requiredTool === "image_enhance")
       ? withoutImageAttachments(messages)
       : messages,
   );

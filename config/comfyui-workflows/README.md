@@ -23,6 +23,7 @@
 | 占位符 | 含义 |
 |---|---|
 | `{{INPUT_MEDIA}}` | 输入文件名（Workbench 已上传到 ComfyUI 的 input 目录） |
+| `{{INPUT_IMAGE}}` | 图片输入文件名（Workbench 已上传到 ComfyUI 的 input 目录） |
 
 `wan2.2-ti2v-5b.json` is the checked-in API prompt export for the official
 Wan2.2 TI2V-5B workflow. It uses `wan2.2_ti2v_5B_fp16.safetensors`,

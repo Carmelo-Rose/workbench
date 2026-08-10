@@ -8,6 +8,12 @@ import { readObjectBuffer, saveObjectBuffer } from "@/lib/storage";
 import { gatewayBase, gatewayHeaders } from "@/lib/toolbox/gateway";
 import { getConfigValue } from "@/lib/server/api-config";
 import {
+  downloadComfyOutput,
+  loadComfyWorkflow,
+  runComfyWorkflow,
+  uploadComfyInput,
+} from "./comfyui";
+import {
   allocateModelSlots,
   classifySources,
   isFullArticleShot,
@@ -190,6 +196,8 @@ type CutoutWaiter = {
   onAbort?: () => void;
 };
 
+type ExclusiveWaiter = Omit<CutoutWaiter, "folderKey">;
+
 /**
  * One Workbench process can run several product jobs.  This arbiter applies a
  * shared global ceiling while choosing the least-occupied product first; ties
@@ -205,6 +213,8 @@ export class ProductCutoutScheduler {
   private folderOrder: string[] = [];
   private lastGrantedFolder: string | null = null;
   private drainScheduled = false;
+  private exclusiveHeld = false;
+  private exclusiveWaiters: ExclusiveWaiter[] = [];
 
   constructor(settings: Pick<ProductPipelineSchedulingSettings, "globalCutouts" | "perFolderCutouts">) {
     this.globalCutouts = Math.max(1, Math.floor(settings.globalCutouts));
@@ -216,6 +226,35 @@ export class ProductCutoutScheduler {
 
   async run<T>(folderKey: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const release = await this.acquire(folderKey, signal);
+    try {
+      return await work();
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Runs `work` with the card to itself: it does not start until every
+   * in-flight cutout has landed, and no cutout is granted while it holds.
+   *
+   * Local main-image generation needs this. The ComfyUI Kontext pass measures
+   * ~20 GiB and one cutout ~15 GiB on the same 22 GiB card, so the two
+   * overlapping is an out-of-memory crash rather than a slow run — and the
+   * per-folder and per-process cutout ceilings cannot express it, because they
+   * count cutouts and generation is not one. Holding the arbiter itself is
+   * what makes the local provider safe at the default 6-per-folder concurrency
+   * instead of only at the hand-tuned 1.
+   *
+   * A queued exclusive request also stops new cutout grants; without that, a
+   * folder with work left keeps the queue non-empty and generation never gets
+   * its turn.
+   *
+   * `work` must not request a cutout of its own: the wait is for zero active
+   * cutouts, so a nested one could never be granted. Callers keep the cutout
+   * that follows generation (`locateGeneratedArticle`) outside the block.
+   */
+  async runExclusive<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const release = await this.acquireExclusive(signal);
     try {
       return await work();
     } finally {
@@ -265,7 +304,35 @@ export class ProductCutoutScheduler {
     });
   }
 
+  private acquireExclusive(signal?: AbortSignal): Promise<() => void> {
+    if (signal?.aborted) return Promise.reject(new Error("任务已取消"));
+    return new Promise<() => void>((resolve, reject) => {
+      const waiter: ExclusiveWaiter = { resolve, reject, signal };
+      const onAbort = () => {
+        const index = this.exclusiveWaiters.indexOf(waiter);
+        if (index >= 0) this.exclusiveWaiters.splice(index, 1);
+        reject(new Error("任务已取消"));
+        this.scheduleDrain();
+      };
+      waiter.onAbort = onAbort;
+      this.exclusiveWaiters.push(waiter);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
+      this.scheduleDrain();
+    });
+  }
+
   private drain(): void {
+    if (this.exclusiveHeld) return;
+    if (this.exclusiveWaiters.length) {
+      // Cutouts already granted keep their slot; generation waits them out.
+      if (this.active > 0) return;
+      const waiter = this.exclusiveWaiters.shift()!;
+      waiter.signal?.removeEventListener("abort", waiter.onAbort!);
+      this.exclusiveHeld = true;
+      waiter.resolve(this.releaseExclusive());
+      return;
+    }
     while (this.active < this.globalCutouts) {
       const folderKey = this.nextFolderToGrant();
       if (!folderKey) return;
@@ -297,6 +364,16 @@ export class ProductCutoutScheduler {
       if (eligible.has(key)) return key;
     }
     return candidates[0];
+  }
+
+  private releaseExclusive(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.exclusiveHeld = false;
+      this.scheduleDrain();
+    };
   }
 
   private releaseFor(folderKey: string): () => void {
@@ -2472,13 +2549,38 @@ const SHADOW_BACKDROP_PROMPT = "请保持商品本体像素级不变，构图、
   + "投影的方向、长度与浓淡要与输入图一致，且必须清晰可见——"
   + "是影棚级的自然投影，不是几乎看不见的一层浅灰。";
 
+async function requestShadowBackdropViaComfy(source: SourceImage, signal: AbortSignal): Promise<Buffer> {
+  const sourceBytes = await readFile(source.path);
+  const extension = path.extname(source.path).toLowerCase();
+  const mimeType = extension === ".png" ? "image/png" : "image/jpeg";
+  // ComfyUI keeps one flat input directory for the whole server and this upload
+  // overwrites by name. Camera filenames repeat across shoots, so uploading
+  // under the source's own name lets one folder replace another folder's input
+  // between its upload and its sampling, and the run then publishes a different
+  // article's picture under this stem — nothing downstream can catch it, since
+  // the frame is a valid 800×800 with a located product on white. Naming the
+  // upload after the content hash makes that collision impossible, and lets two
+  // identical sources deliberately share one upload.
+  const uploadName = `${source.stem}-${source.hash.slice(0, 16)}${extension}`;
+  const inputImage = await uploadComfyInput(sourceBytes, uploadName, mimeType, signal);
+  // The frame comes back at whatever `FluxKontextImageScale` picks for this
+  // input, so the workflow takes no width or height — see the note on the
+  // caller about measuring the generated frame in its own coordinates.
+  const workflow = await loadComfyWorkflow("product-main-image", { INPUT_IMAGE: inputImage });
+  const outputs = await productCutoutScheduler.runExclusive(() => runComfyWorkflow(workflow, signal), signal);
+  const image = outputs.find((output) => /\.(?:png|jpe?g|webp)$/iu.test(output.filename)) ?? outputs[0];
+  if (!image) throw new Error("ComfyUI 主图工作流未返回图片");
+  return sharp(await downloadComfyOutput(image, signal))
+    .removeAlpha()
+    .png()
+    .toBuffer();
+}
+
 /**
- * Replaces the local histogram-based shadow recovery with the same online
- * generation service already used for detail-page model shots
- * (`MONO_IMAGE_BASE_URL`/`MONO_IMAGE_API_KEY`). The source photo itself is
- * sent as the only reference — its real lighting already contains the
- * shadow — and the model is asked to clean the background rather than
- * invent one from nothing.
+ * Routes the main-image backdrop through the configured provider. The default
+ * remains the online generation service already used for detail-page model
+ * shots (`MONO_IMAGE_BASE_URL`/`MONO_IMAGE_API_KEY`); the local ComfyUI route
+ * uses the same source photo and returns one generated frame.
  *
  * No silent fallback to `composeNaturalShadowBackdrop` on failure: a
  * downgraded-quality shadow must surface as a failed run, not slip through
@@ -2497,17 +2599,20 @@ export async function requestShadowBackdrop(
 ): Promise<Buffer> {
   const { width, height } = await sharp(source.path).metadata();
   if (!width || !height) throw new Error("无法读取原图尺寸");
+  const provider = getConfigValue("PRODUCT_MAIN_IMAGE_PROVIDER", workspaceId) ?? "mono-image";
   let lastFailure = "";
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      const generated = await callImageGenerate(
-        [source.path],
-        SHADOW_BACKDROP_PROMPT,
-        `${width}:${height}`,
-        signal,
-        workspaceId,
-        model,
-      );
+      const generated = provider === "comfyui"
+        ? await requestShadowBackdropViaComfy(source, signal)
+        : await callImageGenerate(
+            [source.path],
+            SHADOW_BACKDROP_PROMPT,
+            `${width}:${height}`,
+            signal,
+            workspaceId,
+            model,
+          );
       // Returned at the generator's own dimensions, deliberately. Forcing it
       // back to the source's width/height is a non-uniform resize wherever the
       // service rounded the requested ratio to one of its supported shapes,
