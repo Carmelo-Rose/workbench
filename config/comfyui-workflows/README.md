@@ -5,11 +5,14 @@
 | 文件 | 能力 | 建议模型 |
 |---|---|---|
 | `product-main-image.json` | 商品主图白场归一与 800×800 构图 | BiRefNet + ComfyUI-WhiteField |
-| `matting-image.json` | 图片抠像换背景 | BiRefNet |
-| `matting-video.json` | 视频抠像换背景 | RVM (Robust Video Matting) |
+| `product-sku-field.json` | SKU 白场归一（投影除掉，不裁方图） | BiRefNet + ComfyUI-WhiteField |
+| `wan2.2-ti2v-5b.json` | 文生视频 / 图生视频 | Wan2.2 TI2V-5B |
 
-后续能力按同名约定扩展（`erase-video.json` 智能擦除、`lipsync.json` 口型同步、
-`enhance-video.json` 修复增强……），Workbench 代码不需要改：换模型 = 换工作流文件。
+后续能力按同名约定扩展（`matting-image.json` 图片抠像、`erase-video.json` 智能擦除、
+`lipsync.json` 口型同步……），Workbench 代码不需要改：换模型 = 换工作流文件。
+
+抠白底（`product_cutout`）不在这里：它走网关自己的 Python 适配器和 BiRefNet_HR，
+不经过 ComfyUI，见 `gateway/README.md`。
 
 ## 如何生成工作流文件
 
@@ -36,9 +39,8 @@ video it removes the optional `LoadImage` edge before submission.
 | `{{BACKGROUND_MEDIA}}` | 背景图文件名，未指定时为空字符串 |
 
 注意：模板里出现的占位符必须能被参数覆盖，多余的占位符会导致任务报错，
-不用的输入请直接在工作流里删掉。`matting-image.example.json` 是一个骨架示例，
-节点类型（class_type）取决于你 ComfyUI 安装的自定义节点，请以自己导出的为准，
-确认可用后去掉 `.example` 后缀。
+不用的输入请直接在工作流里删掉。节点类型（class_type）取决于你 ComfyUI 安装的
+自定义节点，务必以自己那台机器导出的为准，不要照抄别处的工作流。
 
 ## 商品主图白场工作流
 
