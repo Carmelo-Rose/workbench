@@ -9,7 +9,20 @@ import path from "node:path";
  * 换模型 = 换工作流文件，Workbench 代码不动。
  */
 
-export type ComfyOutputFile = { filename: string; subfolder: string; type: string };
+export type ComfyOutputFile = {
+  nodeId: string;
+  filename: string;
+  subfolder: string;
+  type: string;
+};
+
+export type ComfyNodeOutputs = Record<string, Record<string, unknown>>;
+
+export type ComfyWorkflowResult = {
+  promptId: string;
+  outputs: ComfyOutputFile[];
+  nodeOutputs: ComfyNodeOutputs;
+};
 
 export function comfyBaseUrl(): string {
   const url = process.env.COMFYUI_URL;
@@ -89,6 +102,7 @@ export async function submitComfyWorkflow(
 export async function pollComfyWorkflow(promptId: string, signal: AbortSignal): Promise<{
   status: "queued" | "running" | "succeeded" | "failed";
   outputs?: ComfyOutputFile[];
+  nodeOutputs?: ComfyNodeOutputs;
 }> {
   const base = comfyBaseUrl();
   const response = await fetch(`${base}/history/${encodeURIComponent(promptId)}`, { signal });
@@ -101,9 +115,10 @@ export async function pollComfyWorkflow(promptId: string, signal: AbortSignal): 
   if (!entry) return { status: "running" };
   if (entry.status?.status_str === "error") return { status: "failed" };
   if (!entry.status?.completed) return { status: "running" };
-  const outputs = collectOutputFiles(entry.outputs ?? {});
+  const nodeOutputs = entry.outputs ?? {};
+  const outputs = collectOutputFiles(nodeOutputs);
   if (outputs.length === 0) throw new Error("ComfyUI 任务完成但没有输出文件（工作流需要包含保存节点）");
-  return { status: "succeeded", outputs };
+  return { status: "succeeded", outputs, nodeOutputs };
 }
 
 export async function cancelComfyWorkflow(promptId: string, signal: AbortSignal): Promise<void> {
@@ -120,16 +135,22 @@ export async function runComfyWorkflow(
   workflow: Record<string, unknown>,
   signal: AbortSignal,
   onStage?: (stage: string) => void,
-): Promise<ComfyOutputFile[]> {
+): Promise<ComfyWorkflowResult> {
   const promptId = await submitComfyWorkflow(workflow, signal);
   onStage?.("processing");
 
   const deadline = Date.now() + comfyTimeoutMs();
   while (Date.now() < deadline) {
-    await waitAborting(2_000, signal);
+    await waitAborting(process.env.NODE_ENV === "test" ? 1 : 2_000, signal);
     const result = await pollComfyWorkflow(promptId, signal);
     if (result.status === "failed") throw new Error("ComfyUI 工作流执行失败，请检查 ComfyUI 侧日志");
-    if (result.status === "succeeded") return result.outputs!;
+    if (result.status === "succeeded") {
+      return {
+        promptId,
+        outputs: result.outputs!,
+        nodeOutputs: result.nodeOutputs!,
+      };
+    }
   }
   throw new Error("ComfyUI 任务超时");
 }
@@ -145,7 +166,7 @@ export async function downloadComfyOutput(file: ComfyOutputFile, signal: AbortSi
 /** ComfyUI 各类保存节点输出键不同（images/gifs/videos/audio），统一拍平。 */
 function collectOutputFiles(outputs: Record<string, Record<string, unknown>>): ComfyOutputFile[] {
   const files: ComfyOutputFile[] = [];
-  for (const nodeOutput of Object.values(outputs)) {
+  for (const [nodeId, nodeOutput] of Object.entries(outputs)) {
     for (const value of Object.values(nodeOutput)) {
       if (!Array.isArray(value)) continue;
       for (const item of value) {
@@ -154,7 +175,12 @@ function collectOutputFiles(outputs: Record<string, Record<string, unknown>>): C
           typeof (item as ComfyOutputFile).filename === "string"
         ) {
           const file = item as Partial<ComfyOutputFile>;
-          files.push({ filename: file.filename!, subfolder: file.subfolder ?? "", type: file.type ?? "output" });
+          files.push({
+            nodeId,
+            filename: file.filename!,
+            subfolder: file.subfolder ?? "",
+            type: file.type ?? "output",
+          });
         }
       }
     }

@@ -54,9 +54,10 @@ const CELL_ASPECT = "3 / 4";
 const stageLabel: Record<string, string> = {
   main_published: "主图已完成，正在准备详情套图",
   正在生成白底主图: "正在生成白底主图",
+  正在准备商品素材: "正在准备商品素材",
   classifying: "正在识别商品颜色和角度",
   classified: "颜色识别完成",
-  generating_main: "正在生成主图背景（调用付费生图服务）",
+  generating_main: "正在用服务机白场归一生成主图",
   publishing_main: "正在原子发布主图",
   rendering_sku: "正在渲染 SKU 图",
   publishing_sku: "正在原子发布 SKU 图",

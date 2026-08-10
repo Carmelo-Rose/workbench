@@ -3,3 +3,6 @@
 # 哈希就对不上，校验会误报"模板损坏"。这里强制 LF，保证任何平台 checkout 出来的
 # 字节都跟提交时一致。
 config/product-pipeline/**/*.json text eol=lf
+
+# Production ComfyUI nodes are compared byte-for-byte on the Windows host.
+config/comfyui-custom-nodes/**/*.py text eol=lf

@@ -49,7 +49,8 @@ read `0.000`.
     are what keep a missed strap tip or a dropped eyelet safe.
   - **white point**: `white_at` is the transmittance at which paper reads as
     clean, which pins the far penumbra to white instead of letting a wash trail
-    across the frame. `shadow_gain` below 1.0 deepens whatever survives.
+    across the frame. Production keeps `shadow_gain=1` so shadow strength is
+    not levelled or deepened.
 - `WhiteField_Report` — `product_delta_max`, `backdrop_pure_pct`,
   `backdrop_cast`, `shadow_darkest_L`. Use it as the acceptance gate.
 
@@ -70,10 +71,10 @@ it is never resampled by this package.
 
 ## Workflow
 
-`config/comfyui-workflows/product-cutout-whitefield.api.json`, driven by
-`scripts/run-comfyui-batch.ts`. Its numeric tokens: `MASK_WIDTH`/`MASK_HEIGHT`
-(what BiRefNet sees), `DELIVER_WIDTH`/`DELIVER_HEIGHT`, `EXCLUDE_PX`,
-`DILATE_PX`, `FEATHER_PX`, `WHITE_AT`, `SHADOW_GAIN`.
+`config/comfyui-workflows/product-main-image.json` is the production API
+workflow. It saves only node 15's 800×800 `_main` file; node 9 returns the QA
+text through history, and no 3000px diagnostic image is persisted.
 
-Measured settings for the current studio setup: `DILATE_PX=0`, `FEATHER_PX=1`,
-`WHITE_AT=0.965`, `EXCLUDE_PX=40`.
+Validated settings: `MASK_LONG_EDGE=2400`, `DELIVER_LONG_EDGE=3000`,
+`EXCLUDE_PX=40`, `DILATE_PX=0`, `FEATHER_PX=1`, `WHITE_AT=0.965`,
+`SHADOW_GAIN=1`, `HOLE_WHITE=0`, `SQUARE_FILL=0.90`, `SQUARE_SIDE=800`.

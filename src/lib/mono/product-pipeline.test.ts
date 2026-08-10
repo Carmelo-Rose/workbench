@@ -5,28 +5,24 @@ import path from "node:path";
 import sharp from "sharp";
 import {
   atomicPublish,
-  composeNaturalShadowBackdrop,
   composeSquareDeliverable,
   composeWhiteMaster,
   createPipelineProgress,
-  describeReframing,
   detailPageSources,
   installedWorkflowIds,
-  liftGeneratedSweep,
   listProductFolders,
   listProductWorkflows,
-  measureMatteAspect,
   MODEL_SLOTS,
   modelImageReferences,
-  describeProportionDrift,
   modelSlotColorRanks,
+  parseWhiteFieldQaReport,
   ProductCutoutScheduler,
   productPipelineSchedulingSettings,
   publishImages,
   publishMainImages,
   refineProductForeground,
   refineSkuForeground,
-  requestShadowBackdrop,
+  requestWhiteFieldMain,
   resolveProductFolder,
   resolveProductFolderByName,
   runModelGenerationPhase,
@@ -37,6 +33,7 @@ import {
   validateProductPipelineInput,
   verifyDetailOutputs,
   verifyMainOutputs,
+  WHITE_FIELD_MAIN_PARAMS,
 } from "./product-pipeline";
 import type { RelativeBox } from "./product-classify";
 import { productPipelineInputSchema } from "./contracts";
@@ -344,22 +341,20 @@ describe("product pipeline cutout concurrency", () => {
     await Promise.all(tasks);
   });
 
-  it("holds every cutout back while local main-image generation owns the card", async () => {
+  it("holds cutouts while WhiteField owns the GPU", async () => {
     const scheduler = new ProductCutoutScheduler({ globalCutouts: 12, perFolderCutouts: 6 });
     const started: string[] = [];
     let releaseGeneration!: () => void;
     const generating = new Promise<void>((resolve) => { releaseGeneration = resolve; });
     const generation = scheduler.runExclusive(async () => {
-      started.push("generate");
+      started.push("whitefield");
       await generating;
     });
 
-    await waitFor(() => started.length === 1, "generation never took the card");
+    await waitFor(() => started.length === 1, "WhiteField never took the GPU");
     const cutouts = ["A", "B"].map((folder) => scheduler.run(folder, async () => { started.push(folder); }));
-    // Deliberately given room to misbehave: without the exclusive hold both
-    // folders are far inside the twelve-slot ceiling and would start at once.
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(started).toEqual(["generate"]);
+    expect(started).toEqual(["whitefield"]);
     expect(scheduler.getStats().active).toBe(0);
 
     releaseGeneration();
@@ -367,7 +362,7 @@ describe("product pipeline cutout concurrency", () => {
     expect(started.slice(1).sort()).toEqual(["A", "B"]);
   });
 
-  it("waits for the cutouts already running before generation takes the card", async () => {
+  it("waits for active cutouts before granting WhiteField exclusive GPU use", async () => {
     const scheduler = new ProductCutoutScheduler({ globalCutouts: 12, perFolderCutouts: 6 });
     const order: string[] = [];
     let releaseCutout!: () => void;
@@ -376,27 +371,25 @@ describe("product pipeline cutout concurrency", () => {
       order.push("cutout");
       await holding;
     });
-    await waitFor(() => order.length === 1, "the cutout never started");
+    await waitFor(() => order.length === 1, "cutout never started");
 
-    const generation = scheduler.runExclusive(async () => { order.push("generate"); });
-    // A queued exclusive request also stops new grants, otherwise a folder with
-    // work left keeps the queue non-empty and generation never gets its turn.
+    const generation = scheduler.runExclusive(async () => { order.push("whitefield"); });
     const queued = scheduler.run("A", async () => { order.push("queued"); });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(order).toEqual(["cutout"]);
 
     releaseCutout();
     await Promise.all([cutout, generation, queued]);
-    expect(order).toEqual(["cutout", "generate", "queued"]);
+    expect(order).toEqual(["cutout", "whitefield", "queued"]);
   });
 
-  it("releases the card when a cancelled generation never gets its turn", async () => {
+  it("releases a cancelled exclusive request that never acquired the GPU", async () => {
     const scheduler = new ProductCutoutScheduler({ globalCutouts: 12, perFolderCutouts: 6 });
     const controller = new AbortController();
     let releaseCutout!: () => void;
     const holding = new Promise<void>((resolve) => { releaseCutout = resolve; });
     const cutout = scheduler.run("A", async () => { await holding; });
-    await waitFor(() => scheduler.getStats().active === 1, "the cutout never started");
+    await waitFor(() => scheduler.getStats().active === 1, "cutout never started");
 
     const generation = scheduler.runExclusive(async () => { throw new Error("should never run"); }, controller.signal);
     controller.abort();
@@ -404,9 +397,7 @@ describe("product pipeline cutout concurrency", () => {
 
     releaseCutout();
     await cutout;
-    // The abandoned request must not leave the arbiter waiting for a hold that
-    // will never be taken.
-    await scheduler.run("A", async () => { /* the queue still drains */ });
+    await scheduler.run("A", async () => { /* queue still drains */ });
     expect(scheduler.getStats().active).toBe(0);
   });
 
@@ -475,61 +466,7 @@ describe("white master composition", () => {
   });
 });
 
-describe("natural studio shadow recovery", () => {
-  it("keeps a nearby photographed shadow while removing distant backdrop marks", async () => {
-    const root = await fixture();
-    const source = path.join(root, "source.png");
-    const mask = path.join(root, "mask.png");
-    const width = 120;
-    const height = 80;
-    const pixels = Buffer.alloc(width * height * 3);
-    const matte = Buffer.alloc(width * height);
-    for (let y = 0; y < height; y += 1) {
-      for (let x = 0; x < width; x += 1) {
-        const index = y * width + x;
-        const offset = index * 3;
-        const background = [232, 236, 242];
-        pixels[offset] = background[0];
-        pixels[offset + 1] = background[1];
-        pixels[offset + 2] = background[2];
-
-        // A soft photographed contact shadow immediately below the product.
-        const distance = ((x - 60) / 38) ** 2 + ((y - 61) / 9) ** 2;
-        if (distance < 1) {
-          const shade = Math.round(75 * (1 - distance) ** 2);
-          pixels[offset] -= shade;
-          pixels[offset + 1] -= shade;
-          pixels[offset + 2] -= shade;
-        }
-        // A paper seam far away from the product must not leak into the result.
-        if (x === 5 && y >= 48) {
-          pixels[offset] -= 70;
-          pixels[offset + 1] -= 70;
-          pixels[offset + 2] -= 70;
-        }
-        if (x >= 47 && x <= 73 && y >= 20 && y <= 57) {
-          matte[index] = 255;
-          pixels[offset] = 35;
-          pixels[offset + 1] = 35;
-          pixels[offset + 2] = 35;
-        }
-      }
-    }
-    await sharp(pixels, { raw: { width, height, channels: 3 } }).png().toFile(source);
-    await sharp(matte, { raw: { width, height, channels: 1 } }).png().toFile(mask);
-
-    const backdrop = await composeNaturalShadowBackdrop(source, await readFile(mask));
-    const { data, info } = await sharp(backdrop).raw().toBuffer({ resolveWithObject: true });
-    const pixel = (x: number, y: number) =>
-      Array.from(data.subarray((y * width + x) * info.channels, (y * width + x + 1) * info.channels));
-
-    expect(info).toMatchObject({ width, height, channels: 3 });
-    expect(pixel(0, 0)).toEqual([255, 255, 255]);
-    expect(pixel(5, 60)).toEqual([255, 255, 255]);
-    expect(pixel(60, 30)).toEqual([255, 255, 255]);
-    expect(Math.max(...pixel(60, 60))).toBeLessThan(235);
-  });
-
+describe("product foreground refinement", () => {
   it("removes low-confidence shadow fragments from the opaque product layer", async () => {
     const foreground = await sharp(Buffer.from([
       30, 30, 30, 32,
@@ -573,46 +510,6 @@ describe("square deliverable composition", () => {
   }
   const box: RelativeBox = { left: 10 / 40, top: 7 / 30, width: 20 / 40, height: 16 / 30 };
 
-  /**
-   * A generated frame shaped like the ones the 1234 run produced: the article
-   * over on one side of the frame, lit from that side, its cast shadow running
-   * a long way out to the other. `reach` is how far left the shadow gets.
-   */
-  async function litFromOneSide(reach: number): Promise<Buffer> {
-    const frame = Buffer.alloc(60 * 30 * 3, 255);
-    for (let y = 7; y < 23; y += 1) {
-      for (let x = 40; x < 56; x += 1) {
-        const offset = (y * 60 + x) * 3;
-        frame[offset] = 200; frame[offset + 1] = 30; frame[offset + 2] = 30;
-      }
-    }
-    for (let y = 23; y < 26; y += 1) {
-      for (let x = reach; x < 50; x += 1) {
-        const offset = (y * 60 + x) * 3;
-        frame[offset] = 232; frame[offset + 1] = 234; frame[offset + 2] = 238;
-      }
-    }
-    return sharp(frame, { raw: { width: 60, height: 30, channels: 3 } }).png().toBuffer();
-  }
-  /** Where the article in `litFromOneSide` sits — what its matte would say. */
-  const litArticle: RelativeBox = { left: 40 / 60, top: 7 / 30, width: 16 / 60, height: 16 / 30 };
-
-  /** Bounding box of the red article block on a rendered square. */
-  function articleBox(data: Buffer, info: { width: number; height: number; channels: number }) {
-    let minX = info.width, minY = info.height, maxX = -1, maxY = -1;
-    for (let y = 0; y < info.height; y += 1) {
-      for (let x = 0; x < info.width; x += 1) {
-        const offset = (y * info.width + x) * info.channels;
-        if (data[offset] <= data[offset + 2] + 40) continue;
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-        if (x > maxX) maxX = x;
-        if (y > maxY) maxY = y;
-      }
-    }
-    return { left: minX, top: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
-  }
-
   it("centres the product on an 800x800 white canvas", async () => {
     const root = await fixture();
     const output = path.join(root, "square.png");
@@ -628,222 +525,6 @@ describe("square deliverable composition", () => {
     expect(centre).not.toEqual([255, 255, 255]);
   });
 
-  it("keeps the shadow a 主图 frame already contains, without a separate layer", async () => {
-    const root = await fixture();
-    const output = path.join(root, "square-main.png");
-    // A generated frame: white sweep, product, and the shadow already in it.
-    const frame = Buffer.alloc(40 * 30 * 3, 255);
-    for (let y = 7; y < 23; y += 1) {
-      for (let x = 10; x < 30; x += 1) {
-        const offset = (y * 40 + x) * 3;
-        frame[offset] = 200; frame[offset + 1] = 30; frame[offset + 2] = 30;
-      }
-    }
-    for (let x = 8; x < 32; x += 1) {
-      const offset = (23 * 40 + x) * 3;
-      frame[offset] = 170; frame[offset + 1] = 175; frame[offset + 2] = 185;
-    }
-    const generated = await sharp(frame, { raw: { width: 40, height: 30, channels: 3 } }).png().toBuffer();
-    await composeSquareDeliverable(generated, box, output, { framing: "main" });
-
-    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
-    const pixel = (x: number, y: number) =>
-      Array.from(data.subarray((y * info.width + x) * info.channels, (y * info.width + x + 1) * info.channels));
-    expect(info).toMatchObject({ width: 800, height: 800, channels: 3 });
-    // The band below the product survived the crop and resize.
-    const column = Array.from({ length: 800 }, (_, y) => Math.max(...pixel(400, y)));
-    expect(column.slice(500).some((value) => value < 230)).toBe(true);
-    expect(pixel(0, 0)).toEqual([255, 255, 255]);
-  });
-
-  it("centres a 主图 on the article, not on the article plus the shadow beside it", async () => {
-    const root = await fixture();
-    const output = path.join(root, "square-main-lit-side.png");
-    await composeSquareDeliverable(await litFromOneSide(4), litArticle, output, { framing: "main" });
-
-    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
-    const rendered = articleBox(data, info);
-    // Centring the two together is what shipped every 1234 主图 with the hat
-    // shoved against one edge: its centre landed at 57%–67% of the width,
-    // because that is how far the shadow reached the other way.
-    expect(rendered.left + rendered.width / 2).toBeGreaterThan(392);
-    expect(rendered.left + rendered.width / 2).toBeLessThan(408);
-    expect(rendered.top + rendered.height / 2).toBeGreaterThan(392);
-    expect(rendered.top + rendered.height / 2).toBeLessThan(408);
-  });
-
-  it("prints the article the same whatever shadow the generator drew next to it", async () => {
-    const root = await fixture();
-    const near = path.join(root, "square-main-near-shadow.png");
-    const far = path.join(root, "square-main-far-shadow.png");
-    // One hat, two shots, two very different shadows — the swing that made
-    // every revision of this folder frame the product differently.
-    await composeSquareDeliverable(await litFromOneSide(30), litArticle, near, { framing: "main" });
-    await composeSquareDeliverable(await litFromOneSide(4), litArticle, far, { framing: "main" });
-
-    const read = async (file: string) => {
-      const { data, info } = await sharp(file).raw().toBuffer({ resolveWithObject: true });
-      let shadowPixels = 0;
-      for (let offset = 0; offset < data.length; offset += info.channels) {
-        const max = Math.max(data[offset], data[offset + 1], data[offset + 2]);
-        const min = Math.min(data[offset], data[offset + 1], data[offset + 2]);
-        if (max < 250 && max > 200 && max - min < 20) shadowPixels += 1;
-      }
-      return { article: articleBox(data, info), shadowPixels };
-    };
-    const [a, b] = await Promise.all([read(near), read(far)]);
-    expect(a.article).toEqual(b.article);
-    // Still a shadow under the hat in both — it just no longer votes on where
-    // the hat goes or how large it prints.
-    expect(a.shadowPixels).toBeGreaterThan(1000);
-    expect(b.shadowPixels).toBeGreaterThan(1000);
-  });
-
-  it("still frames a 主图 when the frame's matte came back empty", async () => {
-    const root = await fixture();
-    const output = path.join(root, "square-main-no-article.png");
-    // Degraded rather than fatal: with nothing to separate article from
-    // shadow, framing falls back to the whole frame's ink and the run warns.
-    await composeSquareDeliverable(await litFromOneSide(4), null, output, { framing: "main" });
-
-    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
-    expect(info).toMatchObject({ width: 800, height: 800, channels: 3 });
-    expect(articleBox(data, info).width).toBeGreaterThan(200);
-  });
-
-  it("scales a 主图 uniformly, so the article keeps the proportions it was generated at", async () => {
-    const root = await fixture();
-    const output = path.join(root, "square-main-uniform.png");
-    // A 2:1 block on a frame that is not itself 2:1. Any non-uniform resize on
-    // the way to the square canvas shows up as a different ratio here.
-    const frame = Buffer.alloc(40 * 30 * 3, 255);
-    for (let y = 10; y < 20; y += 1) {
-      for (let x = 10; x < 30; x += 1) {
-        const offset = (y * 40 + x) * 3;
-        frame[offset] = 200; frame[offset + 1] = 30; frame[offset + 2] = 30;
-      }
-    }
-    const generated = await sharp(frame, { raw: { width: 40, height: 30, channels: 3 } }).png().toBuffer();
-    const box: RelativeBox = { left: 10 / 40, top: 10 / 30, width: 20 / 40, height: 10 / 30 };
-    await composeSquareDeliverable(generated, box, output, { framing: "main" });
-
-    const { data, info } = await sharp(output).raw().toBuffer({ resolveWithObject: true });
-    const isProduct = (x: number, y: number) => {
-      const offset = (y * info.width + x) * info.channels;
-      return data[offset] > data[offset + 2] + 40;
-    };
-    let minX = info.width, minY = info.height, maxX = -1, maxY = -1;
-    for (let y = 0; y < info.height; y += 1) {
-      for (let x = 0; x < info.width; x += 1) {
-        if (!isProduct(x, y)) continue;
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-        if (x > maxX) maxX = x;
-        if (y > maxY) maxY = y;
-      }
-    }
-    const renderedAspect = (maxX - minX + 1) / (maxY - minY + 1);
-    expect(renderedAspect).toBeGreaterThan(1.9);
-    expect(renderedAspect).toBeLessThan(2.1);
-  });
-});
-
-describe("generated sweep lift", () => {
-  it("lifts the sweep to pure white without lightening the shadow standing on it", async () => {
-    // One row of the generator's output: its background, the shadow it drew on
-    // that background, and the article.
-    const frame = Buffer.alloc(30 * 10 * 3, 254);
-    const paint = (from: number, to: number, value: number) => {
-      for (let y = 0; y < 10; y += 1) {
-        for (let x = from; x < to; x += 1) {
-          const offset = (y * 30 + x) * 3;
-          frame[offset] = value; frame[offset + 1] = value; frame[offset + 2] = value;
-        }
-      }
-    };
-    paint(10, 15, 245); // the shadow's outer edge, where it fades into the sweep
-    paint(15, 20, 230); // its core
-    paint(20, 25, 20);  // the article
-    const lifted = await liftGeneratedSweep(
-      await sharp(frame, { raw: { width: 30, height: 10, channels: 3 } }).png().toBuffer(),
-    );
-
-    const { data } = await sharp(lifted).raw().toBuffer({ resolveWithObject: true });
-    const at = (x: number) => data[(5 * 30 + x) * 3];
-    // What the lift is for: 主图 pads with #ffffff, so the sweep has to reach it
-    // or the padding prints as a rectangle.
-    expect(at(2)).toBe(255);
-    // What must not ride along. A floor of 245 printed these three as 255, 239
-    // and 21 — the outer edge gone entirely, which is the shadow the 1234 run
-    // was missing next to its uncropped frames.
-    expect(at(12)).toBeGreaterThanOrEqual(246);
-    expect(at(12)).toBeLessThan(250);
-    expect(at(17)).toBeLessThan(234);
-    expect(at(22)).toBeLessThan(24);
-  });
-});
-
-describe("主图 article measurement", () => {
-  /** The standalone grayscale matte the gateway returns today. */
-  async function greyMatte(w: number, h: number, blobW: number, blobH: number): Promise<Buffer> {
-    const blob = await sharp({ create: { width: blobW, height: blobH, channels: 3, background: "#ffffff" } }).png().toBuffer();
-    return sharp({ create: { width: w, height: h, channels: 3, background: "#000000" } })
-      .composite([{ input: blob, left: Math.round((w - blobW) / 2), top: Math.round((h - blobH) / 2) }])
-      .removeAlpha()
-      .png()
-      .toBuffer();
-  }
-
-  /** The older shape: a full-size RGBA copy whose alpha carries the matte. */
-  async function alphaMatte(w: number, h: number, blobW: number, blobH: number): Promise<Buffer> {
-    const blob = await sharp({ create: { width: blobW, height: blobH, channels: 4, background: { r: 200, g: 30, b: 30, alpha: 1 } } }).png().toBuffer();
-    return sharp({ create: { width: w, height: h, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-      .composite([{ input: blob, left: Math.round((w - blobW) / 2), top: Math.round((h - blobH) / 2) }])
-      .png()
-      .toBuffer();
-  }
-
-  it("reads the article's own proportions off a matte, not the canvas's", async () => {
-    // A 2:1 blob on a canvas that is neither 2:1 nor square.
-    await expect(measureMatteAspect(await greyMatte(400, 300, 200, 100))).resolves.toBeCloseTo(2, 1);
-    await expect(measureMatteAspect(await greyMatte(300, 400, 100, 200))).resolves.toBeCloseTo(0.5, 1);
-  });
-
-  it("reads a legacy RGBA matte the same way as a standalone grayscale one", async () => {
-    await expect(measureMatteAspect(await alphaMatte(400, 300, 200, 100))).resolves.toBeCloseTo(2, 1);
-  });
-
-  it("returns null for an empty matte rather than a bogus ratio", async () => {
-    await expect(measureMatteAspect(await sharp({ create: { width: 40, height: 30, channels: 3, background: "#000000" } }).png().toBuffer()))
-      .resolves.toBeNull();
-  });
-
-  it("says nothing when the article came back the shape it went in", () => {
-    expect(describeProportionDrift("hat.jpg", 1.4, 1.4)).toBeUndefined();
-    // Probe noise on a 400px matte, not a redrawn article.
-    expect(describeProportionDrift("hat.jpg", 1.4, 1.407)).toBeUndefined();
-    // The real readings off 1234, measured with a threshold that separates the
-    // article from its cast shadow: every shot agrees to well within tolerance.
-    expect(describeProportionDrift("329A4131.jpg", 1.333, 1.332)).toBeUndefined();
-    expect(describeProportionDrift("329A4133.jpg", 1.186, 1.192)).toBeUndefined();
-  });
-
-  it("reports a redrawn article, naming the shot and both readings", () => {
-    const warning = describeProportionDrift("hat.jpg", 1.4, 1.19);
-    expect(warning).toContain("hat.jpg");
-    expect(warning).toContain("1.190");
-    expect(warning).toContain("1.400");
-    expect(warning).toContain("15%");
-    expect(warning).toContain("请人工复核");
-  });
-
-  it("reports rather than repairs, in both directions", () => {
-    // Whatever the reading, the answer is a string or nothing — there is no
-    // resize to hand back. A bad reading costs someone a look at a good
-    // picture; a stretch on a bad reading would ship a deformed product photo.
-    expect(describeProportionDrift("hat.jpg", 1.2, 1.32)).toBeTypeOf("string");
-    expect(describeProportionDrift("hat.jpg", 2.4, 1.2)).toBeTypeOf("string");
-  });
 });
 
 describe("product pipeline model generation phase", () => {
@@ -959,8 +640,8 @@ describe("aggregated branch progress", () => {
   it("never headlines a branch nobody has reported on yet", () => {
     const emitted: Record<string, unknown>[] = [];
     const progress = createPipelineProgress((result) => { emitted.push(result); }, ["prepare", "main", "sku", "images"]);
-    progress.report("prepare", "正在生成白底主图", 30);
-    expect(emitted.at(-1)!.stage).toBe("正在生成白底主图");
+    progress.report("prepare", "正在准备商品素材", 30);
+    expect(emitted.at(-1)!.stage).toBe("正在准备商品素材");
   });
 
   it("names the branch with the most weighted work left as the stage to show", () => {
@@ -1124,188 +805,145 @@ describe("product pipeline partial publish", () => {
   });
 });
 
-describe("online shadow backdrop generation", () => {
-  const originalBaseUrl = process.env.MONO_IMAGE_BASE_URL;
-  const originalApiKey = process.env.MONO_IMAGE_API_KEY;
-  const originalProvider = process.env.PRODUCT_MAIN_IMAGE_PROVIDER;
+describe("WhiteField main-image generation", () => {
   const originalComfyUrl = process.env.COMFYUI_URL;
-  const originalWorkflowDir = process.env.COMFYUI_WORKFLOWS_DIR;
+  const originalPaidUrl = process.env.MONO_IMAGE_BASE_URL;
+  const originalPaidKey = process.env.MONO_IMAGE_API_KEY;
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
-    if (originalBaseUrl === undefined) delete process.env.MONO_IMAGE_BASE_URL;
-    else process.env.MONO_IMAGE_BASE_URL = originalBaseUrl;
-    if (originalApiKey === undefined) delete process.env.MONO_IMAGE_API_KEY;
-    else process.env.MONO_IMAGE_API_KEY = originalApiKey;
-    if (originalProvider === undefined) delete process.env.PRODUCT_MAIN_IMAGE_PROVIDER;
-    else process.env.PRODUCT_MAIN_IMAGE_PROVIDER = originalProvider;
     if (originalComfyUrl === undefined) delete process.env.COMFYUI_URL;
     else process.env.COMFYUI_URL = originalComfyUrl;
-    if (originalWorkflowDir === undefined) delete process.env.COMFYUI_WORKFLOWS_DIR;
-    else process.env.COMFYUI_WORKFLOWS_DIR = originalWorkflowDir;
+    if (originalPaidUrl === undefined) delete process.env.MONO_IMAGE_BASE_URL;
+    else process.env.MONO_IMAGE_BASE_URL = originalPaidUrl;
+    if (originalPaidKey === undefined) delete process.env.MONO_IMAGE_API_KEY;
+    else process.env.MONO_IMAGE_API_KEY = originalPaidKey;
   });
 
-  async function sourceFixture(root: string, width = 60, height = 40): Promise<{
+  async function sourceFixture(root: string): Promise<{
     path: string; name: string; stem: string; size: number; mtimeMs: number; hash: string;
   }> {
     const sourcePath = path.join(root, "hat.jpg");
-    await sharp({ create: { width, height, channels: 3, background: "#eeeeee" } }).jpeg().toFile(sourcePath);
+    await sharp({ create: { width: 90, height: 60, channels: 3, background: "#eeeeee" } }).jpeg().toFile(sourcePath);
     const stats = await (await import("node:fs/promises")).stat(sourcePath);
-    return { path: sourcePath, name: "hat.jpg", stem: "hat", size: stats.size, mtimeMs: stats.mtimeMs, hash: "irrelevant" };
+    return {
+      path: sourcePath,
+      name: "hat.jpg",
+      stem: "hat",
+      size: stats.size,
+      mtimeMs: stats.mtimeMs,
+      hash: "a".repeat(64),
+    };
   }
 
-  it("asks for the source's own ratio and never stretches what comes back", async () => {
-    process.env.MONO_IMAGE_BASE_URL = "https://image.example.test";
-    process.env.MONO_IMAGE_API_KEY = "test-image-key";
-    const root = await fixture();
-    const source = await sourceFixture(root, 90, 60);
-    // Deliberately a different shape from the 3:2 that was asked for: a service
-    // that rounds the requested ratio to one of its own supported shapes is
-    // exactly the case that used to be resized back and squeeze the article.
-    const resultPng = await sharp({ create: { width: 12, height: 12, channels: 3, background: "#123456" } }).png().toBuffer();
-
-    const fetchMock = vi.fn().mockImplementation((endpoint: string) => {
-      if (endpoint === "https://image.example.test/v1/api/generate") {
-        return Promise.resolve(new Response(
-          JSON.stringify({ results: [{ url: "https://image.example.test/shadow.png" }] }),
-          { status: 200 },
-        ));
-      }
-      return Promise.resolve(new Response(new Uint8Array(resultPng), { status: 200 }));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const backdrop = await requestShadowBackdrop(source, new AbortController().signal, "ws-test");
-
-    const generateCall = fetchMock.mock.calls.find(([endpoint]) => endpoint === "https://image.example.test/v1/api/generate");
-    expect(generateCall).toBeDefined();
-    const body = JSON.parse(generateCall![1].body);
-    expect(body.images).toHaveLength(1);
-    expect(body.images[0]).toMatch(/^data:image\/jpeg;base64,/);
-    expect(body.aspectRatio).toBe("90:60");
-
-    const { info } = await sharp(backdrop).raw().toBuffer({ resolveWithObject: true });
-    expect(info).toMatchObject({ width: 12, height: 12, channels: 3 });
-  });
-
-  it("reports a frame the generator re-composed, and stays quiet when it did not", async () => {
-    const root = await fixture();
-    const source = await sourceFixture(root, 90, 60);
-    const reframed = await sharp({ create: { width: 12, height: 12, channels: 3, background: "#123456" } }).png().toBuffer();
-    const inPlace = await sharp({ create: { width: 45, height: 30, channels: 3, background: "#123456" } }).png().toBuffer();
-
-    await expect(describeReframing(source, reframed)).resolves.toMatch("12×12");
-    await expect(describeReframing(source, inPlace)).resolves.toBeUndefined();
-  });
-
-  it("throws after three failed attempts instead of falling back to the local algorithm", async () => {
-    process.env.MONO_IMAGE_BASE_URL = "https://image.example.test";
-    process.env.MONO_IMAGE_API_KEY = "test-image-key";
-    const root = await fixture();
-    const source = await sourceFixture(root);
-
-    const fetchMock = vi.fn().mockImplementation(() =>
-      Promise.resolve(new Response(JSON.stringify({ error: "violation" }), { status: 400 })));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(requestShadowBackdrop(source, new AbortController().signal, "ws-test")).rejects.toThrow(
-      "主图阴影三次都没拿到有效结果",
-    );
-    const generateCalls = fetchMock.mock.calls.filter(([endpoint]) => endpoint === "https://image.example.test/v1/api/generate");
-    expect(generateCalls).toHaveLength(3);
-  });
-
-  it("routes the configured ComfyUI provider through the checked-in main-image workflow", async () => {
-    process.env.PRODUCT_MAIN_IMAGE_PROVIDER = "comfyui";
-    process.env.COMFYUI_URL = "https://comfy.example.test";
-    const root = await fixture();
-    const source = await sourceFixture(root, 90, 60);
-    const resultPng = await sharp({ create: { width: 12, height: 12, channels: 4, background: { r: 18, g: 52, b: 86, alpha: 1 } } })
-      .png()
-      .toBuffer();
-    const fetchMock = vi.fn().mockImplementation((endpoint: string, init?: RequestInit) => {
-      if (endpoint === "https://comfy.example.test/upload/image") {
-        return Promise.resolve(new Response(JSON.stringify({ name: "hat.jpg", subfolder: "" }), { status: 200 }));
-      }
-      if (endpoint === "https://comfy.example.test/prompt") {
-        return Promise.resolve(new Response(JSON.stringify({ prompt_id: "comfy-main-prompt" }), { status: 200 }));
-      }
-      if (endpoint === "https://comfy.example.test/history/comfy-main-prompt") {
-        return Promise.resolve(new Response(JSON.stringify({
-          "comfy-main-prompt": {
-            status: { completed: true, status_str: "success" },
-            outputs: { "14": { images: [{ filename: "main.png", subfolder: "", type: "output" }] } },
-          },
-        }), { status: 200 }));
-      }
-      if (endpoint.startsWith("https://comfy.example.test/view?")) {
-        return Promise.resolve(new Response(new Uint8Array(resultPng), { status: 200 }));
-      }
-      void init;
-      return Promise.resolve(new Response("unexpected endpoint", { status: 500 }));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const backdrop = await requestShadowBackdrop(source, new AbortController().signal, "ws-test");
-
-    const promptCall = fetchMock.mock.calls.find(([endpoint]) => endpoint === "https://comfy.example.test/prompt");
-    expect(promptCall).toBeDefined();
-    const workflow = JSON.parse(promptCall![1].body as string).prompt as Record<string, { inputs: Record<string, unknown> }>;
-    expect(workflow["1"].inputs.unet_name).toBe("flux1-dev-kontext_fp8_scaled.safetensors");
-    expect(workflow["5"].inputs.image).toBe("hat.jpg");
-    const { info } = await sharp(backdrop).raw().toBuffer({ resolveWithObject: true });
-    expect(info).toMatchObject({ width: 12, height: 12, channels: 3 });
-  });
-
-  it("uploads under a content-addressed name so one shoot cannot overwrite another's input", async () => {
-    process.env.PRODUCT_MAIN_IMAGE_PROVIDER = "comfyui";
-    process.env.COMFYUI_URL = "https://comfy.example.test";
-    const root = await fixture();
-    const resultPng = await sharp({ create: { width: 8, height: 8, channels: 3, background: "#123456" } }).png().toBuffer();
-    const uploadNames: string[] = [];
-    const fetchMock = vi.fn().mockImplementation((endpoint: string, init?: RequestInit) => {
-      if (endpoint === "https://comfy.example.test/upload/image") {
-        uploadNames.push(((init!.body as FormData).get("image") as File).name);
-        return Promise.resolve(new Response(JSON.stringify({ name: "stored.jpg", subfolder: "" }), { status: 200 }));
-      }
-      if (endpoint === "https://comfy.example.test/prompt") {
-        return Promise.resolve(new Response(JSON.stringify({ prompt_id: "p" }), { status: 200 }));
-      }
-      if (endpoint === "https://comfy.example.test/history/p") {
-        return Promise.resolve(new Response(JSON.stringify({
-          p: {
-            status: { completed: true, status_str: "success" },
-            outputs: { "14": { images: [{ filename: "main.png", subfolder: "", type: "output" }] } },
-          },
-        }), { status: 200 }));
-      }
-      return Promise.resolve(new Response(new Uint8Array(resultPng), { status: 200 }));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    // Two folders of the same shoot, both holding a `hat.jpg` — the case that
-    // silently published one product's picture under the other's stem.
-    const base = await sourceFixture(root);
-    const signal = new AbortController().signal;
-    await requestShadowBackdrop({ ...base, hash: "a".repeat(64) }, signal, "ws-test");
-    await requestShadowBackdrop({ ...base, hash: "b".repeat(64) }, signal, "ws-test");
-
-    expect(uploadNames).toHaveLength(2);
-    expect(uploadNames[0]).not.toBe(uploadNames[1]);
-    expect(uploadNames.every((name) => name.startsWith("hat-") && name.endsWith(".jpg"))).toBe(true);
-  });
-
-  it("keeps ComfyUI failures explicit after the same three retries", async () => {
-    process.env.PRODUCT_MAIN_IMAGE_PROVIDER = "comfyui";
+  it("fills fixed parameters, uploads by content hash, reads node 9 and selects node 15", async () => {
     process.env.COMFYUI_URL = "https://comfy.example.test";
     const root = await fixture();
     const source = await sourceFixture(root);
-    const fetchMock = vi.fn(() => Promise.resolve(new Response("offline", { status: 503 })));
-    vi.stubGlobal("fetch", fetchMock);
+    const mainPng = await sharp({ create: { width: 800, height: 800, channels: 3, background: "#ffffff" } }).png().toBuffer();
+    const diagnosticPng = await sharp({ create: { width: 10, height: 10, channels: 3, background: "#000000" } }).png().toBuffer();
+    let submittedWorkflow: Record<string, { inputs: Record<string, unknown> }> | undefined;
+    let uploadName = "";
+    const downloaded: string[] = [];
 
-    await expect(requestShadowBackdrop(source, new AbortController().signal, "ws-test")).rejects.toThrow(
-      "主图阴影三次都没拿到有效结果",
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((endpoint: string, init?: RequestInit) => {
+      if (endpoint.endsWith("/upload/image")) {
+        uploadName = ((init!.body as FormData).get("image") as File).name;
+        return Promise.resolve(new Response(JSON.stringify({ name: uploadName }), { status: 200 }));
+      }
+      if (endpoint.endsWith("/prompt")) {
+        submittedWorkflow = JSON.parse(init!.body as string).prompt;
+        return Promise.resolve(new Response(JSON.stringify({ prompt_id: "whitefield-1" }), { status: 200 }));
+      }
+      if (endpoint.endsWith("/history/whitefield-1")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          "whitefield-1": {
+            status: { completed: true, status_str: "success" },
+            outputs: {
+              "8": { images: [{ filename: "legacy_white.png", subfolder: "", type: "output" }] },
+              "9": { text: ["[0] product_delta_max=0.000 backdrop_pure_pct=99.00"] },
+              "15": { images: [{ filename: "hat_main_00001_.png", subfolder: "", type: "output" }] },
+            },
+          },
+        }), { status: 200 }));
+      }
+      if (endpoint.includes("/view?")) {
+        const filename = new URL(endpoint).searchParams.get("filename")!;
+        downloaded.push(filename);
+        return Promise.resolve(new Response(new Uint8Array(filename.includes("_main") ? mainPng : diagnosticPng), { status: 200 }));
+      }
+      throw new Error(`unexpected endpoint ${endpoint}`);
+    }));
+
+    const result = await requestWhiteFieldMain(source, new AbortController().signal);
+
+    expect(uploadName).toBe(`${"a".repeat(64)}.jpg`);
+    expect(submittedWorkflow).toBeDefined();
+    expect(submittedWorkflow!["2"].inputs.long_edge).toBe(WHITE_FIELD_MAIN_PARAMS.MASK_LONG_EDGE);
+    expect(submittedWorkflow!["6"].inputs.long_edge).toBe(WHITE_FIELD_MAIN_PARAMS.DELIVER_LONG_EDGE);
+    expect(submittedWorkflow!["7"].inputs).toMatchObject({
+      dilate_px: 0, feather_px: 1, white_at: 0.965, shadow_gain: 1, hole_white: 0,
+    });
+    expect(submittedWorkflow!["14"].inputs).toMatchObject({ fill: 0.9, out_side: 800 });
+    expect(submittedWorkflow!["8"]).toBeUndefined();
+    expect(downloaded).toEqual(["hat_main_00001_.png"]);
+    expect(result.qa.productDeltaMax).toBe(0);
+    expect(result.attempts).toBe(1);
+    await expect(sharp(result.image).metadata()).resolves.toMatchObject({ width: 800, height: 800 });
+  });
+
+  it("rejects missing and non-zero node 9 QA values", () => {
+    expect(() => parseWhiteFieldQaReport(undefined)).toThrow("节点 9");
+    expect(() => parseWhiteFieldQaReport({ text: ["[0] product_delta_max=0.001"] })).toThrow("QA 未通过");
+  });
+
+  it.each([
+    ["缺少节点 15 主图", "missing"],
+    ["QA 异常", "qa"],
+    ["尺寸不是 800×800", "size"],
+  ])("%s 时重试三次且绝不请求付费服务", async (_label, failure) => {
+    process.env.COMFYUI_URL = "https://comfy.example.test";
+    process.env.MONO_IMAGE_BASE_URL = "https://paid.example.test";
+    process.env.MONO_IMAGE_API_KEY = "must-not-be-used";
+    const root = await fixture();
+    const source = await sourceFixture(root);
+    const wrongSize = await sharp({ create: { width: 799, height: 800, channels: 3, background: "#ffffff" } }).png().toBuffer();
+    let prompts = 0;
+    const endpoints: string[] = [];
+
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((endpoint: string) => {
+      endpoints.push(endpoint);
+      if (endpoint.endsWith("/upload/image")) {
+        return Promise.resolve(new Response(JSON.stringify({ name: "stored.jpg" }), { status: 200 }));
+      }
+      if (endpoint.endsWith("/prompt")) {
+        prompts += 1;
+        return Promise.resolve(new Response(JSON.stringify({ prompt_id: `p${prompts}` }), { status: 200 }));
+      }
+      if (endpoint.includes("/history/")) {
+        const promptId = endpoint.split("/").at(-1)!;
+        const outputs: Record<string, unknown> = {
+          "9": { text: [`[0] product_delta_max=${failure === "qa" ? "0.001" : "0.000"}`] },
+          ...(failure === "missing" ? {
+            "8": { images: [{ filename: "diagnostic.png", subfolder: "", type: "output" }] },
+          } : {
+            "15": { images: [{ filename: "hat_main.png", subfolder: "", type: "output" }] },
+          }),
+        };
+        return Promise.resolve(new Response(JSON.stringify({
+          [promptId]: { status: { completed: true, status_str: "success" }, outputs },
+        }), { status: 200 }));
+      }
+      if (endpoint.includes("/view?")) {
+        return Promise.resolve(new Response(new Uint8Array(wrongSize), { status: 200 }));
+      }
+      throw new Error(`unexpected endpoint ${endpoint}`);
+    }));
+
+    await expect(requestWhiteFieldMain(source, new AbortController().signal)).rejects.toThrow("三次");
+
+    expect(prompts).toBe(3);
+    expect(endpoints.every((endpoint) => endpoint.startsWith("https://comfy.example.test"))).toBe(true);
   });
 });
