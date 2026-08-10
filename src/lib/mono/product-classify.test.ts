@@ -104,9 +104,9 @@ describe("shoot classification", () => {
     expect(result.colors.map((color) => color.rank)).toEqual([0, 1, 2]);
   });
 
-  it("uses the third standard angle for catalogue SKU and tiled display", () => {
+  it("uses the second standard angle for catalogue SKU and tiled display", () => {
     const members = colourway("black", BLACK);
-    expect(catalogueRepresentative(members).path).toBe("/shoot/black2.jpg");
+    expect(catalogueRepresentative(members).path).toBe("/shoot/black1.jpg");
     expect(catalogueRepresentative(members.slice(0, 2)).path).toBe("/shoot/black1.jpg");
   });
 

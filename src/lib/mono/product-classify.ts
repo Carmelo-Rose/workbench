@@ -104,14 +104,13 @@ export type ClassifyOptions = {
 };
 
 /**
- * The standard shoot records five angles per colourway. Frame three is the
- * clean catalogue three-quarter view used by the approved SKU references: the
- * brim edge is visible without the broad underside/table shadow exposed by
- * frame one. Short/incomplete shoots fall back to their last available frame.
+ * The standard shoot records five angles per colourway. Frame two is the
+ * clean catalogue three-quarter view used by the approved SKU references.
+ * Short/incomplete shoots fall back to their last available frame.
  */
 export function catalogueRepresentative(members: readonly MeasuredSource[]): MeasuredSource {
   if (!members.length) throw new Error("颜色组缺少可用的商品角度");
-  return members[Math.min(2, members.length - 1)];
+  return members[Math.min(1, members.length - 1)];
 }
 
 export type SourceClassification = {

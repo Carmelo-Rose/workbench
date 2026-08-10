@@ -42,6 +42,9 @@ video it removes the optional `LoadImage` edge before submission.
 
 ## 商品主图白场工作流
 
+业务范围、调度、CPU/GPU 边界、变更规则与排障请见
+[`docs/whitefield-normalization.md`](../../docs/whitefield-normalization.md)。本节只保留工作流目录层面的说明。
+
 `product-main-image.json` 是生产主图的唯一工作流。它保留真实阴影，不调用扩散
 模型，也不经过本地二次抠图或方图重构。节点 15 直接保存 800×800 `_main` 成品；
 节点 9 把 QA 报告写入 ComfyUI history，Workbench 只接受

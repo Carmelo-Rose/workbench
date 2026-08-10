@@ -827,6 +827,58 @@ export async function refineSkuForeground(foreground: Buffer): Promise<Buffer> {
 }
 
 /**
+ * SKU foreground and crop box from a WhiteField-normalised plate.
+ *
+ * The box is measured here rather than reused from the white master's
+ * `SourceMetric`: that one was taken over the un-normalised frame, where a dark
+ * article's silhouette still has the cast shadow fused to it. Framing from it
+ * would leave the article smaller and lower than SQUARE_SKU_FILL_RATIO asks
+ * for, and differently so per colourway.
+ */
+export async function composeSkuFromField(
+  field: Buffer,
+  cutout: Buffer,
+): Promise<{ foreground: Buffer; box: RelativeBox }> {
+  const [fieldMeta, cutoutMeta] = await Promise.all([sharp(field).metadata(), sharp(cutout).metadata()]);
+  if (!fieldMeta.width || !fieldMeta.height) throw new Error("无法读取 SKU 归一图尺寸");
+  if (cutoutMeta.width !== fieldMeta.width || cutoutMeta.height !== fieldMeta.height) {
+    throw new Error("SKU 抠图产物尺寸与归一图不一致，已拒绝改变商品构图");
+  }
+  const [rgb, matte] = await Promise.all([
+    sharp(field).removeAlpha().toColorspace("srgb").png().toBuffer(),
+    cutoutMeta.hasAlpha
+      ? sharp(cutout).extractChannel("alpha").png().toBuffer()
+      : sharp(cutout).toColorspace("b-w").png().toBuffer(),
+  ]);
+  const alpha = await sharp(matte).threshold(SKU_ALPHA_THRESHOLD).png().toBuffer();
+
+  const { data, info } = await sharp(alpha).raw().toBuffer({ resolveWithObject: true });
+  // libvips can hand back a three-channel buffer for a grey PNG, so the stride
+  // has to come from `info` rather than be assumed to be one byte per pixel.
+  const { width, height, channels } = info;
+  let left = width, top = height, right = -1, bottom = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (data[(y * width + x) * channels] < 128) continue;
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+  if (right < 0) throw new Error("SKU 归一图上没有抠出商品");
+  return {
+    foreground: await sharp(rgb).joinChannel(alpha).png().toBuffer(),
+    box: {
+      left: left / width,
+      top: top / height,
+      width: (right - left + 1) / width,
+      height: (bottom - top + 1) / height,
+    },
+  };
+}
+
+/**
  * Everything one photographed frame yields in the shared local prefix.
  *
  * The legacy cutout still feeds SKU, colour clustering and detail references.
@@ -1186,6 +1238,36 @@ export const WHITE_FIELD_MAIN_PARAMS = {
   SQUARE_SIDE: 800,
 } as const;
 
+/**
+ * SKU normalisation: the same backdrop division as the main image, but the
+ * shadow is divided out rather than kept, and the whole normalised frame comes
+ * back instead of WhiteField's square crop.
+ *
+ * This exists because a contact shadow cannot be segmented away on a dark
+ * product. Where a black brim meets its own shadow on white paper there is no
+ * luminance edge at all, so every matte -- and every alpha threshold over it --
+ * cuts somewhere inside the merged mass; raising SKU_ALPHA_THRESHOLD from 224
+ * to 253 moved that cut by 1-3px and left the shadow. Measured against the
+ * lighter colourways of the same article, the black frame carried an extra band
+ * of "product" along the whole brim underside worth about 6% of the delivered
+ * height.
+ *
+ * Dividing by the fitted backdrop is not a segmentation at all: the shadow is a
+ * multiplicative darkening of the paper, so it divides out, while the product
+ * is carried through untouched by `protect` (WhiteField's own node 9 QA gates
+ * on product_delta_max, which stays at 0). The matte is then only asked to
+ * separate a black product from a white plate, which it does trivially.
+ */
+export const WHITE_FIELD_SKU_FIELD_PARAMS = {
+  ...WHITE_FIELD_MAIN_PARAMS,
+  // Deep contact shadows on this catalogue bottom out near transmittance 0.13.
+  // `1 - (1 - t) / gain` has to clear `white_at` (0.965) for them to land on
+  // paper white, which needs a gain of about 25; 64 keeps headroom for a darker
+  // occlusion without being so large that ordinary backdrop noise is amplified
+  // into banding.
+  SHADOW_GAIN: 64,
+} as const;
+
 export type WhiteFieldQaReport = {
   text: string;
   productDeltaMax: number;
@@ -1268,6 +1350,49 @@ export async function requestWhiteFieldMain(
     }
   }
   throw new Error(`WhiteField 主图三次都未通过：${lastFailure}`);
+}
+
+/**
+ * The SKU plate: the source frame with its backdrop and cast shadow divided
+ * out, at delivery resolution and in the source's own framing.
+ *
+ * Returned unmatted on purpose. The caller cuts it with a fresh matte taken
+ * from this image rather than from the original, which is the point of the
+ * exercise: against a flattened plate the silhouette is unambiguous.
+ */
+export async function requestWhiteFieldSkuField(
+  source: SourceImage,
+  signal: AbortSignal,
+): Promise<{ image: Buffer; qa: WhiteFieldQaReport }> {
+  let lastFailure = "";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const extension = path.extname(source.path).toLowerCase() || ".jpg";
+      const inputImage = await uploadComfyInput(
+        await readFile(source.path),
+        `${source.hash}${extension}`,
+        sourceMimeType(source.path),
+        signal,
+      );
+      const workflow = await loadComfyWorkflow("product-sku-field", {
+        INPUT_IMAGE: inputImage,
+        OUTPUT_PREFIX: `workbench/sku/${source.hash.slice(0, 16)}_field`,
+        ...WHITE_FIELD_SKU_FIELD_PARAMS,
+      });
+      const result = await productCutoutScheduler.runExclusive(
+        () => runComfyWorkflow(workflow, signal),
+        signal,
+      );
+      const qa = parseWhiteFieldQaReport(result.nodeOutputs["9"]);
+      const field = result.outputs.find((output) => output.nodeId === "15");
+      if (!field) throw new Error("WhiteField 节点 15 未返回 SKU 归一图");
+      return { image: await downloadComfyOutput(field, signal), qa };
+    } catch (error) {
+      if (signal.aborted) throw error;
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+  }
+  throw new Error(`WhiteField SKU 归一三次都未通过：${lastFailure}`);
 }
 
 /**
@@ -1366,7 +1491,16 @@ async function runMainBranch(ctx: BranchContext): Promise<MainBranchOutcome> {
   return { deliverables, records, failedMain, warnings };
 }
 
-/** SKU: one clean catalogue angle per colourway, no recovered shadow. */
+/**
+ * SKU: one clean catalogue angle per colourway, no recovered shadow.
+ *
+ * The representative is re-rendered here from its raw original rather than
+ * reusing `skuForeground` from the prepare pass. That buffer is the source
+ * pixels behind a matte of the source, which on a dark article carries the
+ * contact shadow into SKU's pure-white plate — see WHITE_FIELD_SKU_FIELD_PARAMS.
+ * Only the colourway representatives take this path, so the extra WhiteField
+ * run is per colour rather than per frame.
+ */
 async function runSkuBranch(ctx: BranchContext): Promise<{ deliverables: ProductPipelineDeliverable[] }> {
   const stage = path.join(ctx.stagingRoot, "SKU");
   await mkdir(stage, { recursive: true });
@@ -1378,9 +1512,19 @@ async function runSkuBranch(ctx: BranchContext): Promise<{ deliverables: Product
     if (ctx.signal.aborted) throw new Error("任务已取消");
     const item = byMaster.get(color.representative.path);
     if (!item) throw new Error(`缺少 SKU 代表图的中间产物：${color.representative.path}`);
+    const field = await requestWhiteFieldSkuField(item.source, ctx.signal);
+    // The plate is a PNG whatever the original was; the gateway keys its
+    // decoding off the uploaded name.
+    const cutout = await requestCutoutBytes(
+      field.image,
+      `${item.source.stem}_field.png`,
+      ctx.folderKey,
+      ctx.signal,
+    );
+    const { foreground, box } = await composeSkuFromField(field.image, cutout);
     await composeSquareDeliverable(
-      item.skuForeground,
-      color.representative.metric.box,
+      foreground,
+      box,
       path.join(stage, `SKU${color.rank + 1}.png`),
     );
     done += 1;
@@ -1555,7 +1699,11 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   // still required, but it only runs the requested delivery branch afterwards.
   const runMain = !isTargetedRetry || retryMain;
   const runSku = !isTargetedRetry;
-  const runImages = !isTargetedRetry || hasOnlySlots;
+  // Temporary operational hold: do not submit paid detail-model jobs or
+  // publish the `images/` set. SKU and WhiteField main images remain active.
+  // Keep the branch wiring below intact so this switch can be removed cleanly.
+  const runImages = false;
+  if (hasOnlySlots) throw new Error("详情 images 生成当前已临时停用");
   const activeBranches: PipelineBranchId[] = [
     "prepare",
     ...(runMain ? ["main" as const] : []),

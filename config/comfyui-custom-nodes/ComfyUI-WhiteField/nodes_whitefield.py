@@ -332,7 +332,14 @@ class WhiteField_Normalize:
                 "dilate_px": ("INT", {"default": 0, "min": 0, "max": 32, "step": 1}),
                 "feather_px": ("INT", {"default": 1, "min": 0, "max": 32, "step": 1}),
                 "white_at": ("FLOAT", {"default": 0.965, "min": 0.80, "max": 1.0, "step": 0.001}),
-                "shadow_gain": ("FLOAT", {"default": 1.0, "min": 0.20, "max": 3.0, "step": 0.01}),
+                # 1 keeps the photographed shadow, which is what a main image
+                # wants.  SKU wants the opposite: a pure-white plate.  The
+                # deepest contact shadows measured on this catalogue sit around
+                # transmittance 0.13, and `white_at` only clips from 0.965 up,
+                # so lifting them to paper white needs a gain near 25 -- well
+                # past the old ceiling of 3.  The product cannot be touched at
+                # any gain: it is carried by `protect`, outside this term.
+                "shadow_gain": ("FLOAT", {"default": 1.0, "min": 0.20, "max": 128.0, "step": 0.01}),
                 # How much of an enclosed hole -- a cap's rear opening, the gap
                 # under a handle -- is forced to pure white.  Both answers appear
                 # in the retoucher's own main images for this catalogue: some

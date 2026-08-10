@@ -1,5 +1,8 @@
 # ComfyUI-WhiteField
 
+业务范围、调度、验收和参数变更规则见
+[`docs/whitefield-normalization.md`](../../../docs/whitefield-normalization.md)。本文只维护节点算法和实现边界。
+
 Puts a studio product shot on a pure white background **without cutting it out
 and without inventing a shadow**.
 

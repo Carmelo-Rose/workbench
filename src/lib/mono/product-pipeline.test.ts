@@ -5,6 +5,7 @@ import path from "node:path";
 import sharp from "sharp";
 import {
   atomicPublish,
+  composeSkuFromField,
   composeSquareDeliverable,
   composeWhiteMaster,
   createPipelineProgress,
@@ -23,6 +24,7 @@ import {
   refineProductForeground,
   refineSkuForeground,
   requestWhiteFieldMain,
+  requestWhiteFieldSkuField,
   resolveProductFolder,
   resolveProductFolderByName,
   runModelGenerationPhase,
@@ -34,6 +36,7 @@ import {
   verifyDetailOutputs,
   verifyMainOutputs,
   WHITE_FIELD_MAIN_PARAMS,
+  WHITE_FIELD_SKU_FIELD_PARAMS,
 } from "./product-pipeline";
 import type { RelativeBox } from "./product-classify";
 import { productPipelineInputSchema } from "./contracts";
@@ -896,6 +899,90 @@ describe("WhiteField main-image generation", () => {
   it("rejects missing and non-zero node 9 QA values", () => {
     expect(() => parseWhiteFieldQaReport(undefined)).toThrow("节点 9");
     expect(() => parseWhiteFieldQaReport({ text: ["[0] product_delta_max=0.001"] })).toThrow("QA 未通过");
+  });
+
+  it("divides the shadow out for the SKU plate and returns the whole frame", async () => {
+    process.env.COMFYUI_URL = "https://comfy.example.test";
+    const root = await fixture();
+    const source = await sourceFixture(root);
+    const plate = await sharp({ create: { width: 300, height: 200, channels: 3, background: "#ffffff" } }).png().toBuffer();
+    let submitted: Record<string, { class_type: string; inputs: Record<string, unknown> }> | undefined;
+    const downloaded: string[] = [];
+
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((endpoint: string, init?: RequestInit) => {
+      if (endpoint.endsWith("/upload/image")) {
+        return Promise.resolve(new Response(JSON.stringify({ name: "hat.jpg" }), { status: 200 }));
+      }
+      if (endpoint.endsWith("/prompt")) {
+        submitted = JSON.parse(init!.body as string).prompt;
+        return Promise.resolve(new Response(JSON.stringify({ prompt_id: "field-1" }), { status: 200 }));
+      }
+      if (endpoint.endsWith("/history/field-1")) {
+        return Promise.resolve(new Response(JSON.stringify({
+          "field-1": {
+            status: { completed: true, status_str: "success" },
+            outputs: {
+              "9": { text: ["[0] product_delta_max=0.000 backdrop_pure_pct=99.00"] },
+              "15": { images: [{ filename: "hat_field_00001_.png", subfolder: "", type: "output" }] },
+            },
+          },
+        }), { status: 200 }));
+      }
+      if (endpoint.includes("/view?")) {
+        downloaded.push(new URL(endpoint).searchParams.get("filename")!);
+        return Promise.resolve(new Response(new Uint8Array(plate), { status: 200 }));
+      }
+      throw new Error(`unexpected endpoint ${endpoint}`);
+    }));
+
+    const result = await requestWhiteFieldSkuField(source, new AbortController().signal);
+
+    expect(WHITE_FIELD_SKU_FIELD_PARAMS.SHADOW_GAIN).toBeGreaterThan(25);
+    expect(submitted!["7"].inputs).toMatchObject({
+      shadow_gain: WHITE_FIELD_SKU_FIELD_PARAMS.SHADOW_GAIN, white_at: 0.965, dilate_px: 0,
+    });
+    // SKU frames its own square from the matte box, so WhiteField's crop node
+    // must not be in this graph — the plate has to come back whole.
+    expect(submitted!["14"]).toBeUndefined();
+    expect(submitted!["15"].inputs.images).toEqual(["7", 0]);
+    expect(downloaded).toEqual(["hat_field_00001_.png"]);
+    expect(result.qa.productDeltaMax).toBe(0);
+    await expect(sharp(result.image).metadata()).resolves.toMatchObject({ width: 300, height: 200 });
+  });
+
+  it("cuts the SKU plate with its own matte and frames from that matte", async () => {
+    // A plate whose article is a 40x40 block, and a matte that agrees with it.
+    const field = await sharp({ create: { width: 100, height: 100, channels: 3, background: "#ffffff" } })
+      .composite([{
+        input: await sharp({ create: { width: 40, height: 40, channels: 3, background: "#202020" } }).png().toBuffer(),
+        left: 30, top: 20,
+      }])
+      .png().toBuffer();
+    const matte = await sharp({ create: { width: 100, height: 100, channels: 3, background: "#000000" } })
+      .composite([{
+        input: await sharp({ create: { width: 40, height: 40, channels: 3, background: "#ffffff" } }).png().toBuffer(),
+        left: 30, top: 20,
+      }])
+      // composite() introduces an alpha channel; the gateway's grey matte has
+      // none, and composeSkuFromField reads the two shapes down different
+      // branches, so the fixture has to keep the grey shape.
+      .removeAlpha().png().toBuffer();
+
+    const { foreground, box } = await composeSkuFromField(field, matte);
+
+    expect(box).toMatchObject({ left: 0.3, top: 0.2, width: 0.4, height: 0.4 });
+    const alpha = await sharp(foreground).extractChannel("alpha").raw().toBuffer({ resolveWithObject: true });
+    // The threshold leaves a hard silhouette: no partial coverage survives.
+    expect(new Set(alpha.data)).toEqual(new Set([0, 255]));
+    // The plate's own pixels are what gets kept, not the raw source's.
+    const centre = await sharp(foreground).removeAlpha().extract({ left: 50, top: 40, width: 1, height: 1 })
+      .raw().toBuffer();
+    expect(centre[0]).toBe(0x20);
+
+    await expect(composeSkuFromField(
+      field,
+      await sharp({ create: { width: 50, height: 50, channels: 3, background: "#ffffff" } }).png().toBuffer(),
+    )).rejects.toThrow("已拒绝改变商品构图");
   });
 
   it.each([
