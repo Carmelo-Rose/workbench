@@ -17,6 +17,7 @@ type Folder = {
 };
 
 type Workflow = { id: string; label: string };
+type MainImageVersion = "whitefield-v1" | "template-shadow-v2";
 type ModelPair = {
   id: string;
   displayName: string;
@@ -32,6 +33,7 @@ type TrialPayload = {
   error?: string;
   rootReachable?: boolean;
   root?: string;
+  templateShadowV2Enabled?: boolean;
 };
 
 type SlotMeta = { id: string; kind: "model" | "fixed" | "tiled" | "detail" };
@@ -130,6 +132,8 @@ export function ProductPipelineTrial() {
   const [query, setQuery] = useState("");
   const [selectedFolderId, setSelectedFolderId] = useState<string>();
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>();
+  const [mainImageVersion, setMainImageVersion] = useState<MainImageVersion>("whitefield-v1");
+  const [templateShadowV2Enabled, setTemplateShadowV2Enabled] = useState(false);
   const [selectedModelPairId, setSelectedModelPairId] = useState<string>();
   const [job, setJob] = useState<MonoJob | null>(null);
   const [loadingFolders, setLoadingFolders] = useState(false);
@@ -156,6 +160,9 @@ export function ProductPipelineTrial() {
           setSelectedModelPairId((current) => current && nextPairs.some((pair) => pair.id === current) ? current : nextPairs[0]?.id);
           setRootReachable(payload.rootReachable ?? true);
           setRoot(payload.root);
+          const v2Enabled = payload.templateShadowV2Enabled === true;
+          setTemplateShadowV2Enabled(v2Enabled);
+          if (!v2Enabled) setMainImageVersion("whitefield-v1");
           setError(undefined);
         })
         .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "无法读取商品文件夹"))
@@ -209,6 +216,7 @@ export function ProductPipelineTrial() {
           folderId: selectedFolderId,
           workflowId: selectedWorkflowId,
           modelPairId: selectedModelPairId,
+          mainImageVersion,
         }),
       });
       if (!payload.job) throw new Error("任务创建失败");
@@ -323,6 +331,17 @@ export function ProductPipelineTrial() {
               <span className="text-muted-foreground text-xs">品类模板</span>
               <select className="border-input bg-background h-9 rounded-md border px-2 text-sm" value={selectedWorkflowId ?? ""} onChange={(event) => setSelectedWorkflowId(event.target.value)} disabled={workflows.length < 2}>
                 {!workflows.length ? <option value="">暂无可用模板</option> : workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.label}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              <span className="text-muted-foreground text-xs">主图版本</span>
+              <select
+                className="border-input bg-background h-9 rounded-md border px-2 text-sm"
+                value={mainImageVersion}
+                onChange={(event) => setMainImageVersion(event.target.value as MainImageVersion)}
+              >
+                <option value="whitefield-v1">V1 · 保留实拍阴影（默认）</option>
+                {templateShadowV2Enabled ? <option value="template-shadow-v2">V2 · 固定模板阴影（测试）</option> : null}
               </select>
             </label>
             <div className="bg-muted/50 rounded-xl p-3 text-xs leading-5">

@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "version": "hat-shadow-v1",
+  "canvas": {
+    "width": 800,
+    "height": 800
+  },
+  "variants": [
+    {
+      "id": "oblique-left-a",
+      "angle": "oblique-left",
+      "file": "oblique-left-a.png",
+      "order": 0,
+      "sha256": "16788128028e780ddb0c72bdc40ad21f8612dcf08ccdaf36f8e801c318667d71",
+      "source": {
+        "relativePath": "左/1786364938666.png",
+        "sha256": "e1305294bad2919276b302a596aba1dc9ceac60862a49c558ea0608618fedd6a"
+      },
+      "reference": {
+        "box": {
+          "left": 0.0425,
+          "top": 0.1475,
+          "width": 0.9175,
+          "height": 0.75875
+        },
+        "contactAnchor": {
+          "x": 0.48121346153846156,
+          "y": 0.905
+        }
+      }
+    },
+    {
+      "id": "oblique-left-b",
+      "angle": "oblique-left",
+      "file": "oblique-left-b.png",
+      "order": 1,
+      "sha256": "aaef0eeaee205895fc9ca3ff8223ca82a23d9830f6296b751cd29f80667339ce",
+      "source": {
+        "relativePath": "左/SKU 2.jpg",
+        "sha256": "3fab2e8e19ce920894976a0fb93983abc6ebe525337ca3d8aec5409597f39e93"
+      },
+      "reference": {
+        "box": {
+          "left": 0.09,
+          "top": 0.24875,
+          "width": 0.82625,
+          "height": 0.56875
+        },
+        "contactAnchor": {
+          "x": 0.5626293429003021,
+          "y": 0.81625
+        }
+      }
+    },
+    {
+      "id": "front-a",
+      "angle": "front",
+      "file": "front-a.png",
+      "order": 0,
+      "sha256": "115615738f4fac2c860df0a28c36cfca4a1105552813a8c1d6ff24bbd7e96ef0",
+      "source": {
+        "relativePath": "前/1 拷贝 5.jpg",
+        "sha256": "d0ead3f65478a31fdcc6270d34842c2182696fd626a96d8a889b4259b7ca1000"
+      },
+      "reference": {
+        "box": {
+          "left": 0.13,
+          "top": 0.00875,
+          "width": 0.75625,
+          "height": 0.93
+        },
+        "contactAnchor": {
+          "x": 0.5885772659732541,
+          "y": 0.9375
+        }
+      }
+    },
+    {
+      "id": "front-b",
+      "angle": "front",
+      "file": "front-b.png",
+      "order": 1,
+      "sha256": "9219527bad1ddfbf8a534c1b3b136b80988949a3b8e48bf19fce814567c624eb",
+      "source": {
+        "relativePath": "前/1786367481972.jpg",
+        "sha256": "00ec497f8836d4482a6fa5c2dc3f781df2ff1c1d28792336fc14a83f8f829b37"
+      },
+      "reference": {
+        "box": {
+          "left": 0.14125,
+          "top": 0.1125,
+          "width": 0.74375,
+          "height": 0.76125
+        },
+        "contactAnchor": {
+          "x": 0.6491762630014858,
+          "y": 0.8725
+        }
+      }
+    },
+    {
+      "id": "top-down",
+      "angle": "top-down",
+      "file": "top-down.png",
+      "order": 0,
+      "sha256": "590f589183f69cca9f08c1276a853a943f7bb00d6bc3822d2a65787c8d4525cf",
+      "source": {
+        "relativePath": "竖/1440 8.jpg",
+        "sha256": "c546aebecda8eb01105c5054c9756cb65b67ac70695a6cea955fc12d656c6b74"
+      },
+      "reference": {
+        "box": {
+          "left": 0.2675,
+          "top": 0.05875,
+          "width": 0.51125,
+          "height": 0.8925
+        },
+        "contactAnchor": {
+          "x": 0.5255070869990225,
+          "y": 0.95
+        }
+      }
+    },
+    {
+      "id": "side",
+      "angle": "side",
+      "file": "side.png",
+      "order": 0,
+      "sha256": "7593c81fec111f6b2478eee132ff7e630e5b40c5a4dd33a4f3e69db682ff22b7",
+      "source": {
+        "relativePath": "侧/画板 1 拷贝 4-2.jpg",
+        "sha256": "25148871152db40e8ec0d7e2f9de56d277467a676e2d9bcf8e4ea17bd196a03e"
+      },
+      "reference": {
+        "box": {
+          "left": 0.06,
+          "top": 0.285,
+          "width": 0.9175,
+          "height": 0.50875
+        },
+        "contactAnchor": {
+          "x": 0.785243295019157,
+          "y": 0.7925
+        }
+      }
+    },
+    {
+      "id": "rear",
+      "angle": "rear",
+      "file": "rear.png",
+      "order": 0,
+      "sha256": "df72c6537c2e158124b45616f6c49ba146c81f136450a1e0f5ce20d1afbad60f",
+      "source": {
+        "relativePath": "后/1786367451673.jpg",
+        "sha256": "7b1067b3bd98cea45cb025475d5f5ba240e0d46b64ca809ad707548d69ad7ff8"
+      },
+      "reference": {
+        "box": {
+          "left": 0.10625,
+          "top": 0.16625,
+          "width": 0.825,
+          "height": 0.71625
+        },
+        "contactAnchor": {
+          "x": 0.5245147743992153,
+          "y": 0.88125
+        }
+      }
+    }
+  ]
+}

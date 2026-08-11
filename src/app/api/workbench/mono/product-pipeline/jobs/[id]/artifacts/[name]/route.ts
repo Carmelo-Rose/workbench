@@ -13,8 +13,9 @@ export async function GET(request: Request, context: Context) {
     const job = getJob(actor, id); if (!job || job.kind !== "product_pipeline") throw new MonoHttpError(404, "任务不存在或无权访问");
     const folder = resolveProductFolder(String(job.input.folderId ?? ""));
     const detailFolder = resolveDetailPageFolder(folder.relativePath);
-    const target = path.resolve(detailFolder, "主图", name);
-    if (path.dirname(target) !== path.resolve(detailFolder, "主图")) throw new MonoHttpError(404, "产物不存在");
+    const directory = job.input.mainImageVersion === "template-shadow-v2" ? "主图-v2" : "主图";
+    const target = path.resolve(detailFolder, directory, name);
+    if (path.dirname(target) !== path.resolve(detailFolder, directory)) throw new MonoHttpError(404, "产物不存在");
     const body = await readFile(target); return new Response(body, { headers: { "content-type": "image/png", "cache-control": "private, no-store" } });
   } catch (error) { return monoErrorResponse(error); }
 }

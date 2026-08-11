@@ -119,6 +119,10 @@ export const monoImageGenerationSchema = z.object({
 
 /** The browser never submits a path. `folderId` is an opaque server-issued id. */
 export const productPipelineWorkflowId = "hat-62604171-v1" as const;
+export const productMainImageVersions = ["whitefield-v1", "template-shadow-v2"] as const;
+export type ProductMainImageVersion = (typeof productMainImageVersions)[number];
+export const productShadowTemplateVersions = ["hat-shadow-v1"] as const;
+export type ProductShadowTemplateVersion = (typeof productShadowTemplateVersions)[number];
 export const productPipelineInputSchema = z.object({
   // Base64url IDs for short folder names (for example `123`) can be four
   // characters long. Security comes from server-side containment validation.
@@ -128,6 +132,12 @@ export const productPipelineInputSchema = z.object({
   // runtime against installedWorkflowIds() (product-pipeline.ts), since the
   // installed set isn't knowable from this schema alone.
   workflowId: z.string().min(1).max(160),
+  // Main-image algorithms are versioned independently from the category/detail
+  // template above. Omitted means the already-deployed WhiteField behaviour.
+  mainImageVersion: z.enum(productMainImageVersions).optional(),
+  // Filled by the server when a V2 job is created. It remains accepted on the
+  // wire so a retry can pin the exact immutable bundle used by the first job.
+  shadowTemplateVersion: z.enum(productShadowTemplateVersions).optional(),
   // Optional for compatibility with older jobs and the language-model tool.
   // The formal folder picker requires it and the runner validates workspace
   // ownership before doing any work.

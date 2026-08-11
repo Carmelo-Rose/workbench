@@ -82,7 +82,18 @@ const branchLabel: Record<string, string> = {
 
 type SlotRecord = { slot: string; attempts?: number; warning?: string; qa?: string };
 type FailedSlot = { slot: string; reason: string };
-type MainRecord = { stem: string; name: string; warnings?: string[]; assetId?: string };
+type MainRecord = {
+  stem: string;
+  name: string;
+  warnings?: string[];
+  assetId?: string;
+  requestedVersion?: "whitefield-v1" | "template-shadow-v2";
+  actualVersion?: "whitefield-v1" | "template-shadow-v2";
+  ordinal?: number;
+  angle?: string;
+  shadowVariant?: string;
+  fallbackReason?: string;
+};
 type FailedMain = { stem: string; name: string; reason: string };
 type BranchState = { stage?: string; progress?: number };
 type PipelineResult = {
@@ -101,6 +112,8 @@ type PipelineResult = {
   warnings?: string[];
   resumed?: boolean;
   incomplete?: boolean;
+  mainImageVersion?: "whitefield-v1" | "template-shadow-v2";
+  shadowTemplateVersion?: string;
 };
 
 function pipelineResult(job: MonoJob): PipelineResult {
@@ -199,6 +212,12 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
         {
           folderId,
           workflowId: stringValue(job.input.workflowId) ?? "hat-62604171-v1",
+          mainImageVersion: job.input.mainImageVersion === "template-shadow-v2"
+            ? "template-shadow-v2"
+            : "whitefield-v1",
+          ...(job.input.shadowTemplateVersion === "hat-shadow-v1"
+            ? { shadowTemplateVersion: "hat-shadow-v1" as const }
+            : {}),
           modelPairId: stringValue(job.input.modelPairId),
           folderName,
           ...(failedIds.length ? { onlySlots: failedIds } : {}),
@@ -220,6 +239,14 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
   const mainDone = result.mainRecords?.length ?? 0;
   const mainFailed = result.failedMain?.length ?? 0;
   const mainTotal = mainDone + mainFailed;
+  const mainImageVersion = result.mainImageVersion === "template-shadow-v2"
+    || job.input.mainImageVersion === "template-shadow-v2"
+    ? "template-shadow-v2"
+    : "whitefield-v1";
+  const templateShadowCount = result.mainRecords?.filter((record) => record.actualVersion === "template-shadow-v2").length ?? 0;
+  const templateFallbackCount = mainImageVersion === "template-shadow-v2"
+    ? result.mainRecords?.filter((record) => record.actualVersion === "whitefield-v1").length ?? 0
+    : 0;
 
   return (
     <div className="space-y-3">
@@ -290,7 +317,15 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
         {result.resumed ? <span className="bg-muted rounded-full px-2.5 py-1">已复用现有主图</span> : null}
         {result.colors?.length ? <span className="bg-muted rounded-full px-2.5 py-1">识别到 {result.colors.length} 个颜色</span> : null}
         {result.detailShots ? <span className="bg-muted rounded-full px-2.5 py-1">{result.detailShots} 张细节图</span> : null}
+        <span className="bg-muted rounded-full px-2.5 py-1">
+          {mainImageVersion === "template-shadow-v2" ? "主图 V2 · 固定模板阴影" : "主图 V1 · 实拍阴影"}
+        </span>
         {mainTotal ? <span className="bg-muted rounded-full px-2.5 py-1">主图 {mainDone} / {mainTotal}</span> : null}
+        {mainImageVersion === "template-shadow-v2" && mainDone ? (
+          <span className="bg-muted rounded-full px-2.5 py-1">
+            模板命中 {templateShadowCount} · V1 回退 {templateFallbackCount}
+          </span>
+        ) : null}
         <span className="bg-muted rounded-full px-2.5 py-1">付费槽位 {modelDone} / {MODEL_SLOT_COUNT}</span>
         <span className="bg-muted rounded-full px-2.5 py-1">已用时长 {elapsedLabel(job)}</span>
       </div>

@@ -378,6 +378,8 @@ function productPipelineResponse({
   const toolInput = {
     folderId: config.folderId,
     workflowId: config.workflowId,
+    ...(config.mainImageVersion ? { mainImageVersion: config.mainImageVersion } : {}),
+    ...(config.shadowTemplateVersion ? { shadowTemplateVersion: config.shadowTemplateVersion } : {}),
     ...(config.modelPairId ? { modelPairId: config.modelPairId } : {}),
     ...(folderName ? { folderName } : {}),
     ...(config.onlySlots ? { onlySlots: config.onlySlots } : {}),

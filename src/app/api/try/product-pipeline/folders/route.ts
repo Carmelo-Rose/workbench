@@ -6,6 +6,7 @@ import {
 } from "@/lib/mono/product-pipeline";
 import { listProductModelPairs } from "@/lib/mono/product-model-pairs";
 import { monoErrorResponse } from "@/lib/mono/http";
+import { isTemplateShadowV2Enabled } from "@/lib/mono/product-main-shadow";
 import {
   productPipelineTrialContext,
   productPipelineTrialJson,
@@ -25,7 +26,14 @@ export async function GET(request: Request) {
       isProductRootReachable(),
     ]);
     return productPipelineTrialJson(
-      { folders, workflows, modelPairs, rootReachable, root: productSourceRoot() },
+      {
+        folders,
+        workflows,
+        modelPairs,
+        rootReachable,
+        root: productSourceRoot(),
+        templateShadowV2Enabled: isTemplateShadowV2Enabled(),
+      },
       context,
     );
   } catch (error) {

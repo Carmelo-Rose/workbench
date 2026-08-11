@@ -5,6 +5,8 @@ import type { useAui } from "@assistant-ui/react";
 export type ProductPipelineRunConfig = {
   folderId: string;
   workflowId: string;
+  mainImageVersion?: "whitefield-v1" | "template-shadow-v2";
+  shadowTemplateVersion?: "hat-shadow-v1";
   /** Every newly created 商品套图 carries this; kept optional so legacy job cards can render. */
   modelPairId?: string;
   /** Display label only — echoed straight back to the card, never stored on the job. */

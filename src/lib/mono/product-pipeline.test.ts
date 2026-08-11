@@ -95,6 +95,17 @@ describe("product pipeline folder isolation", () => {
     expect(productPipelineInputSchema.safeParse({
       folderId: Buffer.from("123").toString("base64url"),
       workflowId: "hat-62604171-v1",
+      mainImageVersion: "template-shadow-v2",
+      shadowTemplateVersion: "hat-shadow-v1",
+    }).success).toBe(true);
+    expect(productPipelineInputSchema.safeParse({
+      folderId: Buffer.from("123").toString("base64url"),
+      workflowId: "hat-62604171-v1",
+      mainImageVersion: "unknown-v3",
+    }).success).toBe(false);
+    expect(productPipelineInputSchema.safeParse({
+      folderId: Buffer.from("123").toString("base64url"),
+      workflowId: "hat-62604171-v1",
     }).success).toBe(true);
     expect(productPipelineInputSchema.safeParse({
       folderId: Buffer.from("123").toString("base64url"),
