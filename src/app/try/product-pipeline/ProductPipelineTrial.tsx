@@ -17,7 +17,7 @@ type Folder = {
 };
 
 type Workflow = { id: string; label: string };
-type MainImageVersion = "whitefield-v1" | "template-shadow-v2";
+type MainImageVersion = "whitefield-v1" | "calibrated-shadow-v2";
 type ModelPair = {
   id: string;
   displayName: string;
@@ -33,7 +33,7 @@ type TrialPayload = {
   error?: string;
   rootReachable?: boolean;
   root?: string;
-  templateShadowV2Enabled?: boolean;
+  calibratedShadowV2Enabled?: boolean;
 };
 
 type SlotMeta = { id: string; kind: "model" | "fixed" | "tiled" | "detail" };
@@ -133,7 +133,7 @@ export function ProductPipelineTrial() {
   const [selectedFolderId, setSelectedFolderId] = useState<string>();
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>();
   const [mainImageVersion, setMainImageVersion] = useState<MainImageVersion>("whitefield-v1");
-  const [templateShadowV2Enabled, setTemplateShadowV2Enabled] = useState(false);
+  const [calibratedShadowV2Enabled, setCalibratedShadowV2Enabled] = useState(false);
   const [selectedModelPairId, setSelectedModelPairId] = useState<string>();
   const [job, setJob] = useState<MonoJob | null>(null);
   const [loadingFolders, setLoadingFolders] = useState(false);
@@ -160,8 +160,8 @@ export function ProductPipelineTrial() {
           setSelectedModelPairId((current) => current && nextPairs.some((pair) => pair.id === current) ? current : nextPairs[0]?.id);
           setRootReachable(payload.rootReachable ?? true);
           setRoot(payload.root);
-          const v2Enabled = payload.templateShadowV2Enabled === true;
-          setTemplateShadowV2Enabled(v2Enabled);
+          const v2Enabled = payload.calibratedShadowV2Enabled === true;
+          setCalibratedShadowV2Enabled(v2Enabled);
           if (!v2Enabled) setMainImageVersion("whitefield-v1");
           setError(undefined);
         })
@@ -341,7 +341,7 @@ export function ProductPipelineTrial() {
                 onChange={(event) => setMainImageVersion(event.target.value as MainImageVersion)}
               >
                 <option value="whitefield-v1">V1 · 保留实拍阴影（默认）</option>
-                {templateShadowV2Enabled ? <option value="template-shadow-v2">V2 · 固定模板阴影（测试）</option> : null}
+                {calibratedShadowV2Enabled ? <option value="calibrated-shadow-v2">V2 · PS 标定阴影</option> : null}
               </select>
             </label>
             <div className="bg-muted/50 rounded-xl p-3 text-xs leading-5">

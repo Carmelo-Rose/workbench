@@ -91,8 +91,10 @@ import {
   validateProductPipelineInput,
 } from "./product-pipeline";
 import {
-  DEFAULT_SHADOW_TEMPLATE_VERSION,
-  isTemplateShadowV2Enabled,
+  CALIBRATED_SHADOW_MAIN_IMAGE_VERSION,
+  DEFAULT_SHADOW_PRESET_VERSION,
+  isCalibratedShadowV2Enabled,
+  normalizeMainImageVersion,
 } from "./product-main-shadow";
 
 const MAX_IMAGE_ATTEMPTS = 3;
@@ -287,18 +289,18 @@ export function createMattingJob(actor: MonoActor, input: MonoMattingInput): Mon
 
 export function createProductPipelineJob(actor: MonoActor, input: ProductPipelineInput): MonoJob {
   const resolved = validateProductPipelineInput(input);
-  const mainImageVersion = input.mainImageVersion ?? "whitefield-v1";
-  if (mainImageVersion === "template-shadow-v2" && !isTemplateShadowV2Enabled()) {
-    throw new MonoHttpError(403, "固定模板阴影 V2 当前未开放");
+  const mainImageVersion = normalizeMainImageVersion(input.mainImageVersion);
+  if (mainImageVersion === CALIBRATED_SHADOW_MAIN_IMAGE_VERSION && !isCalibratedShadowV2Enabled()) {
+    throw new MonoHttpError(403, "PS 标定阴影 V2 当前未开放");
   }
-  const shadowTemplateVersion = mainImageVersion === "template-shadow-v2"
-    ? input.shadowTemplateVersion ?? DEFAULT_SHADOW_TEMPLATE_VERSION
-    : null;
+  const shadowPresetVersion = mainImageVersion === CALIBRATED_SHADOW_MAIN_IMAGE_VERSION
+    ? input.shadowPresetVersion ?? DEFAULT_SHADOW_PRESET_VERSION
+    : undefined;
   const job = createProductPipelineMonoJob(actor, {
     folderId: input.folderId,
     workflowId: input.workflowId,
     mainImageVersion,
-    shadowTemplateVersion,
+    ...(shadowPresetVersion ? { shadowPresetVersion } : {}),
     modelPairId: input.modelPairId ?? null,
     onlySlots: input.onlySlots ?? null,
     onlyMain: input.onlyMain ?? null,

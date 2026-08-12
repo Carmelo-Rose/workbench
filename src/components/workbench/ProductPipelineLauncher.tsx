@@ -20,7 +20,7 @@ type Folder = {
   hasImages: boolean;
 };
 type Workflow = { id: string; label: string };
-type MainImageVersion = "whitefield-v1" | "template-shadow-v2";
+type MainImageVersion = "whitefield-v1" | "calibrated-shadow-v2";
 type ModelProfile = {
   id: string;
   displayName: string;
@@ -70,7 +70,7 @@ export function ProductPipelineLauncher({
   const [modelPairId, setModelPairId] = useState<string>();
   const [workflowId, setWorkflowId] = useState<string>();
   const [mainImageVersion, setMainImageVersion] = useState<MainImageVersion>("whitefield-v1");
-  const [templateShadowV2Enabled, setTemplateShadowV2Enabled] = useState(false);
+  const [calibratedShadowV2Enabled, setCalibratedShadowV2Enabled] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string>();
   const [error, setError] = useState<string>();
@@ -114,8 +114,8 @@ export function ProductPipelineLauncher({
             current && installed.some((item) => item.id === current) ? current : installed[0]?.id);
           setRootReachable(payload.rootReachable ?? true);
           setRoot(payload.root);
-          const v2Enabled = payload.templateShadowV2Enabled === true;
-          setTemplateShadowV2Enabled(v2Enabled);
+          const v2Enabled = payload.calibratedShadowV2Enabled === true;
+          setCalibratedShadowV2Enabled(v2Enabled);
           if (!v2Enabled) setMainImageVersion("whitefield-v1");
           setError(undefined);
         })
@@ -149,7 +149,7 @@ export function ProductPipelineLauncher({
           folderName: selectedFolder.name,
           ...(fixedModel && selectedPair ? { modelPairId: selectedPair.id } : {}),
         },
-        `${mainImageVersion === "template-shadow-v2" ? "用固定模板阴影 V2" : "用白场主图 V1"}${
+        `${mainImageVersion === "calibrated-shadow-v2" ? "用 PS 标定阴影 V2" : "用白场主图 V1"}${
           fixedModel && selectedPair ? `和“${selectedPair.displayName}”模特` : "并自动生成模特"
         }制作商品套图：${selectedFolder.name}`,
       );
@@ -336,8 +336,8 @@ export function ProductPipelineLauncher({
             className="border-input bg-background min-w-0 flex-1 rounded-md border px-2 py-2 text-sm"
           >
             <option value="whitefield-v1">V1 · 保留实拍阴影（默认）</option>
-            {templateShadowV2Enabled ? (
-              <option value="template-shadow-v2">V2 · 固定模板阴影（测试）</option>
+            {calibratedShadowV2Enabled ? (
+              <option value="calibrated-shadow-v2">V2 · PS 标定阴影</option>
             ) : null}
           </select>
         </label>

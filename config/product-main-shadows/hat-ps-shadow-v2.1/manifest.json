@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "version": "hat-ps-shadow-v2.1",
+  "canvas": {
+    "width": 800,
+    "height": 800
+  },
+  "algorithm": {
+    "id": "ps-levels-roi-v1",
+    "levels": "round(value*255/whitePoint)-clamp-255"
+  },
+  "biRefNet": {
+    "modelId": "ZhengPeng7/BiRefNet_HR-matting",
+    "revision": "5d6b6f8adcb5b417c871b1d84ceaae9871355b7f",
+    "weightsSha256": "a5a4de698739ea5e0e8bbab28e1b293dde95092b87a442d566cbc585c53cef55"
+  },
+  "gates": {
+    "whitePointMin": 220,
+    "whitePointMax": 245,
+    "whitePointMaxChannelSpread": 8,
+    "productBoxTolerance": 0.05
+  },
+  "goldStandards": [
+    {
+      "id": "329a8209",
+      "psdPath": "C:\\Users\\Administrator.DESKTOP-GRHN4PA\\Music\\329A8209.psd",
+      "psdSha256": "a946dab8591b8eda8c6d81f75465aa068acdd88d77c73c0109a9b798fc7a50f1",
+      "layerNames": {
+        "product": "帽子",
+        "shadow": "帽子阴影",
+        "background": "图层 3"
+      },
+      "productBox": {
+        "left": 0.05,
+        "top": 0.12875,
+        "width": 0.9,
+        "height": 0.74375
+      }
+    },
+    {
+      "id": "329a8218",
+      "psdPath": "Z:\\型麦-得物-品牌\\【详情页】-待审\\测试222\\主图\\329A8218_阴影分层.psd",
+      "psdSha256": "dc8866744d73f20b5843d372dafedae9f20d38dcd31163e147266f60794c6f4c",
+      "layerNames": {
+        "product": "帽子",
+        "shadow": "帽子阴影",
+        "background": "白色背景"
+      },
+      "productBox": {
+        "left": 0.05,
+        "top": 0.1225,
+        "width": 0.9,
+        "height": 0.7575
+      }
+    }
+  ],
+  "presets": [
+    {
+      "id": "hat-angle-slot-2",
+      "angleSlot": 2,
+      "humanAngleLabel": "左斜视角",
+      "approved": true,
+      "roi": {
+        "x": 0,
+        "y": 277,
+        "width": 800,
+        "height": 569
+      },
+      "whitePoint": {
+        "x": 11,
+        "y": 658
+      }
+    }
+  ],
+  "regressionAssets": [
+    { "id": "329a8209-input", "kind": "input", "file": "regression/329A8209-input.png", "sha256": "ea66ca5cf49f71562ec2035933211f732d162d99bb0958c3e6df5fc8c1484f34" },
+    { "id": "329a8209-product", "kind": "product", "file": "regression/329A8209-product.png", "sha256": "994b600be271627901115106df5d73e5a8b7e5662d598ccea5ac952cf47c3e84" },
+    { "id": "329a8209-ps-mask", "kind": "mask", "file": "regression/329A8209-ps-mask.png", "sha256": "979f5f786b0af98bdfd45ad94a545fdd710ffbbb15da599c59abb857c8857097" },
+    { "id": "329a8209-birefnet-mask", "kind": "mask", "file": "regression/329A8209-birefnet-mask.png", "sha256": "c9ad533e5aa25cc730cd027b7ee6a501dcb6a202bbe44c30552a974c02989db8" },
+    { "id": "329a8209-shadow", "kind": "shadow", "file": "regression/329A8209-shadow.png", "sha256": "3a3c3777dd0b8a72590f857a0ef5177339185da4b2c8f0cac40218e3bcae3777" },
+    { "id": "329a8209-preview", "kind": "preview", "file": "regression/329A8209-preview.png", "sha256": "19ca5ff6cfa446da1d9f31a526b1f5ad9535643c7e47bc902e4d985db6a9bbe7" },
+    { "id": "329a8218-input", "kind": "input", "file": "regression/329A8218-input.png", "sha256": "2abc6b67a59d9376ca0af188ec5dcd39247f5c18156dd1bb537efcb419100883" },
+    { "id": "329a8218-product", "kind": "product", "file": "regression/329A8218-product.png", "sha256": "628f51f8d73b26433173adf377e40a166189301771da149b2b83ec0f249ea60e" },
+    { "id": "329a8218-ps-mask", "kind": "mask", "file": "regression/329A8218-ps-mask.png", "sha256": "4ca523a6ab10a9e2d3f643625a2178a63e138766ff048b1a51092b3bbe10b5da" },
+    { "id": "329a8218-birefnet-mask", "kind": "mask", "file": "regression/329A8218-birefnet-mask.png", "sha256": "1c97bf4a21535645e9bc75e7f1a43350ccc2c7ba2722f5a943b6368e58713377" },
+    { "id": "329a8218-shadow", "kind": "shadow", "file": "regression/329A8218-shadow.png", "sha256": "fa2c76224becd32d8af3a858c8b31eb221b91785b953e689c72e1973b27f4c68" },
+    { "id": "329a8218-preview", "kind": "preview", "file": "regression/329A8218-preview.png", "sha256": "8cceecb6b75dbeca93281c851946802b8c197347ff6c00e52bcc94f3a696062e" }
+  ]
+}

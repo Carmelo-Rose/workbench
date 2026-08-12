@@ -177,8 +177,8 @@ export function createMonoTools(context: MonoToolContext = {}) {
           .describe("只重跑这些失败主图，取原图文件名且不带扩展名，例如 [\"329A8208\"]。不传则完整跑一遍"),
         retryMain: z.boolean().optional()
           .describe("只重跑主图分支；不传 onlyMain 时重跑全部主图，不会重跑详情图或 SKU"),
-        mainImageVersion: z.enum(["whitefield-v1", "template-shadow-v2"]).optional()
-          .describe("主图算法；省略为已上线的 whitefield-v1，用户明确要求固定模板阴影第二版时传 template-shadow-v2"),
+        mainImageVersion: z.enum(["whitefield-v1", "calibrated-shadow-v2"]).optional()
+          .describe("主图算法；省略为 whitefield-v1，用户明确要求 PS 标定阴影时传 calibrated-shadow-v2"),
       }),
       execute: async ({ folderName, onlySlots, onlyMain, retryMain, mainImageVersion }) => {
         const folder = await resolveProductFolderByName(folderName);

@@ -33,25 +33,22 @@ import {
 } from "./product-template";
 import { resolveProductModelPair, type ResolvedProductModelPair } from "./product-model-pairs";
 import { productDetailPageRoot, productSourceRoot } from "./product-roots";
-import type {
-  MonoActor,
-  MonoJob,
-  ProductMainImageVersion,
-  ProductPipelineInput,
-  ProductShadowTemplateVersion,
+import {
+  isProductShadowPresetVersion,
+  type MonoActor,
+  type MonoJob,
+  type ProductMainImageVersion,
+  type ProductPipelineInput,
+  type ProductShadowPresetVersion,
 } from "./contracts";
 import {
-  DEFAULT_SHADOW_TEMPLATE_VERSION,
-  buildShadowAngleAssignments,
-  composeTemplateShadowMain,
-  loadProductShadowBundle,
-  measureAlphaGeometry,
-  prepareTemplateShadowForeground,
-  removeWhiteFieldForegroundSpill,
-  selectShadowVariant,
-  type LoadedProductShadowBundle,
-  type ProductShadowAngle,
-  type ShadowAngleAssignment,
+  assertRunnableMainImageVersion,
+  buildCalibratedShadowAssignments,
+  CALIBRATED_SHADOW_MAIN_IMAGE_VERSION,
+  composeCalibratedShadowMain,
+  loadCalibratedShadowBundle,
+  normalizeMainImageVersion,
+  type LoadedCalibratedShadowBundle,
 } from "./product-main-shadow";
 
 export { productDetailPageRoot, productSourceRoot } from "./product-roots";
@@ -591,11 +588,6 @@ export function validateProductPipelineInput(input: ProductPipelineInput): { rel
   // membership test against real directory names, so the value can never reach
   // `productTemplateRoot` as a path fragment of the caller's choosing.
   if (!installedWorkflowIds().has(input.workflowId)) throw new Error("不支持的商品套图工作流");
-  if (input.mainImageVersion === "template-shadow-v2"
-    && input.shadowTemplateVersion
-    && input.shadowTemplateVersion !== DEFAULT_SHADOW_TEMPLATE_VERSION) {
-    throw new Error("不支持的固定阴影模板版本");
-  }
   const resolved = resolveProductFolder(input.folderId);
   if (input.onlySlots?.length) {
     const invalid = input.onlySlots.filter((slot) => !MODEL_SLOT_IDS.has(slot));
@@ -720,16 +712,22 @@ async function requestCutout(source: SourceImage, folderKey: string, signal: Abo
  * whose article has to be located before it can be compared with the one that
  * was photographed. Same queue and same per-folder fair share as the sources.
  */
-async function requestCutoutBytes(bytes: Buffer, name: string, folderKey: string, signal: AbortSignal): Promise<Buffer> {
+export async function requestCutoutBytes(
+  bytes: Buffer,
+  name: string,
+  folderKey: string,
+  signal: AbortSignal,
+  gatewayActor?: { userId: string; workspaceId: string },
+): Promise<Buffer> {
   return productCutoutScheduler.run(folderKey, async () => {
-    const headers = gatewayHeaders();
+    const headers = gatewayHeaders(gatewayActor);
     // Re-wrapped rather than passed straight through: `Buffer` is typed over
     // ArrayBufferLike, which fetch does not accept as a body.
-    const uploaded = await fetch(`${gatewayBase()}/files/raw?name=${encodeURIComponent(name)}`, { method: "POST", headers: { ...headers, "content-type": "application/octet-stream" }, body: new Uint8Array(bytes), signal });
+    const uploaded = await fetch(`${gatewayBase(gatewayActor)}/files/raw?name=${encodeURIComponent(name)}`, { method: "POST", headers: { ...headers, "content-type": "application/octet-stream" }, body: new Uint8Array(bytes), signal });
     if (!uploaded.ok) throw new Error(`product_cutout 上传失败：${uploaded.status}`);
     const file = await uploaded.json() as { file_id?: string };
     if (!file.file_id) throw new Error("product_cutout 未返回输入文件标识");
-    const created = await fetch(`${gatewayBase()}/jobs`, {
+    const created = await fetch(`${gatewayBase(gatewayActor)}/jobs`, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
       // The gateway receives an opaque queue label only.  No UNC path or folder
@@ -742,14 +740,14 @@ async function requestCutoutBytes(bytes: Buffer, name: string, folderKey: string
     if (!gatewayJob.id) throw new Error("product_cutout 未返回任务标识");
     for (let attempt = 0; attempt < 900; attempt += 1) {
       if (signal.aborted) throw new Error("任务已取消");
-      const current = await fetch(`${gatewayBase()}/jobs/${encodeURIComponent(gatewayJob.id)}`, { headers, signal });
+      const current = await fetch(`${gatewayBase(gatewayActor)}/jobs/${encodeURIComponent(gatewayJob.id)}`, { headers, signal });
       if (!current.ok) throw new Error(`product_cutout 查询失败：${current.status}`);
       const info = await current.json() as { status?: string; error?: string; artifacts?: { path: string }[] };
       if (info.status === "failed" || info.status === "canceled") throw new Error(info.error ?? "product_cutout 失败");
       if (info.status === "succeeded") {
         const artifact = info.artifacts?.find((item) => item.path.toLowerCase().endsWith(".png"));
         if (!artifact) throw new Error("product_cutout 未返回 PNG 产物");
-        const response = await fetch(`${gatewayBase()}/jobs/${encodeURIComponent(gatewayJob.id)}/artifacts/${artifact.path.split("/").map(encodeURIComponent).join("/")}`, { headers, signal });
+        const response = await fetch(`${gatewayBase(gatewayActor)}/jobs/${encodeURIComponent(gatewayJob.id)}/artifacts/${artifact.path.split("/").map(encodeURIComponent).join("/")}`, { headers, signal });
         if (!response.ok) throw new Error(`product_cutout 下载失败：${response.status}`);
         return Buffer.from(await response.arrayBuffer());
       }
@@ -1247,8 +1245,6 @@ type BranchContext = {
   prepared: readonly PreparedArticleSource[];
   classification: SourceClassification;
   progress: PipelineProgressReporter;
-  /** Shared by V2 main and SKU so the same frame is not normalised/cut twice. */
-  cleanProductFrames: Map<string, Promise<CleanProductFrame>>;
 };
 
 export const WHITE_FIELD_MAIN_PARAMS = {
@@ -1389,7 +1385,7 @@ export async function requestWhiteFieldMain(
 export async function requestWhiteFieldSkuField(
   source: SourceImage,
   signal: AbortSignal,
-): Promise<{ image: Buffer; qa: WhiteFieldQaReport; attempts: number }> {
+): Promise<{ image: Buffer; qa: WhiteFieldQaReport }> {
   let lastFailure = "";
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -1412,52 +1408,13 @@ export async function requestWhiteFieldSkuField(
       const qa = parseWhiteFieldQaReport(result.nodeOutputs["9"]);
       const field = result.outputs.find((output) => output.nodeId === "15");
       if (!field) throw new Error("WhiteField 节点 15 未返回 SKU 归一图");
-      return { image: await downloadComfyOutput(field, signal), qa, attempts: attempt };
+      return { image: await downloadComfyOutput(field, signal), qa };
     } catch (error) {
       if (signal.aborted) throw error;
       lastFailure = error instanceof Error ? error.message : String(error);
     }
   }
   throw new Error(`WhiteField SKU 归一三次都未通过：${lastFailure}`);
-}
-
-type CleanProductFrame = {
-  foreground: Buffer;
-  box: RelativeBox;
-  qa: WhiteFieldQaReport;
-  attempts: number;
-  spillRemovedPixels: number;
-};
-
-/**
- * A shadow-free product plate, memoized for the lifetime of one pipeline run.
- * SKU's representative is ordinal two, so a V2 run normally saves one complete
- * WhiteField + cutout round trip per colourway here.
- */
-function cleanProductFrame(ctx: BranchContext, item: PreparedArticleSource): Promise<CleanProductFrame> {
-  const key = item.source.hash;
-  const existing = ctx.cleanProductFrames.get(key);
-  if (existing) return existing;
-  const pending = (async () => {
-    const field = await requestWhiteFieldSkuField(item.source, ctx.signal);
-    const cutout = await requestCutoutBytes(
-      field.image,
-      `${item.source.stem}_field.png`,
-      ctx.folderKey,
-      ctx.signal,
-    );
-    const product = await composeSkuFromField(field.image, cutout);
-    const cleaned = await removeWhiteFieldForegroundSpill(product.foreground);
-    return {
-      foreground: cleaned.foreground,
-      box: cleaned.box,
-      qa: field.qa,
-      attempts: field.attempts,
-      spillRemovedPixels: cleaned.removedPixels,
-    };
-  })();
-  ctx.cleanProductFrames.set(key, pending);
-  return pending;
 }
 
 /**
@@ -1479,12 +1436,11 @@ type MainFrameRecord = {
   assetId?: string;
   requestedVersion: ProductMainImageVersion;
   actualVersion: ProductMainImageVersion;
-  ordinal?: number;
-  angle?: ProductShadowAngle;
-  shadowTemplateVersion?: ProductShadowTemplateVersion;
-  shadowVariant?: string;
-  shadowSha256?: string;
-  foregroundSpillRemovedPixels?: number;
+  angleSlot: number | null;
+  presetId: string | null;
+  shadowPresetVersion: ProductShadowPresetVersion | null;
+  sampledRgb: [number, number, number] | null;
+  inputSha256: string;
   fallbackReason?: string;
 };
 type MainBranchOutcome = {
@@ -1508,103 +1464,91 @@ async function runMainBranch(ctx: BranchContext): Promise<MainBranchOutcome> {
   const selectedStems = selectMainSourceStems(eligibleShots.map((item) => item.source.stem), onlyMain);
   const byStem = new Map(eligibleShots.map((item) => [item.source.stem, item]));
   const shots = selectedStems.map((stem) => byStem.get(stem)!);
-  const requestedVersion: ProductMainImageVersion = ctx.job.input.mainImageVersion === "template-shadow-v2"
-    ? "template-shadow-v2"
-    : "whitefield-v1";
-  const shadowTemplateVersion: ProductShadowTemplateVersion = ctx.job.input.shadowTemplateVersion === DEFAULT_SHADOW_TEMPLATE_VERSION
-    ? ctx.job.input.shadowTemplateVersion
-    : DEFAULT_SHADOW_TEMPLATE_VERSION;
-  const outputDirectory = requestedVersion === "template-shadow-v2" ? "主图-v2" : "主图";
+  const requestedVersion = normalizeMainImageVersion(ctx.job.input.mainImageVersion);
+  const calibratedV2 = requestedVersion === CALIBRATED_SHADOW_MAIN_IMAGE_VERSION;
+  const outputDirectory = calibratedV2 ? "主图-v2" : "主图";
   const stage = path.join(ctx.stagingRoot, outputDirectory);
   await mkdir(stage, { recursive: true });
   const destination = path.join(ctx.detailFolder, outputDirectory);
   const warnings: string[] = [];
   const records: MainFrameRecord[] = [];
   const failedMain: FailedMainFrame[] = [];
-  const assignments = requestedVersion === "template-shadow-v2"
-    ? buildShadowAngleAssignments(ctx.classification.colors)
-    : new Map<string, ShadowAngleAssignment>();
-  let bundle: LoadedProductShadowBundle | undefined;
+  const requestedPresetVersion = calibratedV2 && isProductShadowPresetVersion(ctx.job.input.shadowPresetVersion)
+    ? ctx.job.input.shadowPresetVersion
+    : undefined;
+  let bundle: LoadedCalibratedShadowBundle | undefined;
   let bundleFailure: string | undefined;
-  if (requestedVersion === "template-shadow-v2") {
-    if (typeof ctx.job.input.shadowTemplateVersion === "string"
-      && ctx.job.input.shadowTemplateVersion !== DEFAULT_SHADOW_TEMPLATE_VERSION) {
-      bundleFailure = `固定阴影模板不可用：任务锁定了未安装版本 ${ctx.job.input.shadowTemplateVersion}`;
+  if (calibratedV2) {
+    if (!requestedPresetVersion) {
+      bundleFailure = "任务未固定合法的 shadowPresetVersion";
     } else {
-      try {
-        bundle = await loadProductShadowBundle(shadowTemplateVersion);
-      } catch (error) {
-        bundleFailure = `固定阴影模板不可用：${error instanceof Error ? error.message : String(error)}`;
-      }
+      try { bundle = await loadCalibratedShadowBundle(requestedPresetVersion); }
+      catch (error) { bundleFailure = error instanceof Error ? error.message : String(error); }
     }
-    if (bundleFailure) warnings.push(`${bundleFailure}；本次主图全部回退 V1`);
   }
+  const assignments = buildCalibratedShadowAssignments(ctx.classification.colors, bundle?.presets ?? []);
   ctx.progress.report("main", "generating_main", 2, {
     mainRecords: [],
     failedMain: [],
     mainImageVersion: requestedVersion,
-    ...(requestedVersion === "template-shadow-v2" ? { shadowTemplateVersion } : {}),
+    ...(requestedPresetVersion ? { shadowPresetVersion: requestedPresetVersion } : {}),
   });
   await runWithConcurrency(shots, PRODUCT_CUTOUT_CONCURRENCY, async (item) => {
     if (ctx.signal.aborted) throw new Error("任务已取消");
     try {
       const name = `${item.source.stem}.png`;
       const output = path.join(stage, name);
+      const frame = await requestWhiteFieldMain(item.source, ctx.signal);
+      const inputSha256 = sha256(frame.image);
+      let image = frame.image;
+      let actualVersion: ProductMainImageVersion = "whitefield-v1";
+      let fallbackReason: string | undefined;
+      let sampledRgb: [number, number, number] | undefined;
       const assignment = assignments.get(item.master);
-      let fallbackReason = requestedVersion === "template-shadow-v2"
-        ? bundleFailure ?? assignment?.fallbackReason ?? (!assignment?.angle ? "未识别到固定阴影角度" : undefined)
-        : undefined;
-      let renderedV2 = false;
-
-      if (requestedVersion === "template-shadow-v2" && !fallbackReason && bundle && assignment?.angle) {
-        try {
-          const clean = await cleanProductFrame(ctx, item);
-          const sourceGeometry = await measureAlphaGeometry(clean.foreground);
-          const variant = selectShadowVariant(bundle, assignment.angle, sourceGeometry);
-          if (!variant) throw new Error(`角度 ${assignment.angle} 没有模板`);
-          const product = await prepareTemplateShadowForeground(clean.foreground, clean.box, variant.reference);
-          const image = await composeTemplateShadowMain(product, variant);
-          await writeFile(output, image);
-          records.push({
-            stem: item.source.stem,
-            name,
-            attempts: clean.attempts,
-            qa: clean.qa.text,
-            sha256: await fileHash(output),
-            requestedVersion,
-            actualVersion: "template-shadow-v2",
-            ordinal: assignment.ordinal,
-            angle: assignment.angle,
-            shadowTemplateVersion,
-            shadowVariant: variant.id,
-            shadowSha256: variant.sha256,
-            foregroundSpillRemovedPixels: clean.spillRemovedPixels,
-          });
-          renderedV2 = true;
-        } catch (error) {
-          if (ctx.signal.aborted) throw error;
-          fallbackReason = `V2 处理失败：${error instanceof Error ? error.message : String(error)}`;
+      if (calibratedV2) {
+        if (bundleFailure) {
+          fallbackReason = `V2 预设校验失败：${bundleFailure}`;
+        } else if (!assignment?.presetId) {
+          fallbackReason = assignment?.fallbackReason ?? "无法安全确定颜色组六图顺序";
+        } else {
+          const preset = bundle?.presets.find((candidate) => candidate.id === assignment.presetId);
+          if (!bundle || !preset) {
+            fallbackReason = "任务命中的批准预设不存在";
+          } else {
+            try {
+              const mask = await requestCutoutBytes(
+                frame.image,
+                `${item.source.stem}-whitefield-v1.png`,
+                ctx.folderKey,
+                ctx.signal,
+              );
+              const rendered = await composeCalibratedShadowMain(frame.image, mask, bundle, preset);
+              image = rendered.image;
+              sampledRgb = rendered.sampledRgb;
+              actualVersion = CALIBRATED_SHADOW_MAIN_IMAGE_VERSION;
+            } catch (error) {
+              if (ctx.signal.aborted) throw error;
+              fallbackReason = `V2 原生渲染失败：${error instanceof Error ? error.message : String(error)}`;
+            }
+          }
         }
       }
-
-      // V1 remains the deterministic safety net. In a V2 job its bytes are
-      // published to 主图-v2/, never over the existing 主图/ directory.
-      if (!renderedV2) {
-        const frame = await requestWhiteFieldMain(item.source, ctx.signal);
-        await writeFile(output, frame.image);
-        records.push({
-          stem: item.source.stem,
-          name,
-          attempts: frame.attempts,
-          qa: frame.qa.text,
-          sha256: await fileHash(output),
-          requestedVersion,
-          actualVersion: "whitefield-v1",
-          ordinal: assignment?.ordinal,
-          angle: assignment?.angle,
-          ...(requestedVersion === "template-shadow-v2" ? { shadowTemplateVersion, fallbackReason } : {}),
-        });
-      }
+      await writeFile(output, image);
+      records.push({
+        stem: item.source.stem,
+        name,
+        attempts: frame.attempts,
+        qa: frame.qa.text,
+        sha256: await fileHash(output),
+        inputSha256,
+        requestedVersion,
+        actualVersion,
+        angleSlot: assignment?.angleSlot ?? null,
+        presetId: assignment?.presetId ?? null,
+        shadowPresetVersion: requestedPresetVersion ?? null,
+        sampledRgb: sampledRgb ?? null,
+        ...(fallbackReason ? { fallbackReason } : {}),
+      });
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       failedMain.push({
@@ -1633,7 +1577,7 @@ async function runMainBranch(ctx: BranchContext): Promise<MainBranchOutcome> {
     deliverables = await persistProductDirectory(
       ctx.job,
       destination,
-      requestedVersion === "template-shadow-v2" ? "product-main-v2" : "product-main",
+      calibratedV2 ? "product-main-v2" : "product-main",
       producedNames,
     );
     for (const record of records) {
@@ -1665,7 +1609,16 @@ async function runSkuBranch(ctx: BranchContext): Promise<{ deliverables: Product
     if (ctx.signal.aborted) throw new Error("任务已取消");
     const item = byMaster.get(color.representative.path);
     if (!item) throw new Error(`缺少 SKU 代表图的中间产物：${color.representative.path}`);
-    const { foreground, box } = await cleanProductFrame(ctx, item);
+    const field = await requestWhiteFieldSkuField(item.source, ctx.signal);
+    // The plate is a PNG whatever the original was; the gateway keys its
+    // decoding off the uploaded name.
+    const cutout = await requestCutoutBytes(
+      field.image,
+      `${item.source.stem}_field.png`,
+      ctx.folderKey,
+      ctx.signal,
+    );
+    const { foreground, box } = await composeSkuFromField(field.image, cutout);
     await composeSquareDeliverable(
       foreground,
       box,
@@ -1814,6 +1767,7 @@ async function runImagesBranch(
  * branch's bad luck.
  */
 export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
+  assertRunnableMainImageVersion(job.input.mainImageVersion);
   const folderId = String(job.input.folderId ?? "");
   const modelPairId = typeof job.input.modelPairId === "string" ? job.input.modelPairId : "";
   // Resolve before any local cutout work or paid request. The current adapter
@@ -1921,15 +1875,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   progress.settle("prepare", "classified", { colors, detailShots: detailShotCount });
 
   const context: BranchContext = {
-    job,
-    signal,
-    folderKey,
-    stagingRoot,
-    detailFolder,
-    prepared,
-    classification,
-    progress,
-    cleanProductFrames: new Map(),
+    job, signal, folderKey, stagingRoot, detailFolder, prepared, classification, progress,
   };
   let mainOutcome: MainBranchOutcome | undefined;
   let skuOutcome: { deliverables: ProductPipelineDeliverable[] } | undefined;
@@ -1973,9 +1919,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   ];
   const failedSlots = imagesOutcome?.failedSlots ?? [];
   const failedMain = mainOutcome?.failedMain ?? [];
-  const mainImageVersion: ProductMainImageVersion = job.input.mainImageVersion === "template-shadow-v2"
-    ? "template-shadow-v2"
-    : "whitefield-v1";
+  const mainImageVersion = normalizeMainImageVersion(job.input.mainImageVersion);
   return {
     stage: "completed",
     progress: 100,
@@ -1986,8 +1930,9 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     colors,
     detailShots: detailShotCount,
     mainImageVersion,
-    ...(mainImageVersion === "template-shadow-v2"
-      ? { shadowTemplateVersion: job.input.shadowTemplateVersion ?? DEFAULT_SHADOW_TEMPLATE_VERSION }
+    ...(mainImageVersion === CALIBRATED_SHADOW_MAIN_IMAGE_VERSION
+      && isProductShadowPresetVersion(job.input.shadowPresetVersion)
+      ? { shadowPresetVersion: job.input.shadowPresetVersion }
       : {}),
     mainRecords: mainOutcome?.records ?? [],
     failedMain,

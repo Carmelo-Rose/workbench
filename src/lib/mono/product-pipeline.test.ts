@@ -95,9 +95,28 @@ describe("product pipeline folder isolation", () => {
     expect(productPipelineInputSchema.safeParse({
       folderId: Buffer.from("123").toString("base64url"),
       workflowId: "hat-62604171-v1",
-      mainImageVersion: "template-shadow-v2",
-      shadowTemplateVersion: "hat-shadow-v1",
+      mainImageVersion: "calibrated-shadow-v2",
+      shadowPresetVersion: "hat-ps-shadow-v2.1",
     }).success).toBe(true);
+    expect(productPipelineInputSchema.safeParse({
+      folderId: Buffer.from("123").toString("base64url"),
+      workflowId: "hat-62604171-v1",
+      mainImageVersion: "calibrated-shadow-v2",
+      shadowPresetVersion: "hat-ps-shadow-v2.3",
+      onlyMain: ["329A8219"],
+      retryMain: true,
+    }).success).toBe(true);
+    expect(productPipelineInputSchema.safeParse({
+      folderId: Buffer.from("123").toString("base64url"),
+      workflowId: "hat-62604171-v1",
+      mainImageVersion: "calibrated-shadow-v2",
+      shadowPresetVersion: "hat-ps-shadow-v9.9",
+    }).success).toBe(false);
+    expect(productPipelineInputSchema.safeParse({
+      folderId: Buffer.from("123").toString("base64url"),
+      workflowId: "hat-62604171-v1",
+      mainImageVersion: "refined-shadow-v2",
+    }).success).toBe(false);
     expect(productPipelineInputSchema.safeParse({
       folderId: Buffer.from("123").toString("base64url"),
       workflowId: "hat-62604171-v1",
@@ -905,6 +924,8 @@ describe("WhiteField main-image generation", () => {
     expect(result.qa.productDeltaMax).toBe(0);
     expect(result.attempts).toBe(1);
     await expect(sharp(result.image).metadata()).resolves.toMatchObject({ width: 800, height: 800 });
+
+    expect(submittedWorkflow!["15"].inputs.filename_prefix).toContain("_main");
   });
 
   it("rejects missing and non-zero node 9 QA values", () => {

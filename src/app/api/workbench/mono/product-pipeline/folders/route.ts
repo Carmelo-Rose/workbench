@@ -6,7 +6,7 @@ import {
   productSourceRoot,
 } from "@/lib/mono/product-pipeline";
 import { listProductModelPairs } from "@/lib/mono/product-model-pairs";
-import { isTemplateShadowV2Enabled } from "@/lib/mono/product-main-shadow";
+import { isCalibratedShadowV2Enabled } from "@/lib/mono/product-main-shadow";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
       modelPairs,
       rootReachable,
       root: productSourceRoot(),
-      templateShadowV2Enabled: isTemplateShadowV2Enabled(),
+      calibratedShadowV2Enabled: isCalibratedShadowV2Enabled(),
     });
   } catch (error) { return monoErrorResponse(error); }
 }
