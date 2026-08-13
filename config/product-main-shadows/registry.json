@@ -8,6 +8,10 @@
     {
       "version": "hat-ps-shadow-v2.4",
       "manifestSha256": "6a14451f80a130fe7014bfbce69fb0e90df57199ab2341c465f212a8bae9bdf3"
+    },
+    {
+      "version": "hat-ps-shadow-v2.5",
+      "manifestSha256": "23d1a187348a11bc077a50f597c531e275d3427d536effadb60f2258dfd9b876"
     }
   ]
 }

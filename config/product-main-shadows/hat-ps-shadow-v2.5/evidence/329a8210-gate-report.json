@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 2,
+  "releaseState": "awaiting-human-approval",
+  "approved": false,
+  "publicationAllowed": false,
+  "goldId": "329a8210",
+  "presetVersion": "hat-ps-shadow-v2.5",
+  "angleSlot": 3,
+  "humanAngleLabel": "正面",
+  "v1": {
+    "path": "Z:\\型麦-得物-品牌\\【详情页】-待审\\lj测试111\\主图\\329A8210.png",
+    "sha256": "c646f2941f9371c9e27eb8bb8e2ff92b25fcb90af868e517631e50fc929f8d29"
+  },
+  "approvedPsd": {
+    "path": "329A8210/photoshop-candidate-v4/calibration.psd",
+    "sha256": "9d50e0f94558bb76bdc19777c7c1f4c8396db77d545b3b3550f117ae0b658cfb"
+  },
+  "birefnetMask": {
+    "path": "masks/329A8210-birefnet-mask.png",
+    "sha256": "fe6dc534f45fbd9c18867b97969feb786b93651958221a53dc91115da501c959"
+  },
+  "layerNames": {
+    "product": "商品",
+    "shadow": "商品阴影",
+    "background": "白色背景"
+  },
+  "referenceCanvas": {
+    "width": 800,
+    "height": 800
+  },
+  "roi": {
+    "x": 0,
+    "y": 330,
+    "width": 800,
+    "height": 470
+  },
+  "whitePoint": {
+    "x": 15,
+    "y": 578
+  },
+  "sampledRgb": [
+    240,
+    240,
+    240
+  ],
+  "productBox": {
+    "left": 0.14375,
+    "top": 0.05,
+    "width": 0.7125,
+    "height": 0.9
+  },
+  "automaticGates": {
+    "whitePoint": {
+      "passed": true,
+      "rgb": [
+        240,
+        240,
+        240
+      ]
+    },
+    "sampleOutsideMask": {
+      "passed": true,
+      "birefnetAlpha": 0,
+      "photoshopAlpha": 0
+    },
+    "photoshopShadowParity": {
+      "passed": true,
+      "meanChannelError": 0.0,
+      "maxChannelError": 0
+    },
+    "birefnetMask": {
+      "passed": true,
+      "iou": 0.9981643529562354,
+      "meanBoundaryDistancePxAt800": 0.2857079621260683
+    },
+    "productBox": {
+      "passed": true,
+      "actual": {
+        "left": 0.14375,
+        "top": 0.05,
+        "width": 0.7125,
+        "height": 0.9
+      },
+      "associatedGold": {
+        "left": 0.14375,
+        "top": 0.05125,
+        "width": 0.71125,
+        "height": 0.89875
+      },
+      "tolerance": 0.05
+    },
+    "opaqueProductCore": {
+      "passed": true
+    },
+    "outsideProductAndRoiWhite": {
+      "passed": true
+    }
+  },
+  "automaticGatesPassed": true,
+  "productBoxEvidence": {
+    "source": "Photoshop product-mask.png",
+    "path": "329A8210/photoshop-candidate-v4/product-mask.png",
+    "sha256": "4827736ea9e3accc06631e19e3572b7fd089f9d76a0d8e97b1f948cc2b36f64b",
+    "threshold": "grayscale >= 128",
+    "box": {
+      "left": 0.14375,
+      "top": 0.05125,
+      "width": 0.71125,
+      "height": 0.89875
+    }
+  },
+  "sourceId": "329A8210"
+}

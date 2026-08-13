@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 2,
+  "releaseState": "awaiting-human-approval",
+  "approved": false,
+  "publicationAllowed": false,
+  "sourceId": "329A8211",
+  "goldId": "slot4-black-329a8211",
+  "presetVersion": "slot-4-development",
+  "developmentIdentity": "slot-4-development",
+  "angleSlot": 4,
+  "humanAngleLabel": "俯视",
+  "goldStandardIds": [
+    "slot4-black-329a8211",
+    "slot4-blue-329a8220",
+    "slot4-purple-329a8233"
+  ],
+  "whiteSamplePolicy": {
+    "referencePatchSize": 31,
+    "minimumPatchPassRate": 0.95,
+    "minimumMaskDistance": 32,
+    "minimumEdgeDistance": 16,
+    "rgbMin": 220,
+    "rgbMax": 245,
+    "maxChannelSpread": 8,
+    "targetMean": 240,
+    "selectionOrder": [
+      "patch-pass-rate-desc",
+      "mask-distance-desc",
+      "mean-distance-to-240-asc",
+      "y-asc",
+      "x-asc"
+    ],
+    "median": "per-channel-median-of-valid-patch-pixels"
+  },
+  "v1": {
+    "path": "Z:\\型麦-得物-品牌\\【详情页】-待审\\lj测试111\\主图\\329A8211.png",
+    "sha256": "9620973dcf7864950d21d07fe9c1c005a906a4333bb77ef6f0c37cfd589d687e"
+  },
+  "approvedPsd": {
+    "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8211\\full-canvas-run\\photoshop-candidate\\calibration.psd",
+    "sha256": "85a9a2085c7c1f85dc534871571b3cc013498eb0266fa78685693d1e04981857"
+  },
+  "birefnetMask": {
+    "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\masks\\329A8211-birefnet-mask.png",
+    "sha256": "4c38e0d922a2d1c975ecea85ad98255295f60da4d3af2aadf1dee168268c7959"
+  },
+  "layerNames": {
+    "product": "product",
+    "shadow": "product-shadow",
+    "background": "white-background"
+  },
+  "referenceCanvas": {
+    "width": 800,
+    "height": 800
+  },
+  "roi": {
+    "x": 0,
+    "y": 0,
+    "width": 800,
+    "height": 800
+  },
+  "sampledPoint": {
+    "x": 48,
+    "y": 125
+  },
+  "sampledPointRgb": [
+    238,
+    238,
+    238
+  ],
+  "sampledRgb": [
+    240,
+    240,
+    240
+  ],
+  "samplePatchPassRate": 1.0,
+  "sampleMaskDistance": 160.80111939908875,
+  "samplePatchSize": 31,
+  "backgroundPurification": {
+    "algorithm": "detached-residue-to-white-v1",
+    "residueThreshold": 2,
+    "minimumArea": 64,
+    "legalShadowMaskNeighborhoodAt800": 16,
+    "connectivity": 8,
+    "purifiedComponentCount": 3,
+    "purifiedPixelCount": 485
+  },
+  "productBox": {
+    "left": 0.235,
+    "top": 0.05,
+    "width": 0.53,
+    "height": 0.9
+  },
+  "automaticGates": {
+    "whitePoint": {
+      "passed": true,
+      "point": {
+        "x": 48,
+        "y": 125
+      },
+      "pointRgb": [
+        238,
+        238,
+        238
+      ],
+      "medianRgb": [
+        240,
+        240,
+        240
+      ],
+      "patchPassRate": 1.0,
+      "maskDistance": 160.80111939908875,
+      "patchSize": 31
+    },
+    "sampleOutsideMask": {
+      "passed": true,
+      "birefnetAlpha": 0,
+      "photoshopAlpha": 0
+    },
+    "photoshopShadowParity": {
+      "passed": true,
+      "meanChannelError": 0.0,
+      "maxChannelError": 0
+    },
+    "birefnetMask": {
+      "passed": true,
+      "iou": 0.9991370404636748,
+      "meanBoundaryDistancePxAt800": 0.11759698213563047
+    },
+    "productBox": {
+      "passed": true,
+      "actual": {
+        "left": 0.235,
+        "top": 0.05,
+        "width": 0.53,
+        "height": 0.9
+      },
+      "associatedGold": {
+        "left": 0.23625,
+        "top": 0.05,
+        "width": 0.5275,
+        "height": 0.9
+      },
+      "tolerance": 0.05
+    },
+    "opaqueProductCore": {
+      "passed": true
+    },
+    "outsideProductAndRoiWhite": {
+      "passed": true
+    },
+    "roiBoundary": {
+      "passed": true,
+      "maxChannelJump": 0,
+      "limit": 5
+    },
+    "detachedBackgroundResidue": {
+      "passed": true,
+      "largestDetachedArea": 22,
+      "minimumFailingArea": 64
+    },
+    "outputOpaqueRgb": {
+      "passed": true,
+      "mode": "RGB"
+    }
+  },
+  "automaticGatesPassed": true,
+  "artifactSha256": {
+    "difference.png": "37258747045b3fe5f33ebbbf7d6f3443c4671f29a47a8a355d8023cc513debb6",
+    "input.png": "96bae1fd95394a07d364bb587c3bc361fd2428faa9f0f18999583f60011a9d45",
+    "mask.png": "0cbc76648f8fb7289a1d624eba15c58694a9159c712ba6e82621499885e90a55",
+    "native-preview.png": "42d870420ea8622fa45767d491e69b630d3817b9e6962a7bc4150a37be8c791e",
+    "native-shadow.png": "0f7e1d7d6e4d204c7630c26434e76d8373bf291af91d40774779cd58338b9086",
+    "preview.png": "c654e1a1d425227308a77db294e7f1415c97b65baef03b083a416a6870a8d6a4",
+    "product.png": "efc8267e39f78258e7780f080fe408d52b3c6f84141861b5b7b9e661ffc0f0db",
+    "shadow.png": "0f7e1d7d6e4d204c7630c26434e76d8373bf291af91d40774779cd58338b9086",
+    "side-by-side.png": "cf5ab6035fda69ba97db59d7f77ad7c826b7e0caa32cba303910c9a95dadec8c"
+  }
+}

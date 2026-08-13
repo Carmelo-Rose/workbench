@@ -1,0 +1,396 @@
+{
+  "schemaVersion": 1,
+  "candidateVersion": "hat-ps-shadow-v2.5",
+  "manifestSha256": "13f9db83a6f5505c76c2fc5503fb830ca38806bde4df254268bcd0924f98f24b",
+  "candidateRegistryPinned": true,
+  "candidateModePassed": true,
+  "publicationModeRejected": true,
+  "releaseState": "awaiting-human-approval",
+  "approved": false,
+  "publicationAllowed": false,
+  "goldStandardCount": 10,
+  "regressionAssetCount": 60,
+  "validatorReport": {
+    "version": "hat-ps-shadow-v2.5",
+    "schemaVersion": 3,
+    "candidateMode": true,
+    "releaseState": "awaiting-human-approval",
+    "approved": false,
+    "publicationAllowed": false,
+    "passed": true,
+    "pairCount": 10,
+    "presetGoldPairs": [
+      {
+        "presetId": "hat-angle-slot-2",
+        "angleSlot": 2,
+        "goldStandardId": "329a8209",
+        "sampledPoint": {
+          "x": 11,
+          "y": 658
+        },
+        "sampledPointRgb": [
+          233,
+          233,
+          233
+        ],
+        "sampledRgb": [
+          233,
+          233,
+          233
+        ],
+        "samplePatchPassRate": 1.0,
+        "sampleMaskDistance": 0.0,
+        "samplePatchSize": 1,
+        "productBox": {
+          "left": 0.05,
+          "top": 0.12875,
+          "width": 0.9,
+          "height": 0.745
+        },
+        "shadowMeanChannelError": 0.0572015625,
+        "shadowMaxError": 2,
+        "maskIoU": 0.9985255086994986,
+        "meanBoundaryDistancePxAt800": 0.20354683904635468,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 0,
+        "outputOpaqueRgb": true
+      },
+      {
+        "presetId": "hat-angle-slot-2",
+        "angleSlot": 2,
+        "goldStandardId": "329a8218",
+        "sampledPoint": {
+          "x": 11,
+          "y": 658
+        },
+        "sampledPointRgb": [
+          233,
+          232,
+          232
+        ],
+        "sampledRgb": [
+          233,
+          232,
+          232
+        ],
+        "samplePatchPassRate": 1.0,
+        "sampleMaskDistance": 0.0,
+        "samplePatchSize": 1,
+        "productBox": {
+          "left": 0.05,
+          "top": 0.1225,
+          "width": 0.89875,
+          "height": 0.75625
+        },
+        "shadowMeanChannelError": 0.0544546875,
+        "shadowMaxError": 2,
+        "maskIoU": 0.9938714939507907,
+        "meanBoundaryDistancePxAt800": 0.7791335609458705,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 0,
+        "outputOpaqueRgb": true
+      },
+      {
+        "presetId": "hat-angle-slot-1",
+        "angleSlot": 1,
+        "goldStandardId": "329a8208",
+        "sampledPoint": {
+          "x": 712,
+          "y": 730
+        },
+        "sampledPointRgb": [
+          242,
+          242,
+          242
+        ],
+        "sampledRgb": [
+          243,
+          243,
+          243
+        ],
+        "samplePatchPassRate": 1.0,
+        "sampleMaskDistance": 180.01111076819674,
+        "samplePatchSize": 31,
+        "productBox": {
+          "left": 0.05,
+          "top": 0.1975,
+          "width": 0.89875,
+          "height": 0.60625
+        },
+        "shadowMeanChannelError": 0.0,
+        "shadowMaxError": 0,
+        "maskIoU": 1.0,
+        "meanBoundaryDistancePxAt800": 0.0,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 52,
+        "outputOpaqueRgb": true
+      },
+      {
+        "presetId": "hat-angle-slot-1",
+        "angleSlot": 1,
+        "goldStandardId": "329a8217",
+        "sampledPoint": {
+          "x": 702,
+          "y": 735
+        },
+        "sampledPointRgb": [
+          240,
+          241,
+          239
+        ],
+        "sampledRgb": [
+          242,
+          243,
+          241
+        ],
+        "samplePatchPassRate": 1.0,
+        "sampleMaskDistance": 113.45483682946268,
+        "samplePatchSize": 31,
+        "productBox": {
+          "left": 0.05,
+          "top": 0.185,
+          "width": 0.89875,
+          "height": 0.63
+        },
+        "shadowMeanChannelError": 0.0,
+        "shadowMaxError": 0,
+        "maskIoU": 1.0,
+        "meanBoundaryDistancePxAt800": 0.0,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 50,
+        "outputOpaqueRgb": true
+      },
+      {
+        "presetId": "hat-angle-slot-1",
+        "angleSlot": 1,
+        "goldStandardId": "329a8239",
+        "sampledPoint": {
+          "x": 120,
+          "y": 638
+        },
+        "sampledPointRgb": [
+          240,
+          238,
+          234
+        ],
+        "sampledRgb": [
+          240,
+          238,
+          235
+        ],
+        "samplePatchPassRate": 0.9729448491155047,
+        "sampleMaskDistance": 62.0966987850401,
+        "samplePatchSize": 31,
+        "productBox": {
+          "left": 0.05,
+          "top": 0.2175,
+          "width": 0.9,
+          "height": 0.565
+        },
+        "shadowMeanChannelError": 0.0,
+        "shadowMaxError": 0,
+        "maskIoU": 1.0,
+        "meanBoundaryDistancePxAt800": 0.0,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 7,
+        "outputOpaqueRgb": true
+      },
+      {
+        "presetId": "hat-angle-slot-3",
+        "angleSlot": 3,
+        "goldStandardId": "329a8210",
+        "sampledPoint": {
+          "x": 15,
+          "y": 578
+        },
+        "sampledPointRgb": [
+          240,
+          240,
+          240
+        ],
+        "sampledRgb": [
+          240,
+          240,
+          240
+        ],
+        "samplePatchPassRate": 1.0,
+        "sampleMaskDistance": 0.0,
+        "samplePatchSize": 1,
+        "productBox": {
+          "left": 0.14375,
+          "top": 0.05,
+          "width": 0.7125,
+          "height": 0.9
+        },
+        "shadowMeanChannelError": 0.0,
+        "shadowMaxError": 0,
+        "maskIoU": 0.9981643529562354,
+        "meanBoundaryDistancePxAt800": 0.2857079621260683,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 0,
+        "outputOpaqueRgb": true
+      },
+      {
+        "presetId": "hat-angle-slot-3",
+        "angleSlot": 3,
+        "goldStandardId": "329a8219",
+        "sampledPoint": {
+          "x": 15,
+          "y": 578
+        },
+        "sampledPointRgb": [
+          240,
+          240,
+          240
+        ],
+        "sampledRgb": [
+          240,
+          240,
+          240
+        ],
+        "samplePatchPassRate": 1.0,
+        "sampleMaskDistance": 0.0,
+        "samplePatchSize": 1,
+        "productBox": {
+          "left": 0.15125,
+          "top": 0.05,
+          "width": 0.6975,
+          "height": 0.90125
+        },
+        "shadowMeanChannelError": 0.0,
+        "shadowMaxError": 0,
+        "maskIoU": 0.9984956236323851,
+        "meanBoundaryDistancePxAt800": 0.23429156810514773,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 0,
+        "outputOpaqueRgb": true
+      },
+      {
+        "presetId": "hat-angle-slot-4",
+        "angleSlot": 4,
+        "goldStandardId": "slot4-black-329a8211",
+        "sampledPoint": {
+          "x": 48,
+          "y": 125
+        },
+        "sampledPointRgb": [
+          238,
+          238,
+          238
+        ],
+        "sampledRgb": [
+          240,
+          240,
+          240
+        ],
+        "samplePatchPassRate": 1.0,
+        "sampleMaskDistance": 160.80111939908875,
+        "samplePatchSize": 31,
+        "productBox": {
+          "left": 0.235,
+          "top": 0.05,
+          "width": 0.53,
+          "height": 0.9
+        },
+        "shadowMeanChannelError": 0.0,
+        "shadowMaxError": 0,
+        "maskIoU": 0.9991370404636748,
+        "meanBoundaryDistancePxAt800": 0.11759698213563047,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 22,
+        "outputOpaqueRgb": true
+      },
+      {
+        "presetId": "hat-angle-slot-4",
+        "angleSlot": 4,
+        "goldStandardId": "slot4-blue-329a8220",
+        "sampledPoint": {
+          "x": 44,
+          "y": 154
+        },
+        "sampledPointRgb": [
+          243,
+          242,
+          241
+        ],
+        "sampledRgb": [
+          243,
+          242,
+          242
+        ],
+        "samplePatchPassRate": 1.0,
+        "sampleMaskDistance": 159.26079241294764,
+        "samplePatchSize": 31,
+        "productBox": {
+          "left": 0.245,
+          "top": 0.05125,
+          "width": 0.51,
+          "height": 0.89875
+        },
+        "shadowMeanChannelError": 0.0,
+        "shadowMaxError": 0,
+        "maskIoU": 0.9989047599217091,
+        "meanBoundaryDistancePxAt800": 0.1457985531441291,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 45,
+        "outputOpaqueRgb": true
+      },
+      {
+        "presetId": "hat-angle-slot-4",
+        "angleSlot": 4,
+        "goldStandardId": "slot4-purple-329a8233",
+        "sampledPoint": {
+          "x": 59,
+          "y": 112
+        },
+        "sampledPointRgb": [
+          240,
+          238,
+          239
+        ],
+        "sampledRgb": [
+          241,
+          240,
+          240
+        ],
+        "samplePatchPassRate": 1.0,
+        "sampleMaskDistance": 147.36349615830918,
+        "samplePatchSize": 31,
+        "productBox": {
+          "left": 0.2375,
+          "top": 0.05,
+          "width": 0.52375,
+          "height": 0.9
+        },
+        "shadowMeanChannelError": 0.0,
+        "shadowMaxError": 0,
+        "maskIoU": 0.9986870879029853,
+        "meanBoundaryDistancePxAt800": 0.178490990990991,
+        "opaqueProductCoreByteIdentical": true,
+        "outsideProductAndRoiWhite": true,
+        "roiBoundaryMaxChannelJump": 0,
+        "largestDetachedResidueArea": 47,
+        "outputOpaqueRgb": true
+      }
+    ]
+  },
+  "publicationRejection": "RuntimeError: candidate-only package cannot be validated in publication mode"
+}
