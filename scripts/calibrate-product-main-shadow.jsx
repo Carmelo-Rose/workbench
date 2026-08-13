@@ -5,7 +5,7 @@
  * WORKBENCH_SHADOW_CALIBRATION_REQUEST. Production never invokes this file.
  *
  * Required request fields: input, outputDir, presetVersion, angleSlot (1..6),
- * angleLabel, roi{x,y,width,height}, whitePoint{x,y}, sampledRgb[r,g,b], and
+ * angleLabel, roi{x,y,width,height}, sampledPoint{x,y}, sampledRgb[r,g,b], and
  * layerNames{product,shadow,background}. The script works on a duplicate and
  * never saves over the source.
  */
@@ -79,15 +79,48 @@
         descriptor.putBoolean(stringIDToTypeID("sampleAllLayers"), false);
         executeAction(stringIDToTypeID("autoCutout"), descriptor, DialogModes.NO);
     }
+    function selectFromPinnedMask(document, maskPath) {
+        var maskFile = new File(maskPath);
+        if (!maskFile.exists) fail("birefnetMask does not exist");
+        var maskDocument = app.open(maskFile);
+        if (maskDocument.width.as("px") !== document.width.as("px") || maskDocument.height.as("px") !== document.height.as("px")) {
+            maskDocument.close(SaveOptions.DONOTSAVECHANGES);
+            fail("birefnetMask dimensions do not match input");
+        }
+        maskDocument.selection.selectAll();
+        maskDocument.selection.copy(false);
+        maskDocument.close(SaveOptions.DONOTSAVECHANGES);
+        app.activeDocument = document;
+        var alpha = document.channels.add(); alpha.name = "pinned-birefnet-selection";
+        document.activeChannels = [alpha];
+        document.paste();
+        document.selection.load(alpha);
+        alpha.remove();
+        document.activeChannels = [document.channels.getByName("Red"), document.channels.getByName("Green"), document.channels.getByName("Blue")];
+    }
     function savePng(document, file) {
         var options = new PNGSaveOptions(); options.interlaced = false;
         document.saveAs(file, options, true, Extension.LOWERCASE);
+    }
+    function duplicateFileLayerInto(filePath, target, layerName, placementLayer) {
+        var file = new File(filePath);
+        if (!file.exists) fail(layerName + " file does not exist");
+        var layerDocument = app.open(file);
+        var duplicated = layerDocument.activeLayer.duplicate(target, ElementPlacement.PLACEATBEGINNING);
+        layerDocument.close(SaveOptions.DONOTSAVECHANGES);
+        app.activeDocument = target;
+        duplicated.name = layerName;
+        if (placementLayer) duplicated.move(placementLayer, ElementPlacement.PLACEBEFORE);
+        return duplicated;
     }
     function requireString(value, label) {
         if (typeof value !== "string" || !value.length) fail(label + " is required");
     }
     function requireInteger(value, label) {
         if (typeof value !== "number" || value !== Math.floor(value)) fail(label + " must be an integer");
+    }
+    function isAdaptiveRequest(value) {
+        return value.presetVersion === "hat-ps-shadow-v2.4" || value.presetVersion === "slot-4-development";
     }
     function validateRequest(value) {
         if (!value || typeof value !== "object") fail("request must be an object");
@@ -99,9 +132,21 @@
         var roiKeys = ["x", "y", "width", "height"];
         for (var index = 0; index < roiKeys.length; index++) requireInteger(value.roi[roiKeys[index]], "roi." + roiKeys[index]);
         if (value.roi.x < 0 || value.roi.y < 0 || value.roi.width <= 0 || value.roi.height <= 0 || value.roi.x >= 800 || value.roi.y >= 800 || value.roi.x + value.roi.width > 800 || value.roi.y + value.roi.height > 1600) fail("roi is invalid; only bottom overflow is permitted");
-        if (!value.whitePoint) fail("whitePoint is required");
-        requireInteger(value.whitePoint.x, "whitePoint.x"); requireInteger(value.whitePoint.y, "whitePoint.y");
-        if (value.whitePoint.x < 0 || value.whitePoint.x >= 800 || value.whitePoint.y < 0 || value.whitePoint.y >= 800) fail("whitePoint is outside the 800-reference canvas");
+        if (isAdaptiveRequest(value)) {
+            if (value.presetVersion === "slot-4-development" && value.developmentIdentity !== "slot-4-development") fail("developmentIdentity must explicitly match presetVersion");
+            requireString(value.sourceId, "sourceId");
+            requireString(value.birefnetMask, "birefnetMask");
+            requireString(value.productLayer, "productLayer");
+            requireString(value.shadowLayer, "shadowLayer");
+            if (!value.sampledPoint || value.whitePoint) fail("v2.4 requires sampledPoint and forbids fixed whitePoint");
+            requireInteger(value.sampledPoint.x, "sampledPoint.x"); requireInteger(value.sampledPoint.y, "sampledPoint.y");
+            if (value.sampledPoint.x < 0 || value.sampledPoint.x >= 800 || value.sampledPoint.y < 0 || value.sampledPoint.y >= 800) fail("sampledPoint is outside the source canvas");
+            if (!value.whiteSamplePolicy || !value.goldStandardIds || !(value.goldStandardIds instanceof Array) || value.goldStandardIds.length < 2) fail("adaptive request requires explicit whiteSamplePolicy and at least two goldStandardIds");
+        } else {
+            if (!value.whitePoint) fail("historical requests require whitePoint");
+            requireInteger(value.whitePoint.x, "whitePoint.x"); requireInteger(value.whitePoint.y, "whitePoint.y");
+            if (value.whitePoint.x < 0 || value.whitePoint.x >= 800 || value.whitePoint.y < 0 || value.whitePoint.y >= 800) fail("whitePoint is outside the 800-reference canvas");
+        }
         if (!(value.sampledRgb instanceof Array) || value.sampledRgb.length !== 3) fail("sampledRgb must contain the three raw V1 channels");
         for (var channelIndex = 0; channelIndex < 3; channelIndex++) {
             requireInteger(value.sampledRgb[channelIndex], "sampledRgb[" + channelIndex + "]");
@@ -120,6 +165,7 @@
     var input = new File(request.input);
     var outputDir = new Folder(request.outputDir);
     if (!input.exists) fail("input does not exist");
+    if (request.sourceId && input.name.replace(/\.[^.]+$/, "") !== request.sourceId) fail("input filename does not match sourceId");
     if (outputDir.exists) fail("outputDir already exists; refusing to overwrite");
     if (!outputDir.create()) fail("cannot create output directory");
 
@@ -136,8 +182,8 @@
     doc.bitsPerChannel = BitsPerChannelType.EIGHT;
 
     var scale = doc.width.as("px") / 800;
-    var sampleX = Math.round(request.whitePoint.x * scale);
-    var sampleY = Math.round(request.whitePoint.y * scale);
+    var sampleX = request.sampledPoint ? request.sampledPoint.x : Math.round(request.whitePoint.x * scale);
+    var sampleY = request.sampledPoint ? request.sampledPoint.y : Math.round(request.whitePoint.y * scale);
     var sampler = doc.colorSamplers.add([UnitValue(sampleX, "px"), UnitValue(sampleY, "px")]);
     var color = sampler.color.rgb;
     var photoshopSampledRgb = [
@@ -148,7 +194,7 @@
     // Photoshop's colour-management display conversion can shift a channel by
     // one even though the decoded PNG byte is unchanged. Native composition
     // works from those source bytes, so both implementations must use the raw
-    // V1 sample supplied by the fail-closed request.
+    // V1 per-channel median supplied by the fail-closed adaptive sampler.
     var whiteR = request.sampledRgb[0];
     var whiteG = request.sampledRgb[1];
     var whiteB = request.sampledRgb[2];
@@ -164,19 +210,29 @@
     var white = new SolidColor(); white.rgb.red = 255; white.rgb.green = 255; white.rgb.blue = 255;
     doc.selection.fill(white, ColorBlendMode.NORMAL, 100, false); doc.selection.deselect();
 
-    var shadow = original.duplicate(); shadow.name = request.layerNames.shadow;
-    shadow.move(background, ElementPlacement.PLACEBEFORE); doc.activeLayer = shadow;
-    var left = Math.round(request.roi.x * scale);
-    var top = Math.round(request.roi.y * scale);
-    var right = Math.round((request.roi.x + request.roi.width) * scale);
-    var bottom = Math.round((request.roi.y + request.roi.height) * scale);
-    doc.selection.select([[left, top], [right, top], [right, bottom], [left, bottom]], SelectionType.REPLACE, 0, false);
-    doc.selection.invert(); doc.selection.clear(); doc.selection.deselect();
-    applyLevels(whiteR, whiteG, whiteB);
-
-    var product = original.duplicate(); product.name = request.layerNames.product;
-    product.move(shadow, ElementPlacement.PLACEBEFORE); doc.activeLayer = product;
-    selectSubject(); doc.selection.invert(); doc.selection.clear(); doc.selection.deselect();
+    var shadow, product;
+    if (isAdaptiveRequest(request)) {
+        shadow = duplicateFileLayerInto(request.shadowLayer, doc, request.layerNames.shadow, background);
+        product = original.duplicate(); product.name = request.layerNames.product;
+        product.move(shadow, ElementPlacement.PLACEBEFORE); doc.activeLayer = product;
+        // The product layer and its exported mask must originate from Photoshop
+        // Select Subject, never from the locked BiRefNet matte used by native compositing.
+        selectSubject();
+        doc.selection.invert(); doc.selection.clear(); doc.selection.deselect();
+    } else {
+        shadow = original.duplicate(); shadow.name = request.layerNames.shadow;
+        shadow.move(background, ElementPlacement.PLACEBEFORE); doc.activeLayer = shadow;
+        var left = Math.round(request.roi.x * scale);
+        var top = Math.round(request.roi.y * scale);
+        var right = Math.round((request.roi.x + request.roi.width) * scale);
+        var bottom = Math.round((request.roi.y + request.roi.height) * scale);
+        doc.selection.select([[left, top], [right, top], [right, bottom], [left, bottom]], SelectionType.REPLACE, 0, false);
+        doc.selection.invert(); doc.selection.clear(); doc.selection.deselect();
+        applyLevels(whiteR, whiteG, whiteB);
+        product = original.duplicate(); product.name = request.layerNames.product;
+        product.move(shadow, ElementPlacement.PLACEBEFORE); doc.activeLayer = product;
+        selectSubject(); doc.selection.invert(); doc.selection.clear(); doc.selection.deselect();
+    }
     original.remove();
 
     var psdOptions = new PhotoshopSaveOptions(); psdOptions.layers = true; psdOptions.embedColorProfile = true;
@@ -190,7 +246,11 @@
     maskDoc = doc.duplicate("product-mask", false);
     app.activeDocument = maskDoc;
     var maskProduct = maskDoc.artLayers.getByName(request.layerNames.product);
-    maskDoc.activeLayer = maskProduct; selectSubject();
+    maskDoc.activeLayer = maskProduct;
+    // A second Select Subject pass is intentional: it exports an independent
+    // Photoshop mask from the Photoshop-cleaned product layer rather than the
+    // BiRefNet input used by native compositing.
+    selectSubject();
     var savedSelection = maskDoc.channels.add(); savedSelection.name = "product-selection";
     maskDoc.selection.store(savedSelection); maskDoc.selection.deselect();
     for (var layerIndex = 0; layerIndex < maskDoc.layers.length; layerIndex++) maskDoc.layers[layerIndex].visible = false;
@@ -212,6 +272,7 @@
         releaseState: "awaiting-human-approval",
         approved: false,
         publicationAllowed: false,
+        sourceId: request.sourceId || input.name.replace(/\.[^.]+$/, ""),
         input: request.input,
         outputPsd: psdFile.fsName,
         presetVersion: request.presetVersion,
@@ -219,9 +280,11 @@
         humanAngleLabel: request.angleLabel,
         referenceCanvas: { width: 800, height: 800 },
         roi: request.roi,
-        whitePoint: request.whitePoint,
+        sampledPoint: request.sampledPoint || { x: sampleX, y: sampleY },
+        sampledPointRgb: request.sampledPointRgb || photoshopSampledRgb,
         sampledRgb: [whiteR, whiteG, whiteB],
         photoshopSampledRgb: photoshopSampledRgb,
+        productMaskSource: "photoshop-select-subject-second-pass-on-photoshop-product",
         layerNames: request.layerNames,
         layersTopToBottom: [request.layerNames.product, request.layerNames.shadow, request.layerNames.background]
     });

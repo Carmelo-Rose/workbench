@@ -20,16 +20,44 @@ ALGORITHM = {
     "id": "ps-levels-roi-v1",
     "levels": "round(value*255/whitePoint)-clamp-255",
 }
+ADAPTIVE_ALGORITHM = {
+    "id": "ps-levels-roi-v2-adaptive-white",
+    "levels": "round(value*255/channelMedian)-clamp-255",
+}
 FIXED_GATES = {
     "whitePointMin": 220,
     "whitePointMax": 245,
     "whitePointMaxChannelSpread": 8,
     "productBoxTolerance": 0.05,
 }
+ADAPTIVE_GATES = {
+    **FIXED_GATES,
+    "roiBoundaryMaxChannelJump": 5,
+    "detachedResidueMinArea": 64,
+    "residueThreshold": 2,
+    "legalShadowMaskNeighborhood": 16,
+}
+ADAPTIVE_WHITE_SAMPLE_POLICY = {
+    "referencePatchSize": 31,
+    "minimumPatchPassRate": 0.95,
+    "minimumMaskDistance": 32,
+    "minimumEdgeDistance": 16,
+    "rgbMin": 220,
+    "rgbMax": 245,
+    "maxChannelSpread": 8,
+    "targetMean": 240,
+    "selectionOrder": ["patch-pass-rate-desc", "mask-distance-desc", "mean-distance-to-240-asc", "y-asc", "x-asc"],
+    "median": "per-channel-median-of-valid-patch-pixels",
+}
 SAFE_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.-")
+DEVELOPMENT_IDENTITY = "slot-4-development"
 SCHEMA_BY_VERSION = {
     "hat-ps-shadow-v2.1": 1,
+    "hat-ps-shadow-v2.2": 2,
     "hat-ps-shadow-v2.3": 2,
+    "hat-ps-shadow-v2.4": 3,
+    "hat-ps-shadow-v2.5": 3,
+    DEVELOPMENT_IDENTITY: 3,
 }
 
 
@@ -70,6 +98,7 @@ def package_file(root: Path, value: Any, label: str, *, require_relative: bool =
 
 
 def validate_release_policy(manifest: dict[str, Any], registry: dict[str, Any], candidate_mode: bool) -> None:
+    development_identity = manifest.get("version") == DEVELOPMENT_IDENTITY
     if candidate_mode:
         for value, label in ((manifest, "manifest"), (registry, "registry")):
             if value.get("candidateOnly") is not True:
@@ -78,13 +107,17 @@ def validate_release_policy(manifest: dict[str, Any], registry: dict[str, Any], 
                 fail(f"candidate-mode {label} must be awaiting-human-approval")
             if value.get("approved") is not False or value.get("publicationAllowed") is not False:
                 fail(f"candidate-mode {label} must explicitly forbid approval and publication")
+        if development_identity and (manifest.get("developmentIdentity") != DEVELOPMENT_IDENTITY or registry.get("developmentIdentity") != DEVELOPMENT_IDENTITY):
+            fail("slot-4-development candidate must carry the explicit development identity in manifest and registry")
         return
 
+    if development_identity:
+        fail("slot-4-development is a development identity and cannot be validated in publication mode")
     if registry.get("candidateOnly") is True or manifest.get("candidateOnly") is True:
         fail("candidate-only package cannot be validated in publication mode")
-    if manifest.get("version") == "hat-ps-shadow-v2.3":
+    if SCHEMA_BY_VERSION.get(manifest.get("version")) in (2, 3):
         if manifest.get("candidateOnly") is not False or manifest.get("releaseState") != "approved" or manifest.get("approved") is not True or manifest.get("publicationAllowed") is not True:
-            fail("schema-v2 publication requires explicit approved release state and candidateOnly false")
+            fail("schema-v2/v3 publication requires explicit approved release state and candidateOnly false")
         return
     release_keys = ("releaseState", "approved", "publicationAllowed")
     if any(key in manifest for key in release_keys):
@@ -182,18 +215,112 @@ def validate_point(point: Any, preset_id: str) -> None:
         fail(f"preset whitePoint is outside reference canvas: {preset_id}")
 
 
+def scale_coordinate(value: int, side: int) -> int:
+    return math.floor(value * side / REFERENCE_SIDE + 0.5)
+
+
+def scaled_roi(preset: dict[str, Any], side: int) -> tuple[int, int, int, int]:
+    roi = preset["roi"]
+    left = scale_coordinate(roi["x"], side)
+    top = scale_coordinate(roi["y"], side)
+    right = min(side, scale_coordinate(roi["x"] + roi["width"], side))
+    bottom = min(side, scale_coordinate(roi["y"] + roi["height"], side))
+    if left < 0 or top < 0 or left >= side or top >= side or right <= left or bottom <= top:
+        fail(f"scaled ROI is empty: {preset['id']}")
+    return left, top, right, bottom
+
+
+def adaptive_white_sample(source: np.ndarray, mask: np.ndarray, preset: dict[str, Any]) -> dict[str, Any]:
+    policy = preset["whiteSamplePolicy"]
+    side = source.shape[1]
+    left, top, right, bottom = scaled_roi(preset, side)
+    patch_size = max(1, scale_coordinate(policy["referencePatchSize"], side))
+    if patch_size % 2 == 0:
+        patch_size += 1
+    radius = patch_size // 2
+    distances = ndi.distance_transform_edt(mask == 0)
+    yy, xx = np.indices(mask.shape)
+    edge = np.minimum.reduce((xx - left, right - 1 - xx, yy - top, bottom - 1 - yy, xx, side - 1 - xx, yy, side - 1 - yy))
+    spread = source.max(axis=2) - source.min(axis=2)
+    rgb_valid = np.all((source >= policy["rgbMin"]) & (source <= policy["rgbMax"]), axis=2) & (spread <= policy["maxChannelSpread"])
+    valid = ((xx >= left) & (xx < right) & (yy >= top) & (yy < bottom)
+             & (mask == 0)
+             & (distances >= scale_coordinate(policy["minimumMaskDistance"], side))
+             & (edge >= scale_coordinate(policy["minimumEdgeDistance"], side))
+             & rgb_valid)
+    counts = np.rint(ndi.uniform_filter(valid.astype(np.float64), size=patch_size, mode="constant", cval=0) * patch_size * patch_size)
+    candidates = np.argwhere(valid & (counts / (patch_size * patch_size) >= policy["minimumPatchPassRate"]))
+    if not candidates.size:
+        fail(f"adaptive white-field sample not found: {preset['id']}")
+
+    def score(point: np.ndarray) -> tuple[float, float, float, int, int]:
+        y, x = int(point[0]), int(point[1])
+        return (-float(counts[y, x]), -float(distances[y, x]), abs(float(source[y, x].mean()) - policy["targetMean"]), y, x)
+
+    sample_y, sample_x = (int(value) for value in min(candidates, key=score))
+    patch_valid = valid[sample_y - radius:sample_y + radius + 1, sample_x - radius:sample_x + radius + 1]
+    patch = source[sample_y - radius:sample_y + radius + 1, sample_x - radius:sample_x + radius + 1][patch_valid]
+    median = tuple(int(np.floor(value + 0.5)) for value in np.median(patch, axis=0))
+    return {
+        "point": {"x": sample_x, "y": sample_y},
+        "pointRgb": tuple(int(value) for value in source[sample_y, sample_x]),
+        "medianRgb": median,
+        "patchPassRate": float(patch_valid.sum() / (patch_size * patch_size)),
+        "maskDistance": float(distances[sample_y, sample_x]),
+        "patchSize": patch_size,
+    }
+
+
+def roi_boundary_jump(image: np.ndarray, mask: np.ndarray, roi: tuple[int, int, int, int]) -> int:
+    left, top, right, bottom = roi
+    maximum = 0
+    def compare(first: np.ndarray, second: np.ndarray, allowed: np.ndarray) -> None:
+        nonlocal maximum
+        if allowed.any():
+            maximum = max(maximum, int(np.abs(first.astype(np.int16) - second.astype(np.int16))[allowed].max()))
+    if top > 0:
+        compare(image[top - 1, left:right], image[top, left:right], (mask[top - 1, left:right] == 0) & (mask[top, left:right] == 0))
+    if bottom < image.shape[0]:
+        compare(image[bottom - 1, left:right], image[bottom, left:right], (mask[bottom - 1, left:right] == 0) & (mask[bottom, left:right] == 0))
+    if left > 0:
+        compare(image[top:bottom, left - 1], image[top:bottom, left], (mask[top:bottom, left - 1] == 0) & (mask[top:bottom, left] == 0))
+    if right < image.shape[1]:
+        compare(image[top:bottom, right - 1], image[top:bottom, right], (mask[top:bottom, right - 1] == 0) & (mask[top:bottom, right] == 0))
+    return maximum
+
+
+def detached_residue_area(image: np.ndarray, mask: np.ndarray, gates: dict[str, Any]) -> int:
+    residue = (mask == 0) & ((255 - image.min(axis=2)) >= gates["residueThreshold"])
+    labels, count = ndi.label(residue, structure=np.ones((3, 3), dtype=np.uint8))
+    distances = ndi.distance_transform_edt(mask == 0)
+    neighborhood = scale_coordinate(gates["legalShadowMaskNeighborhood"], image.shape[1])
+    largest = 0
+    for label in range(1, count + 1):
+        component = labels == label
+        if not np.any(component & (distances <= neighborhood)):
+            largest = max(largest, int(component.sum()))
+    return largest
+
+
+def purify_detached_background_residue(image: np.ndarray, mask: np.ndarray, gates: dict[str, Any]) -> np.ndarray:
+    purified = image.copy()
+    residue = (mask == 0) & ((255 - purified.min(axis=2)) >= gates["residueThreshold"])
+    labels, count = ndi.label(residue, structure=np.ones((3, 3), dtype=np.uint8))
+    distances = ndi.distance_transform_edt(mask == 0)
+    neighborhood = scale_coordinate(gates["legalShadowMaskNeighborhood"], image.shape[1])
+    for label in range(1, count + 1):
+        component = labels == label
+        if int(component.sum()) < gates["detachedResidueMinArea"] or np.any(component & (distances <= neighborhood)):
+            continue
+        purified[component] = 255
+    return purified
+
+
 def native_shadow(source: np.ndarray, preset: dict[str, Any], sampled: tuple[int, int, int]) -> tuple[np.ndarray, tuple[int, int, int, int]]:
     height, width = source.shape[:2]
     if height != width:
         fail("regression input is not square")
-    scale = width / REFERENCE_SIDE
-    roi = preset["roi"]
-    left = math.floor(roi["x"] * scale + 0.5)
-    top = math.floor(roi["y"] * scale + 0.5)
-    right = min(width, math.floor((roi["x"] + roi["width"]) * scale + 0.5))
-    bottom = min(height, math.floor((roi["y"] + roi["height"]) * scale + 0.5))
-    if left < 0 or top < 0 or left >= width or top >= height or right <= left or bottom <= top:
-        fail(f"scaled ROI is empty: {preset['id']}")
+    left, top, right, bottom = scaled_roi(preset, width)
     output = np.full_like(source, 255)
     region = source[top:bottom, left:right].astype(np.float64)
     for channel, white in enumerate(sampled):
@@ -279,13 +406,20 @@ def validate_pair(manifest: dict[str, Any], root: Path, preset: dict[str, Any], 
         if mismatches:
             fail(f"gold PSD pixels do not match packaged regression assets: {gold['id']} -> {mismatches}")
 
-    point = preset["whitePoint"]
-    sample_x = math.floor(point["x"] * source.shape[1] / REFERENCE_SIDE + 0.5)
-    sample_y = math.floor(point["y"] * source.shape[0] / REFERENCE_SIDE + 0.5)
-    if sample_x >= source.shape[1] or sample_y >= source.shape[0]:
-        fail(f"sample point is outside scaled input: {preset['id']} x {prefix}")
-    sampled = tuple(int(value) for value in source[sample_y, sample_x])
     gates = manifest["gates"]
+    adaptive = manifest["schemaVersion"] == 3 and "whiteSamplePolicy" in preset
+    if adaptive:
+        sample = adaptive_white_sample(source, birefnet_mask, preset)
+        sample_x, sample_y = sample["point"]["x"], sample["point"]["y"]
+        sampled = sample["medianRgb"]
+    else:
+        point = preset["whitePoint"]
+        sample_x = math.floor(point["x"] * source.shape[1] / REFERENCE_SIDE + 0.5)
+        sample_y = math.floor(point["y"] * source.shape[0] / REFERENCE_SIDE + 0.5)
+        if sample_x >= source.shape[1] or sample_y >= source.shape[0]:
+            fail(f"sample point is outside scaled input: {preset['id']} x {prefix}")
+        sampled = tuple(int(value) for value in source[sample_y, sample_x])
+        sample = {"point": {"x": sample_x, "y": sample_y}, "pointRgb": sampled, "medianRgb": sampled, "patchPassRate": 1.0, "maskDistance": 0.0, "patchSize": 1}
     if not all(gates["whitePointMin"] <= value <= gates["whitePointMax"] for value in sampled) or max(sampled) - min(sampled) > gates["whitePointMaxChannelSpread"]:
         fail(f"white-point gate failed: {preset['id']} x {prefix} RGB={sampled}")
     if birefnet_mask[sample_y, sample_x] != 0 or ps_mask[sample_y, sample_x] != 0:
@@ -294,7 +428,10 @@ def validate_pair(manifest: dict[str, Any], root: Path, preset: dict[str, Any], 
     actual_box = product_box(birefnet_mask)
     if not box_matches(actual_box, gold["productBox"], gates["productBoxTolerance"]):
         fail(f"product box gate failed: {preset['id']} x {prefix} actual={actual_box}")
-    rendered_shadow, roi = native_shadow(source, preset, sampled)
+    rendered_shadow_before_purification, roi = native_shadow(source, preset, sampled)
+    alpha = birefnet_mask.astype(np.float64) / 255
+    output_before_purification = np.rint(source * alpha[..., None] + rendered_shadow_before_purification * (1 - alpha[..., None])).astype(np.uint8)
+    rendered_shadow = purify_detached_background_residue(rendered_shadow_before_purification, birefnet_mask, gates) if adaptive else rendered_shadow_before_purification
     delta = np.abs(rendered_shadow.astype(np.int16) - ps_shadow.astype(np.int16))
     mean_error = float(delta.mean())
     max_error = int(delta.max())
@@ -305,7 +442,6 @@ def validate_pair(manifest: dict[str, Any], root: Path, preset: dict[str, Any], 
     if iou < 0.98 or boundary_at_800 > 3:
         fail(f"BiRefNet mask parity failed: {preset['id']} x {prefix} IoU={iou} boundary={boundary_at_800}")
 
-    alpha = birefnet_mask.astype(np.float64) / 255
     output = np.rint(source * alpha[..., None] + rendered_shadow * (1 - alpha[..., None])).astype(np.uint8)
     core = birefnet_mask == 255
     if not np.array_equal(output[core], source[core]):
@@ -315,11 +451,25 @@ def validate_pair(manifest: dict[str, Any], root: Path, preset: dict[str, Any], 
     outside = (birefnet_mask == 0) & ((xx < left) | (xx >= right) | (yy < top) | (yy >= bottom))
     if not np.all(output[outside] == 255):
         fail(f"pixels outside product and ROI are not white: {preset['id']} x {prefix}")
+    boundary_jump = 0
+    detached_area = 0
+    if adaptive:
+        boundary_jump = roi_boundary_jump(output_before_purification, birefnet_mask, roi)
+        if boundary_jump > gates["roiBoundaryMaxChannelJump"]:
+            fail(f"ROI boundary channel jump failed: {preset['id']} x {prefix} jump={boundary_jump}")
+        detached_area = detached_residue_area(output, birefnet_mask, gates)
+        if detached_area >= gates["detachedResidueMinArea"]:
+            fail(f"detached background residue failed: {preset['id']} x {prefix} area={detached_area}")
     return {
         "presetId": preset["id"],
         "angleSlot": preset["angleSlot"],
         "goldStandardId": prefix,
+        "sampledPoint": sample["point"],
+        "sampledPointRgb": sample["pointRgb"],
         "sampledRgb": sampled,
+        "samplePatchPassRate": sample["patchPassRate"],
+        "sampleMaskDistance": sample["maskDistance"],
+        "samplePatchSize": sample["patchSize"],
         "productBox": actual_box,
         "shadowMeanChannelError": mean_error,
         "shadowMaxError": max_error,
@@ -327,6 +477,9 @@ def validate_pair(manifest: dict[str, Any], root: Path, preset: dict[str, Any], 
         "meanBoundaryDistancePxAt800": boundary_at_800,
         "opaqueProductCoreByteIdentical": True,
         "outsideProductAndRoiWhite": True,
+        "roiBoundaryMaxChannelJump": boundary_jump,
+        "largestDetachedResidueArea": detached_area,
+        "outputOpaqueRgb": True,
     }
 
 
@@ -347,14 +500,15 @@ def main() -> None:
     if len(pins) != 1 or pins[0].get("manifestSha256") != manifest_digest(manifest):
         fail("manifest is not pinned exactly once by registry")
     schema_version = manifest.get("schemaVersion")
-    if schema_version not in (1, 2):
-        fail("manifest schemaVersion must be 1 or 2")
+    if schema_version not in (1, 2, 3):
+        fail("manifest schemaVersion must be 1, 2, or 3")
     expected_schema = expected_schema_version(manifest.get("version"))
     if schema_version != expected_schema:
         fail(f"{manifest.get('version')} must use manifest schema v{expected_schema}")
     if manifest.get("canvas") != {"width": REFERENCE_SIDE, "height": REFERENCE_SIDE}:
         fail("reference canvas must be 800x800")
-    if manifest.get("algorithm") != ALGORITHM:
+    expected_algorithm = ADAPTIVE_ALGORITHM if schema_version == 3 else ALGORITHM
+    if manifest.get("algorithm") != expected_algorithm:
         fail("manifest algorithm revision is not approved")
     if manifest.get("biRefNet") != {
         "modelId": BIREFNET_MODEL_ID,
@@ -362,7 +516,8 @@ def main() -> None:
         "weightsSha256": BIREFNET_WEIGHTS_SHA256,
     }:
         fail("BiRefNet model, revision, or weights hash is not approved")
-    if manifest.get("gates") != FIXED_GATES:
+    expected_gates = ADAPTIVE_GATES if schema_version == 3 else FIXED_GATES
+    if manifest.get("gates") != expected_gates:
         fail("manifest gate thresholds do not match the fixed release gates")
     validate_candidate_evidence(manifest, root, args.candidate_mode)
 
@@ -427,21 +582,27 @@ def main() -> None:
         elif preset.get("approved") is not True:
             fail(f"preset is not approved: {preset_id}")
         validate_rect(preset.get("roi"), preset_id)
-        validate_point(preset.get("whitePoint"), preset_id)
+        if schema_version == 3 and "whiteSamplePolicy" in preset:
+            if "whitePoint" in preset or preset.get("whiteSamplePolicy") != ADAPTIVE_WHITE_SAMPLE_POLICY:
+                fail(f"schema v3 adaptive preset must use the immutable whiteSamplePolicy: {preset_id}")
+        else:
+            if "whiteSamplePolicy" in preset:
+                fail(f"fixed white-point preset cannot also declare whiteSamplePolicy: {preset_id}")
+            validate_point(preset.get("whitePoint"), preset_id)
         preset_ids.add(preset_id)
         slots.add(slot)
         scoped_ids = associated_gold_ids(schema_version, preset, gold_ids)
-        if schema_version == 2:
+        if schema_version in (2, 3):
             overlapping = sorted(set(scoped_ids) & assigned_gold_ids)
             if overlapping:
                 fail(f"gold standards cannot be associated with multiple presets: {overlapping}")
             assigned_gold_ids.update(scoped_ids)
         for gold_id in scoped_ids:
             pairs.append((preset, gold_by_id[gold_id]))
-    if schema_version == 2:
+    if schema_version in (2, 3):
         unassigned = sorted(set(gold_ids) - assigned_gold_ids)
         if unassigned:
-            fail(f"schema v2 gold standards must be associated exactly once: {unassigned}")
+            fail(f"schema v2/v3 gold standards must be associated exactly once: {unassigned}")
     if args.candidate_mode and unapproved_candidate_presets == 0:
         fail("candidate-mode package must contain at least one unapproved preset")
 

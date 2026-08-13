@@ -121,7 +121,7 @@ export const monoImageGenerationSchema = z.object({
 export const productPipelineWorkflowId = "hat-62604171-v1" as const;
 export const productMainImageVersions = ["whitefield-v1", "calibrated-shadow-v2"] as const;
 export type ProductMainImageVersion = (typeof productMainImageVersions)[number];
-export const productShadowPresetVersions = ["hat-ps-shadow-v2.1", "hat-ps-shadow-v2.3"] as const;
+export const productShadowPresetVersions = ["hat-ps-shadow-v2.1", "hat-ps-shadow-v2.2", "hat-ps-shadow-v2.3", "hat-ps-shadow-v2.4", "hat-ps-shadow-v2.5"] as const;
 export type ProductShadowPresetVersion = (typeof productShadowPresetVersions)[number];
 export function isProductShadowPresetVersion(value: unknown): value is ProductShadowPresetVersion {
   return typeof value === "string" && (productShadowPresetVersions as readonly string[]).includes(value);

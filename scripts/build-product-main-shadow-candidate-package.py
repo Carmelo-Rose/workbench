@@ -17,9 +17,34 @@ from typing import Any
 from PIL import Image
 
 
-TARGET_VERSION = "hat-ps-shadow-v2.3"
 BASELINE_VERSION = "hat-ps-shadow-v2.1"
-SLOT3_GOLD_IDS = ("329a8210", "329a8219")
+ADAPTIVE_VERSION = "hat-ps-shadow-v2.4"
+ADAPTIVE_ALGORITHM = {
+    "id": "ps-levels-roi-v2-adaptive-white",
+    "levels": "round(value*255/channelMedian)-clamp-255",
+}
+ADAPTIVE_GATES = {
+    "whitePointMin": 220,
+    "whitePointMax": 245,
+    "whitePointMaxChannelSpread": 8,
+    "productBoxTolerance": 0.05,
+    "roiBoundaryMaxChannelJump": 5,
+    "detachedResidueMinArea": 64,
+    "residueThreshold": 2,
+    "legalShadowMaskNeighborhood": 16,
+}
+ADAPTIVE_WHITE_SAMPLE_POLICY = {
+    "referencePatchSize": 31,
+    "minimumPatchPassRate": 0.95,
+    "minimumMaskDistance": 32,
+    "minimumEdgeDistance": 16,
+    "rgbMin": 220,
+    "rgbMax": 245,
+    "maxChannelSpread": 8,
+    "targetMean": 240,
+    "selectionOrder": ["patch-pass-rate-desc", "mask-distance-desc", "mean-distance-to-240-asc", "y-asc", "x-asc"],
+    "median": "per-channel-median-of-valid-patch-pixels",
+}
 REQUIRED_GATE_NAMES = (
     "whitePoint",
     "sampleOutsideMask",
@@ -29,6 +54,7 @@ REQUIRED_GATE_NAMES = (
     "opaqueProductCore",
     "outsideProductAndRoiWhite",
 )
+ADAPTIVE_GATE_NAMES = REQUIRED_GATE_NAMES + ("roiBoundary", "detachedBackgroundResidue", "outputOpaqueRgb")
 ASSET_SOURCES = {
     "input": ("input.png", "input"),
     "product": ("product.png", "product"),
@@ -114,68 +140,95 @@ def copy_pinned(source: Path, stage: Path, relative: str, expected_hash: str | N
 
 def validate_baseline(baseline: Path) -> dict[str, Any]:
     manifest = load_json(baseline / "manifest.json")
-    if manifest.get("schemaVersion") != 1 or manifest.get("version") != BASELINE_VERSION:
-        fail("baseline must be the immutable schema-v1 hat-ps-shadow-v2.1 bundle")
+    baseline_version = manifest.get("version")
+    if not isinstance(baseline_version, str) or not baseline_version.startswith("hat-ps-shadow-"):
+        fail("baseline must be an immutable hat-ps-shadow production bundle")
+    if (manifest.get("candidateOnly") is not False
+        or manifest.get("releaseState") != "approved"
+        or manifest.get("approved") is not True
+        or manifest.get("publicationAllowed") is not True):
+        fail("baseline must be an approved, publishable production bundle")
     golds = manifest.get("goldStandards")
     presets = manifest.get("presets")
     assets = manifest.get("regressionAssets")
-    if not isinstance(golds, list) or len(golds) != 2 or not isinstance(presets, list) or len(presets) != 1:
-        fail("baseline must contain exactly two gold standards and one preset")
-    if presets[0].get("angleSlot") != 2 or presets[0].get("approved") is not True:
-        fail("baseline slot 2 preset must remain approved")
-    if not isinstance(assets, list) or len(assets) != 12:
-        fail("baseline must contain exactly twelve regression assets")
+    if not isinstance(golds, list) or len(golds) < 2 or not isinstance(presets, list) or not presets:
+        fail("baseline must contain gold standards and approved presets")
+    if any(preset.get("approved") is not True for preset in presets):
+        fail("baseline presets must remain approved")
+    if not isinstance(assets, list) or not assets:
+        fail("baseline must contain regression assets")
     baseline_registry = load_json(baseline.parent / "registry.json")
-    pins = [item for item in baseline_registry.get("packages", []) if item.get("version") == BASELINE_VERSION]
+    pins = [item for item in baseline_registry.get("packages", []) if item.get("version") == baseline_version]
     if len(pins) != 1 or pins[0].get("manifestSha256") != manifest_sha256(manifest):
         fail("baseline manifest is not pinned exactly once by the production registry")
     for item in assets:
         source = baseline / item["file"]
         checked_file(source, item["sha256"])
     for gold in golds:
-        checked_file(Path(gold["psdPath"]), gold["psdSha256"])
+        source = Path(gold["psdPath"])
+        if not source.is_absolute():
+            source = baseline / source
+        checked_file(source, gold["psdSha256"])
     return manifest
 
 
-def candidate_evidence_sources(candidate_root: Path) -> list[tuple[str, Path, str]]:
+def candidate_evidence_sources(candidate_root: Path, summary: dict[str, Any]) -> list[tuple[str, Path, str]]:
     values: list[tuple[str, Path, str]] = [
         ("candidate-summary", candidate_root / "candidate-summary.json", "evidence/candidate-summary.json"),
-        ("reference-snapshot-report", candidate_root / "reference/reference-snapshot-report.json", "evidence/reference-snapshot-report.json"),
-        ("reference-visible", candidate_root / "reference/1-copy-visible-reference.png", "evidence/1-copy-visible-reference.png"),
-        ("slot3-black-blue-comparison", candidate_root / "slot3-black-blue-side-by-side.png", "evidence/slot3-black-blue-side-by-side.png"),
-        ("slot3-reference-comparison", candidate_root / "slot3-v1-reference-candidate.png", "evidence/slot3-v1-reference-candidate.png"),
     ]
-    for source_id in ("329A8210", "329A8219"):
-        gold_id = source_id.lower()
-        values.extend([
-            (f"{gold_id}-gate-report", candidate_root / source_id / "calibration-gates-v4/report.json", f"evidence/{source_id}-gate-report.json"),
-            (f"{gold_id}-candidate-preset", candidate_root / source_id / "calibration-gates-v4/candidate-preset.json", f"evidence/{source_id}-candidate-preset.json"),
-            (f"{gold_id}-side-by-side", candidate_root / source_id / "calibration-gates-v4/side-by-side.png", f"evidence/{source_id}-side-by-side.png"),
-            (f"{gold_id}-photoshop-report", candidate_root / source_id / "photoshop-candidate-v4/photoshop-report.json", f"evidence/{source_id}-photoshop-report.json"),
-        ])
+    declared = summary.get("candidateEvidence")
+    if not isinstance(declared, list) or not declared:
+        fail("candidate summary must declare candidateEvidence")
+    seen = {"candidate-summary"}
+    for item in declared:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"] or item["id"] in seen:
+            fail("candidate summary evidence IDs are invalid or duplicated")
+        source_value = item.get("path")
+        if not isinstance(source_value, str) or not source_value:
+            fail(f"candidate evidence path is missing: {item.get('id')}")
+        source = (candidate_root / source_value).resolve()
+        if not is_within(source, candidate_root.resolve()):
+            fail(f"candidate evidence escapes candidate root: {item['id']}")
+        seen.add(item["id"])
+        destination = item.get("packagePath", f"evidence/{Path(source_value).name}")
+        if not isinstance(destination, str) or not destination.startswith("evidence/") or Path(destination).is_absolute():
+            fail(f"candidate evidence package path is invalid: {item['id']}")
+        values.append((item["id"], source, destination))
     return values
 
 
 def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, output_dir: Path, candidate_version: str) -> dict[str, Any]:
-    if candidate_version != TARGET_VERSION:
-        fail(f"this builder is locked to {TARGET_VERSION}")
     candidate, output = validate_destination(repo_root, candidate_root, output_dir)
     baseline = baseline_bundle.resolve()
     baseline_manifest = validate_baseline(baseline)
     summary = load_json(candidate / "candidate-summary.json")
+    if candidate_version != summary.get("candidateVersion"):
+        fail("candidate version must exactly match candidate summary")
+    angle_slot = summary.get("angleSlot")
+    if not isinstance(angle_slot, int) or not 1 <= angle_slot <= 6 or angle_slot == 2:
+        fail("candidate angle slot must be from 1 through 6 and distinct from baseline slot 2")
+    samples = summary.get("samples")
+    if not isinstance(samples, list) or len(samples) < 2:
+        fail("candidate summary must declare at least two same-angle colour samples")
+    if candidate_version == ADAPTIVE_VERSION and len(samples) != 3:
+        fail(f"{ADAPTIVE_VERSION} must bind exactly the black, blue, and white slot-1 samples")
+    source_ids = [item.get("sourceId", item.get("id")) for item in samples if isinstance(item, dict)]
+    gold_ids = [item.get("goldId", str(item.get("id", "")).lower()) for item in samples if isinstance(item, dict)]
+    if len(source_ids) != len(samples) or len(gold_ids) != len(samples) or len(set(source_ids)) != len(samples) or len(set(gold_ids)) != len(samples):
+        fail("candidate sample source and gold IDs must be present and unique")
     required_summary = {
         "schemaVersion": 2,
-        "candidateVersion": TARGET_VERSION,
+        "candidateVersion": candidate_version,
         "releaseState": "awaiting-human-approval",
         "approved": False,
         "publicationAllowed": False,
-        "angleSlot": 3,
+        "angleSlot": angle_slot,
         "automaticGatesPassed": True,
     }
     if any(summary.get(key) != value for key, value in required_summary.items()):
         fail("candidate summary release state or automatic gate status is invalid")
-    if summary.get("goldStandardIds") != list(SLOT3_GOLD_IDS):
-        fail("candidate summary must bind the two slot 3 gold standards")
+    if summary.get("goldStandardIds") != gold_ids:
+        fail("candidate summary must bind its declared same-angle gold standards")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=f".{output.name}-building-", dir=output.parent)).resolve()
@@ -192,6 +245,8 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
 
         for gold in baseline_manifest["goldStandards"]:
             source_psd = Path(gold["psdPath"])
+            if not source_psd.is_absolute():
+                source_psd = baseline / source_psd
             relative, actual = copy_pinned(source_psd, stage, f"gold-psd/{gold['id']}.psd", gold["psdSha256"])
             packaged_gold = deepcopy(gold)
             packaged_gold["sourcePsdPath"] = gold["psdPath"]
@@ -199,9 +254,13 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
             packaged_gold["psdSha256"] = actual
             gold_standards.append(packaged_gold)
 
-        slot3_preset: dict[str, Any] | None = None
-        for source_id, gold_id in zip(("329A8210", "329A8219"), SLOT3_GOLD_IDS, strict=True):
-            gates_root = candidate / source_id / "calibration-gates-v4"
+        candidate_preset: dict[str, Any] | None = None
+        for sample, source_id, gold_id in zip(samples, source_ids, gold_ids, strict=True):
+            gates_dir = sample.get("gatesDir")
+            photoshop_dir = sample.get("photoshopDir")
+            if not isinstance(gates_dir, str) or not isinstance(photoshop_dir, str):
+                fail(f"candidate sample paths are missing: {source_id}")
+            gates_root = candidate / source_id / gates_dir
             report = load_json(gates_root / "report.json")
             preset = load_json(gates_root / "candidate-preset.json")
             expected_report = {
@@ -210,27 +269,31 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
                 "approved": False,
                 "publicationAllowed": False,
                 "goldId": gold_id,
-                "presetVersion": TARGET_VERSION,
-                "angleSlot": 3,
+                "presetVersion": candidate_version,
+                "angleSlot": angle_slot,
                 "automaticGatesPassed": True,
+                "sourceId": source_id,
             }
             if any(report.get(key) != value for key, value in expected_report.items()):
-                fail(f"slot 3 report state is invalid: {gold_id}")
+                fail(f"candidate report state is invalid: {gold_id}")
             automatic = report.get("automaticGates")
-            if not isinstance(automatic, dict) or any(not isinstance(automatic.get(name), dict) or automatic[name].get("passed") is not True for name in REQUIRED_GATE_NAMES):
-                fail(f"slot 3 report does not pass every required automatic gate: {gold_id}")
-            if preset.get("id") != "hat-angle-slot-3" or preset.get("approved") is not False or preset.get("goldStandardIds") != list(SLOT3_GOLD_IDS):
-                fail(f"slot 3 candidate preset is invalid: {gold_id}")
+            required_gate_names = ADAPTIVE_GATE_NAMES if candidate_version == ADAPTIVE_VERSION else REQUIRED_GATE_NAMES
+            if not isinstance(automatic, dict) or any(not isinstance(automatic.get(name), dict) or automatic[name].get("passed") is not True for name in required_gate_names):
+                fail(f"candidate report does not pass every required automatic gate: {gold_id}")
+            if preset.get("id") != f"hat-angle-slot-{angle_slot}" or preset.get("approved") is not False or preset.get("goldStandardIds") != gold_ids:
+                fail(f"candidate preset is invalid: {gold_id}")
             if preset.get("releaseState") != "awaiting-human-approval" or preset.get("publicationAllowed") is not False:
-                fail(f"slot 3 candidate preset is publishable: {gold_id}")
-            if preset.get("roi") != summary.get("roi") or preset.get("whitePoint") != summary.get("whitePoint"):
-                fail(f"slot 3 candidate coordinates disagree with summary: {gold_id}")
-            if slot3_preset is None:
-                slot3_preset = preset
-            elif preset != slot3_preset:
-                fail("slot 3 black and blue candidate presets disagree")
+                fail(f"candidate preset is publishable: {gold_id}")
+            expected_sampling = (preset.get("whiteSamplePolicy") == summary.get("whiteSamplePolicy") == ADAPTIVE_WHITE_SAMPLE_POLICY
+                                 and "whitePoint" not in preset and "whitePoint" not in summary) if candidate_version == ADAPTIVE_VERSION else preset.get("whitePoint") == summary.get("whitePoint")
+            if preset.get("roi") != summary.get("roi") or not expected_sampling:
+                fail(f"candidate coordinates disagree with summary: {gold_id}")
+            if candidate_preset is None:
+                candidate_preset = preset
+            elif preset != candidate_preset:
+                fail("same-angle colour candidate presets disagree")
 
-            source_psd = candidate / source_id / "photoshop-candidate-v4/calibration.psd"
+            source_psd = candidate / source_id / photoshop_dir / "calibration.psd"
             relative_psd, psd_hash = copy_pinned(source_psd, stage, f"gold-psd/{gold_id}.psd", report["approvedPsd"]["sha256"])
             source_input = gates_root / "input.png"
             checked_file(source_input)
@@ -247,7 +310,12 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
 
             associated_box = automatic["productBox"].get("associatedGold")
             if not isinstance(associated_box, dict):
-                fail(f"slot 3 report lacks Photoshop-associated product box: {gold_id}")
+                fail(f"candidate report lacks Photoshop-associated product box: {gold_id}")
+            product_box_evidence = sample.get("productBoxEvidence")
+            if not isinstance(product_box_evidence, dict) or product_box_evidence.get("threshold") != "grayscale >= 128" or product_box_evidence.get("box") != associated_box:
+                fail(f"candidate product-box evidence is missing or inconsistent: {gold_id}")
+            product_mask_path = candidate / source_id / photoshop_dir / "product-mask.png"
+            checked_file(product_mask_path, product_box_evidence.get("sha256"))
             gold_standards.append({
                 "id": gold_id,
                 "psdPath": relative_psd,
@@ -257,11 +325,11 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
                 "productBox": associated_box,
             })
 
-        if slot3_preset is None:
-            fail("slot 3 preset was not built")
+        if candidate_preset is None:
+            fail("candidate preset was not built")
 
         candidate_evidence: list[dict[str, str]] = []
-        for evidence_id, source, destination in candidate_evidence_sources(candidate):
+        for evidence_id, source, destination in candidate_evidence_sources(candidate, summary):
             relative, actual = copy_pinned(source, stage, destination)
             candidate_evidence.append({"id": evidence_id, "file": relative, "sha256": actual})
 
@@ -269,13 +337,14 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
         if not isinstance(reference, dict) or reference.get("role") != "visual-style-reference-only":
             fail("candidate summary does not declare the PSD as a visual-only reference")
         reference_source = candidate / reference["path"]
-        reference_file, reference_hash = copy_pinned(reference_source, stage, "visual-style-reference/4-slot3-front-reference.psd", reference.get("sha256"))
+        reference_file, reference_hash = copy_pinned(reference_source, stage, f"visual-style-reference/{reference_source.name}", reference.get("sha256"))
 
-        slot2_preset = deepcopy(baseline_manifest["presets"][0])
-        slot2_preset["goldStandardIds"] = [gold["id"] for gold in baseline_manifest["goldStandards"]]
+        base_presets = deepcopy(baseline_manifest["presets"])
+        if any(not isinstance(preset.get("goldStandardIds"), list) for preset in base_presets):
+            fail("baseline presets must explicitly bind their gold standards")
         manifest: dict[str, Any] = {
-            "schemaVersion": 2,
-            "version": TARGET_VERSION,
+            "schemaVersion": baseline_manifest["schemaVersion"],
+            "version": candidate_version,
             "candidateOnly": True,
             "releaseState": "awaiting-human-approval",
             "approved": False,
@@ -285,7 +354,7 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
             "biRefNet": deepcopy(baseline_manifest["biRefNet"]),
             "gates": deepcopy(baseline_manifest["gates"]),
             "goldStandards": gold_standards,
-            "presets": [slot2_preset, slot3_preset],
+            "presets": [*base_presets, candidate_preset],
             "regressionAssets": regression_assets,
             "visualStyleReference": {
                 "file": reference_file,
@@ -296,13 +365,15 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
             },
             "candidateEvidence": candidate_evidence,
             "provenance": {
-                "baselineVersion": BASELINE_VERSION,
+                "baselineVersion": baseline_manifest["version"],
                 "baselineManifestSha256": manifest_sha256(baseline_manifest),
                 "candidateSummarySha256": sha256(candidate / "candidate-summary.json"),
             },
         }
-        if len(manifest["goldStandards"]) != 4 or len(manifest["regressionAssets"]) != 24:
-            fail("candidate package must contain four gold standards and twenty-four regression assets")
+        expected_gold_count = len(baseline_manifest["goldStandards"]) + len(samples)
+        expected_asset_count = len(baseline_manifest["regressionAssets"]) + len(samples) * 6
+        if len(manifest["goldStandards"]) != expected_gold_count or len(manifest["regressionAssets"]) != expected_asset_count:
+            fail("candidate package gold or regression asset count is incomplete")
         write_json(stage / "manifest.json", manifest)
         manifest_hash = manifest_sha256(manifest)
         registry = {
@@ -311,7 +382,7 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
             "releaseState": "awaiting-human-approval",
             "approved": False,
             "publicationAllowed": False,
-            "packages": [{"version": TARGET_VERSION, "manifestSha256": manifest_hash}],
+            "packages": [{"version": candidate_version, "manifestSha256": manifest_hash}],
         }
         write_json(stage / "candidate-registry.json", registry)
 
@@ -341,7 +412,7 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
             fail("publication-mode validator unexpectedly accepted the unapproved candidate")
         validation_report = {
             "schemaVersion": 1,
-            "candidateVersion": TARGET_VERSION,
+            "candidateVersion": candidate_version,
             "manifestSha256": manifest_hash,
             "candidateRegistryPinned": True,
             "candidateModePassed": True,
@@ -365,7 +436,7 @@ def build_package(repo_root: Path, baseline_bundle: Path, candidate_root: Path, 
         completed = True
         return {
             "output": str(output),
-            "version": TARGET_VERSION,
+            "version": candidate_version,
             "manifestSha256": manifest_hash,
             "goldStandardCount": len(gold_standards),
             "regressionAssetCount": len(regression_assets),

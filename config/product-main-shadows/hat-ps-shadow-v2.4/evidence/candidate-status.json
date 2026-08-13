@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 4,
+  "candidateVersion": "hat-ps-shadow-v2.4",
+  "baselineVersion": "hat-ps-shadow-v2.1",
+  "releaseState": "awaiting-human-approval",
+  "approved": false,
+  "publicationAllowed": false,
+  "packageBuilt": false,
+  "productionRegistryModified": false,
+  "productionDefaultModified": false,
+  "angleSlot": 1,
+  "humanAngleLabel": "主图斜视角",
+  "algorithm": "ps-levels-roi-v2-adaptive-white",
+  "backgroundPurification": {
+    "algorithm": "detached-residue-to-white-v1",
+    "residueThreshold": 2,
+    "minimumArea": 64,
+    "legalShadowMaskNeighborhoodAt800": 16,
+    "connectivity": 8,
+    "contactShadowPolicy": "components connected to the product mask neighborhood remain byte-identical"
+  },
+  "roi": { "x": 0, "y": 480, "width": 800, "height": 320 },
+  "whiteSamplePolicy": {
+    "referencePatchSize": 31,
+    "minimumPatchPassRate": 0.95,
+    "minimumMaskDistance": 32,
+    "minimumEdgeDistance": 16,
+    "rgbMin": 220,
+    "rgbMax": 245,
+    "maxChannelSpread": 8,
+    "targetMean": 240,
+    "selectionOrder": ["patch-pass-rate-desc", "mask-distance-desc", "mean-distance-to-240-asc", "y-asc", "x-asc"],
+    "median": "per-channel-median-of-valid-patch-pixels"
+  },
+  "statusSummarySource": "authoritativeReports only; calibration-gates and calibration-gates-v3 are superseded",
+  "authoritativeReports": [
+    {
+      "sourceId": "329A8208",
+      "path": "329A8208/calibration-gates-v4/authoritative-report.json",
+      "sha256": "9a55158c2b3efca1ea6245e28f3bf91e88d11f3e9ff9c1574be203fc7a74f1b2"
+    },
+    {
+      "sourceId": "329A8217",
+      "path": "329A8217/calibration-gates-v4/authoritative-report.json",
+      "sha256": "a4a47871d6b82c3b23b359f3a766d2f175eafb240d367639cea0f5ed163fe77b"
+    },
+    {
+      "sourceId": "329A8239",
+      "path": "329A8239/calibration-gates-v4/authoritative-report.json",
+      "sha256": "d3e56d845090f191106433b64ee05479cd7f0614a4b1bbceb62f695994528f6d"
+    }
+  ],
+  "supersededReportDirectories": ["calibration-gates", "calibration-gates-v3"],
+  "samples": [
+    {
+      "sourceId": "329A8208",
+      "sampledPoint": { "x": 712, "y": 730 },
+      "sampledPointRgb": [242, 242, 242],
+      "sampledRgbMedian": [243, 243, 243],
+      "samplePatchPassRate": 1.0,
+      "sampleMaskDistance": 180.01111076819674,
+      "purifiedDetachedComponentCount": 6,
+      "purifiedDetachedPixelCount": 4200,
+      "largestRemainingDetachedResidueArea": 52,
+      "photoshopNativeMeanChannelError": 0.0,
+      "photoshopNativeMaxError": 0,
+      "productionEntryMeanChannelError": 0.0,
+      "productionEntryMaxError": 0,
+      "maskIoU": 1.0,
+      "meanBoundaryDistancePxAt800": 0.0,
+      "roiBoundaryMaxChannelJump": 0,
+      "automaticGatesPassed": true
+    },
+    {
+      "sourceId": "329A8217",
+      "sampledPoint": { "x": 702, "y": 735 },
+      "sampledPointRgb": [240, 241, 239],
+      "sampledRgbMedian": [242, 243, 241],
+      "samplePatchPassRate": 1.0,
+      "sampleMaskDistance": 113.45483682946268,
+      "purifiedDetachedComponentCount": 3,
+      "purifiedDetachedPixelCount": 5538,
+      "largestRemainingDetachedResidueArea": 50,
+      "photoshopNativeMeanChannelError": 0.0,
+      "photoshopNativeMaxError": 0,
+      "productionEntryMeanChannelError": 0.0,
+      "productionEntryMaxError": 0,
+      "maskIoU": 1.0,
+      "meanBoundaryDistancePxAt800": 0.0,
+      "roiBoundaryMaxChannelJump": 0,
+      "automaticGatesPassed": true
+    },
+    {
+      "sourceId": "329A8239",
+      "sampledPoint": { "x": 120, "y": 638 },
+      "sampledPointRgb": [240, 238, 234],
+      "sampledRgbMedian": [240, 238, 235],
+      "samplePatchPassRate": 0.9729448491155047,
+      "sampleMaskDistance": 62.0966987850401,
+      "purifiedDetachedComponentCount": 0,
+      "purifiedDetachedPixelCount": 0,
+      "largestRemainingDetachedResidueArea": 7,
+      "photoshopNativeMeanChannelError": 0.0,
+      "photoshopNativeMaxError": 0,
+      "productionEntryMeanChannelError": 0.0,
+      "productionEntryMaxError": 0,
+      "maskIoU": 1.0,
+      "meanBoundaryDistancePxAt800": 0.0,
+      "roiBoundaryMaxChannelJump": 0,
+      "automaticGatesPassed": true
+    }
+  ],
+  "automaticGatesPassed": true,
+  "blockingReason": "Automatic gates passed. Human approval for exact version hat-ps-shadow-v2.4 is still required before any package build or publication."
+}

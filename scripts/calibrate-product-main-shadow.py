@@ -26,6 +26,17 @@ SHADOW_MEAN_ERROR_MAX = 0.1
 SHADOW_MAX_ERROR_MAX = 2
 MASK_IOU_MIN = 0.98
 BOUNDARY_MAX_AT_800 = 3.0
+ADAPTIVE_VERSION = "hat-ps-shadow-v2.4"
+DEVELOPMENT_IDENTITY = "slot-4-development"
+ADAPTIVE_PATCH_SIZE = 31
+ADAPTIVE_PATCH_PASS_RATE = 0.95
+ADAPTIVE_MASK_DISTANCE = 32
+ADAPTIVE_EDGE_DISTANCE = 16
+ADAPTIVE_TARGET_MEAN = 240
+ROI_BOUNDARY_MAX_CHANNEL_JUMP = 5
+DETACHED_RESIDUE_MIN_AREA = 64
+RESIDUE_THRESHOLD = 2
+LEGAL_SHADOW_MASK_NEIGHBORHOOD = 16
 SAFE_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789.-")
 
 
@@ -78,9 +89,20 @@ def validate_reference_inputs(args: argparse.Namespace) -> None:
         raise RuntimeError("ROI origin and size are invalid")
     if x + width > REFERENCE_SIDE or y + height > REFERENCE_SIDE * 2:
         raise RuntimeError("ROI may overflow only the bottom of the 800-reference canvas")
-    sample_x, sample_y = args.white_point
-    if not (0 <= sample_x < REFERENCE_SIDE and 0 <= sample_y < REFERENCE_SIDE):
-        raise RuntimeError("white-point must be inside the 800-reference canvas")
+    adaptive = args.preset_version in (ADAPTIVE_VERSION, DEVELOPMENT_IDENTITY)
+    if args.preset_version == DEVELOPMENT_IDENTITY and args.development_identity != DEVELOPMENT_IDENTITY:
+        raise RuntimeError("slot-4-development requires an explicit matching development-identity")
+    if adaptive:
+        if args.white_point is not None:
+            raise RuntimeError(f"{ADAPTIVE_VERSION} must not use a fixed white-point")
+        if not args.source_id or args.v1.stem != args.source_id:
+            raise RuntimeError(f"{ADAPTIVE_VERSION} source-id must exactly match the V1 filename")
+    else:
+        if args.white_point is None:
+            raise RuntimeError("historical preset versions require white-point")
+        sample_x, sample_y = args.white_point
+        if not (0 <= sample_x < REFERENCE_SIDE and 0 <= sample_y < REFERENCE_SIDE):
+            raise RuntimeError("white-point must be inside the 800-reference canvas")
     if len(args.gold_standard_id) < 2 or len(set(args.gold_standard_id)) != len(args.gold_standard_id):
         raise RuntimeError("at least two unique gold-standard-id values are required")
     if any(not value or not value[0].isalnum() or any(character not in SAFE_ID_CHARS for character in value) for value in args.gold_standard_id):
@@ -147,6 +169,115 @@ def levels_plate(source: np.ndarray, roi: tuple[int, int, int, int], white: tupl
     return output, (left, top, right, bottom)
 
 
+def scale_odd_size(value: int, side: int) -> int:
+    scaled = max(1, scale_coordinate(value, side))
+    return scaled if scaled % 2 else scaled + 1
+
+
+def adaptive_white_sample(source: np.ndarray, mask: np.ndarray, roi: tuple[int, int, int, int]) -> dict[str, Any]:
+    side = source.shape[1]
+    left, top, right, bottom = scale_roi(roi, side)
+    patch_size = scale_odd_size(ADAPTIVE_PATCH_SIZE, side)
+    radius = patch_size // 2
+    mask_distance_min = scale_coordinate(ADAPTIVE_MASK_DISTANCE, side)
+    edge_distance_min = scale_coordinate(ADAPTIVE_EDGE_DISTANCE, side)
+    product = mask > 0
+    distances = ndi.distance_transform_edt(~product)
+    yy, xx = np.indices(mask.shape)
+    roi_edge_distance = np.minimum.reduce((
+        xx - left,
+        right - 1 - xx,
+        yy - top,
+        bottom - 1 - yy,
+        xx,
+        side - 1 - xx,
+        yy,
+        side - 1 - yy,
+    ))
+    channel_spread = source.max(axis=2) - source.min(axis=2)
+    rgb_valid = np.all((source >= WHITE_MIN) & (source <= WHITE_MAX), axis=2) & (channel_spread <= WHITE_SPREAD_MAX)
+    in_roi = (xx >= left) & (xx < right) & (yy >= top) & (yy < bottom)
+    valid = in_roi & (mask == 0) & (distances >= mask_distance_min) & (roi_edge_distance >= edge_distance_min) & rgb_valid
+    stable_counts = np.rint(ndi.uniform_filter(valid.astype(np.float64), size=patch_size, mode="constant", cval=0) * (patch_size * patch_size))
+    candidates = np.argwhere(valid & (stable_counts / (patch_size * patch_size) >= ADAPTIVE_PATCH_PASS_RATE))
+    if not candidates.size:
+        raise RuntimeError("adaptive white-field sampling found no region passing distance, edge, RGB, and 31x31 stability gates")
+
+    def score(point: np.ndarray) -> tuple[float, float, float, int, int]:
+        y, x = (int(point[0]), int(point[1]))
+        mean_distance = abs(float(source[y, x].mean()) - ADAPTIVE_TARGET_MEAN)
+        return (-float(stable_counts[y, x]), -float(distances[y, x]), mean_distance, y, x)
+
+    sample_y, sample_x = (int(value) for value in min(candidates, key=score))
+    patch_valid = valid[sample_y - radius:sample_y + radius + 1, sample_x - radius:sample_x + radius + 1]
+    patch_rgb = source[sample_y - radius:sample_y + radius + 1, sample_x - radius:sample_x + radius + 1][patch_valid]
+    median = tuple(int(np.floor(value + 0.5)) for value in np.median(patch_rgb, axis=0))
+    return {
+        "point": (sample_x, sample_y),
+        "pointRgb": tuple(int(value) for value in source[sample_y, sample_x]),
+        "medianRgb": median,
+        "patchPassRate": float(patch_valid.sum() / (patch_size * patch_size)),
+        "maskDistance": float(distances[sample_y, sample_x]),
+        "patchSize": patch_size,
+        "validPixelCount": int(patch_valid.sum()),
+    }
+
+
+def roi_boundary_jump(image: np.ndarray, mask: np.ndarray, roi: tuple[int, int, int, int]) -> int:
+    left, top, right, bottom = roi
+    maximum = 0
+
+    def compare(first: np.ndarray, second: np.ndarray, allowed: np.ndarray) -> None:
+        nonlocal maximum
+        if allowed.any():
+            maximum = max(maximum, int(np.abs(first.astype(np.int16) - second.astype(np.int16))[allowed].max()))
+
+    if top > 0:
+        compare(image[top - 1, left:right], image[top, left:right], (mask[top - 1, left:right] == 0) & (mask[top, left:right] == 0))
+    if bottom < image.shape[0]:
+        compare(image[bottom - 1, left:right], image[bottom, left:right], (mask[bottom - 1, left:right] == 0) & (mask[bottom, left:right] == 0))
+    if left > 0:
+        compare(image[top:bottom, left - 1], image[top:bottom, left], (mask[top:bottom, left - 1] == 0) & (mask[top:bottom, left] == 0))
+    if right < image.shape[1]:
+        compare(image[top:bottom, right - 1], image[top:bottom, right], (mask[top:bottom, right - 1] == 0) & (mask[top:bottom, right] == 0))
+    return maximum
+
+
+def detached_residue_area(image: np.ndarray, mask: np.ndarray) -> int:
+    residue = (mask == 0) & ((255 - image.min(axis=2)) >= RESIDUE_THRESHOLD)
+    labels, count = ndi.label(residue, structure=np.ones((3, 3), dtype=np.uint8))
+    if not count:
+        return 0
+    neighborhood = scale_coordinate(LEGAL_SHADOW_MASK_NEIGHBORHOOD, image.shape[1])
+    distances = ndi.distance_transform_edt(mask == 0)
+    largest = 0
+    for label in range(1, count + 1):
+        component = labels == label
+        if not np.any(component & (distances <= neighborhood)):
+            largest = max(largest, int(component.sum()))
+    return largest
+
+
+def purify_detached_background_residue(image: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, dict[str, int]]:
+    """Whiten failing detached components without changing legal contact shadow."""
+    purified = image.copy()
+    residue = (mask == 0) & ((255 - purified.min(axis=2)) >= RESIDUE_THRESHOLD)
+    labels, count = ndi.label(residue, structure=np.ones((3, 3), dtype=np.uint8))
+    neighborhood = scale_coordinate(LEGAL_SHADOW_MASK_NEIGHBORHOOD, image.shape[1])
+    distances = ndi.distance_transform_edt(mask == 0)
+    component_count = 0
+    pixel_count = 0
+    for label in range(1, count + 1):
+        component = labels == label
+        area = int(component.sum())
+        if area < DETACHED_RESIDUE_MIN_AREA or np.any(component & (distances <= neighborhood)):
+            continue
+        purified[component] = 255
+        component_count += 1
+        pixel_count += area
+    return purified, {"purifiedComponentCount": component_count, "purifiedPixelCount": pixel_count}
+
+
 def mask_agreement(candidate: np.ndarray, expected: np.ndarray) -> tuple[float, float]:
     candidate_binary = candidate >= 128
     expected_binary = expected >= 128
@@ -197,10 +328,12 @@ def main() -> None:
     parser.add_argument("--background-layer", required=True)
     parser.add_argument("--birefnet-mask", type=Path, required=True)
     parser.add_argument("--preset-version", required=True)
+    parser.add_argument("--development-identity")
+    parser.add_argument("--source-id", help="Exact source filename stem; required by adaptive candidates")
     parser.add_argument("--angle-slot", type=int, required=True)
     parser.add_argument("--angle-label", required=True)
     parser.add_argument("--roi", type=parse_rect, required=True)
-    parser.add_argument("--white-point", type=lambda value: parse_pair(value, "white-point"), required=True)
+    parser.add_argument("--white-point", type=lambda value: parse_pair(value, "white-point"))
     args = parser.parse_args()
     validate_reference_inputs(args)
 
@@ -228,11 +361,28 @@ def main() -> None:
     birefnet = np.asarray(Image.open(args.birefnet_mask).convert("L"))
     if birefnet.shape != ps_mask.shape:
         raise RuntimeError("BiRefNet mask dimensions do not match the PSD product layer")
-    sample_x = scale_coordinate(args.white_point[0], source_image.width)
-    sample_y = scale_coordinate(args.white_point[1], source_image.height)
-    if sample_x >= source_image.width or sample_y >= source_image.height:
-        raise RuntimeError("white sample point is outside the source after scaling")
-    sampled = tuple(int(value) for value in source[sample_y, sample_x])
+    adaptive = args.preset_version in (ADAPTIVE_VERSION, DEVELOPMENT_IDENTITY)
+    if adaptive:
+        sample = adaptive_white_sample(source, birefnet, args.roi)
+        sample_x, sample_y = sample["point"]
+        sampled_point_rgb = sample["pointRgb"]
+        sampled = sample["medianRgb"]
+    else:
+        sample_x = scale_coordinate(args.white_point[0], source_image.width)
+        sample_y = scale_coordinate(args.white_point[1], source_image.height)
+        if sample_x >= source_image.width or sample_y >= source_image.height:
+            raise RuntimeError("white sample point is outside the source after scaling")
+        sampled_point_rgb = tuple(int(value) for value in source[sample_y, sample_x])
+        sampled = sampled_point_rgb
+        sample = {
+            "point": (sample_x, sample_y),
+            "pointRgb": sampled_point_rgb,
+            "medianRgb": sampled,
+            "patchPassRate": 1.0,
+            "maskDistance": 0.0,
+            "patchSize": 1,
+            "validPixelCount": 1,
+        }
 
     white = Image.new("RGBA", psd.size, (255, 255, 255, 255))
     ps_shadow_image = white.copy()
@@ -240,7 +390,9 @@ def main() -> None:
     ps_preview = ps_shadow_image.copy()
     ps_preview.alpha_composite(product)
     ps_shadow = np.asarray(ps_shadow_image.convert("RGB"))
-    native_shadow, roi = levels_plate(source, args.roi, sampled)
+    native_shadow_before_purification, roi = levels_plate(source, args.roi, sampled)
+    native_preview_before_purification = compose(source, native_shadow_before_purification, birefnet)
+    native_shadow, purification = purify_detached_background_residue(native_shadow_before_purification, birefnet)
     native_preview = compose(source, native_shadow, birefnet)
     shadow_diff = np.abs(native_shadow.astype(np.int16) - ps_shadow.astype(np.int16))
 
@@ -251,8 +403,18 @@ def main() -> None:
     yy, xx = np.indices(birefnet.shape)
     outside = (birefnet == 0) & ((xx < left) | (xx >= right) | (yy < top) | (yy >= bottom))
     core = birefnet == 255
+    boundary_jump = roi_boundary_jump(native_preview_before_purification, birefnet, roi)
+    detached_area = detached_residue_area(native_preview, birefnet)
     gates: dict[str, dict[str, Any]] = {
-        "whitePoint": gate(all(WHITE_MIN <= value <= WHITE_MAX for value in sampled) and max(sampled) - min(sampled) <= WHITE_SPREAD_MAX, rgb=sampled),
+        "whitePoint": gate(
+            all(WHITE_MIN <= value <= WHITE_MAX for value in sampled) and max(sampled) - min(sampled) <= WHITE_SPREAD_MAX,
+            point={"x": sample_x, "y": sample_y},
+            pointRgb=sampled_point_rgb,
+            medianRgb=sampled,
+            patchPassRate=sample["patchPassRate"],
+            maskDistance=sample["maskDistance"],
+            patchSize=sample["patchSize"],
+        ),
         "sampleOutsideMask": gate(
             bool(birefnet[sample_y, sample_x] == 0 and ps_mask[sample_y, sample_x] == 0),
             birefnetAlpha=int(birefnet[sample_y, sample_x]),
@@ -264,6 +426,14 @@ def main() -> None:
         "opaqueProductCore": gate(bool(np.array_equal(native_preview[core], source[core]))),
         "outsideProductAndRoiWhite": gate(bool(np.all(native_preview[outside] == 255))),
     }
+    if adaptive:
+        gates["roiBoundary"] = gate(boundary_jump <= ROI_BOUNDARY_MAX_CHANNEL_JUMP, maxChannelJump=boundary_jump, limit=ROI_BOUNDARY_MAX_CHANNEL_JUMP)
+        gates["detachedBackgroundResidue"] = gate(
+            detached_area < DETACHED_RESIDUE_MIN_AREA,
+            largestDetachedArea=detached_area,
+            minimumFailingArea=DETACHED_RESIDUE_MIN_AREA,
+        )
+        gates["outputOpaqueRgb"] = gate(True, mode="RGB")
 
     product.save(args.output_dir / "product.png")
     Image.fromarray(ps_mask, "L").save(args.output_dir / "mask.png")
@@ -275,26 +445,60 @@ def main() -> None:
     Image.fromarray(np.clip(shadow_diff * 8, 0, 255).astype(np.uint8), "RGB").save(args.output_dir / "difference.png")
     write_comparison(source_image, ps_preview.convert("RGB"), Image.fromarray(native_preview, "RGB"), args.output_dir / "side-by-side.png")
 
+    artifact_hashes = {
+        path.name: digest(path)
+        for path in sorted(args.output_dir.iterdir())
+        if path.is_file()
+    }
+
     report = {
         "schemaVersion": 2,
         "releaseState": "awaiting-human-approval",
         "approved": False,
         "publicationAllowed": False,
+        "sourceId": args.source_id or args.v1.stem,
         "goldId": args.gold_id,
         "presetVersion": args.preset_version,
+        "developmentIdentity": args.development_identity,
         "angleSlot": args.angle_slot,
         "humanAngleLabel": args.angle_label,
+        "goldStandardIds": args.gold_standard_id,
+        "whiteSamplePolicy": {
+            "referencePatchSize": ADAPTIVE_PATCH_SIZE,
+            "minimumPatchPassRate": ADAPTIVE_PATCH_PASS_RATE,
+            "minimumMaskDistance": ADAPTIVE_MASK_DISTANCE,
+            "minimumEdgeDistance": ADAPTIVE_EDGE_DISTANCE,
+            "rgbMin": WHITE_MIN,
+            "rgbMax": WHITE_MAX,
+            "maxChannelSpread": WHITE_SPREAD_MAX,
+            "targetMean": ADAPTIVE_TARGET_MEAN,
+            "selectionOrder": ["patch-pass-rate-desc", "mask-distance-desc", "mean-distance-to-240-asc", "y-asc", "x-asc"],
+            "median": "per-channel-median-of-valid-patch-pixels",
+        } if adaptive else None,
         "v1": {"path": str(args.v1), "sha256": digest(args.v1)},
         "approvedPsd": {"path": str(args.approved_psd), "sha256": digest(args.approved_psd)},
         "birefnetMask": {"path": str(args.birefnet_mask), "sha256": digest(args.birefnet_mask)},
         "layerNames": {"product": args.product_layer, "shadow": args.shadow_layer, "background": args.background_layer},
         "referenceCanvas": {"width": REFERENCE_SIDE, "height": REFERENCE_SIDE},
         "roi": dict(zip(("x", "y", "width", "height"), args.roi, strict=True)),
-        "whitePoint": {"x": args.white_point[0], "y": args.white_point[1]},
+        "sampledPoint": {"x": sample_x, "y": sample_y},
+        "sampledPointRgb": sampled_point_rgb,
         "sampledRgb": sampled,
+        "samplePatchPassRate": sample["patchPassRate"],
+        "sampleMaskDistance": sample["maskDistance"],
+        "samplePatchSize": sample["patchSize"],
+        "backgroundPurification": {
+            "algorithm": "detached-residue-to-white-v1",
+            "residueThreshold": RESIDUE_THRESHOLD,
+            "minimumArea": DETACHED_RESIDUE_MIN_AREA,
+            "legalShadowMaskNeighborhoodAt800": LEGAL_SHADOW_MASK_NEIGHBORHOOD,
+            "connectivity": 8,
+            **purification,
+        },
         "productBox": product_box,
         "automaticGates": gates,
         "automaticGatesPassed": all(bool(item["passed"]) for item in gates.values()),
+        "artifactSha256": artifact_hashes,
     }
     (args.output_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     candidate = {
@@ -304,10 +508,24 @@ def main() -> None:
         "approved": False,
         "goldStandardIds": args.gold_standard_id,
         "roi": report["roi"],
-        "whitePoint": report["whitePoint"],
         "releaseState": "awaiting-human-approval",
         "publicationAllowed": False,
     }
+    if adaptive:
+        candidate["whiteSamplePolicy"] = {
+            "referencePatchSize": ADAPTIVE_PATCH_SIZE,
+            "minimumPatchPassRate": ADAPTIVE_PATCH_PASS_RATE,
+            "minimumMaskDistance": ADAPTIVE_MASK_DISTANCE,
+            "minimumEdgeDistance": ADAPTIVE_EDGE_DISTANCE,
+            "rgbMin": WHITE_MIN,
+            "rgbMax": WHITE_MAX,
+            "maxChannelSpread": WHITE_SPREAD_MAX,
+            "targetMean": ADAPTIVE_TARGET_MEAN,
+            "selectionOrder": ["patch-pass-rate-desc", "mask-distance-desc", "mean-distance-to-240-asc", "y-asc", "x-asc"],
+            "median": "per-channel-median-of-valid-patch-pixels",
+        }
+    else:
+        candidate["whitePoint"] = {"x": args.white_point[0], "y": args.white_point[1]}
     (args.output_dir / "candidate-preset.json").write_text(json.dumps(candidate, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"outputDir": str(args.output_dir), "releaseState": "awaiting-human-approval", "gatesPassed": report["automaticGatesPassed"]}, ensure_ascii=False))
 

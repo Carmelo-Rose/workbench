@@ -65,7 +65,10 @@ async function main(): Promise<void> {
     const assignment = assignments.get(inputPath);
     let output: Buffer = input;
     let actualVersion = "whitefield-v1";
+    let sampledPoint: { x: number; y: number } | undefined;
     let sampledRgb: [number, number, number] | undefined;
+    let sampledPatchPassRate: number | undefined;
+    let sampledMaskDistance: number | undefined;
     let fallbackReason = assignment?.fallbackReason;
     if (assignment?.presetId) {
       const preset = bundle.presets.find((candidate) => candidate.id === assignment.presetId);
@@ -79,7 +82,10 @@ async function main(): Promise<void> {
       );
       const rendered = await composeCalibratedShadowMain(input, mask, bundle, preset);
       output = rendered.image;
+      sampledPoint = rendered.sampledPoint;
       sampledRgb = rendered.sampledRgb;
+      sampledPatchPassRate = rendered.sampledPatchPassRate;
+      sampledMaskDistance = rendered.sampledMaskDistance;
       actualVersion = CALIBRATED_SHADOW_MAIN_IMAGE_VERSION;
       fallbackReason = undefined;
     }
@@ -92,7 +98,10 @@ async function main(): Promise<void> {
       inputSha256: sha256(input),
       outputSha256: sha256(output),
       actualVersion,
+      sampledPoint: sampledPoint ?? null,
       sampledRgb: sampledRgb ?? null,
+      sampledPatchPassRate: sampledPatchPassRate ?? null,
+      sampledMaskDistance: sampledMaskDistance ?? null,
       ...(fallbackReason ? { fallbackReason } : {}),
     });
   }

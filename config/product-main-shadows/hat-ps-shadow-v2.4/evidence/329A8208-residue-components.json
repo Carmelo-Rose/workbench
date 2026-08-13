@@ -1,0 +1,498 @@
+{
+  "schemaVersion": 1,
+  "sourceId": "329A8208",
+  "authoritativeGateReport": {
+    "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8208\\calibration-gates-v3\\report.json",
+    "sha256": "d17e03fa43441d80a261ca34bcf19656a35887a3f89394cbba427df3bb118a9a"
+  },
+  "fixedGatePolicy": {
+    "residueDefinition": "mask=0 and 255-min(RGB)>=2",
+    "minimumFailingArea": 64,
+    "legalShadowMaskNeighborhoodAt800": 16,
+    "connectivity": 8
+  },
+  "failedComponents": [
+    {
+      "componentId": "C01",
+      "label": 76,
+      "area": 2168,
+      "bbox": [
+        314,
+        716,
+        475,
+        748
+      ],
+      "darkness": {
+        "min": 2.0,
+        "mean": 2.617158671586716,
+        "max": 6.0
+      },
+      "minimumMaskDistance": 79.1012010022604,
+      "minimumDistanceToLegalResidue": 49.64876634922564,
+      "surrounding8pxDarkness": {
+        "min": 0.0,
+        "mean": 0.42631745029977913,
+        "max": 3.0
+      },
+      "thresholdPersistenceArea": {
+        "2": 2168,
+        "3": 1040,
+        "4": 265,
+        "5": 32,
+        "6": 1,
+        "7": 0,
+        "8": 0,
+        "9": 0,
+        "10": 0,
+        "11": 0,
+        "12": 0
+      },
+      "broadFadeBridge": {
+        "sigma2": {
+          "smoothedPeakDarkness": 4.316465333013161,
+          "maximinSaddleDarkness": 0.0,
+          "saddleToPeakRatio": 0.0
+        },
+        "sigma4": {
+          "smoothedPeakDarkness": 3.360700969525443,
+          "maximinSaddleDarkness": 0.011486770891932667,
+          "saddleToPeakRatio": 0.00341796875
+        },
+        "sigma8": {
+          "smoothedPeakDarkness": 2.2091323724531113,
+          "maximinSaddleDarkness": 0.07227142038787035,
+          "saddleToPeakRatio": 0.03271484375000001
+        }
+      },
+      "images": {
+        "v1": {
+          "darkness": {
+            "min": 14.0,
+            "mean": 14.617158671586715,
+            "max": 18.0
+          }
+        },
+        "photoshop": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.617158671586716,
+            "max": 6.0
+          }
+        },
+        "native": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.617158671586716,
+            "max": 6.0
+          }
+        }
+      }
+    },
+    {
+      "componentId": "C02",
+      "label": 33,
+      "area": 776,
+      "bbox": [
+        689,
+        627,
+        744,
+        648
+      ],
+      "darkness": {
+        "min": 2.0,
+        "mean": 3.9278350515463916,
+        "max": 8.0
+      },
+      "minimumMaskDistance": 77.0,
+      "minimumDistanceToLegalResidue": 16.0312195418814,
+      "surrounding8pxDarkness": {
+        "min": 0.0,
+        "mean": 0.24049513704686118,
+        "max": 3.0
+      },
+      "thresholdPersistenceArea": {
+        "2": 776,
+        "3": 592,
+        "4": 406,
+        "5": 286,
+        "6": 152,
+        "7": 47,
+        "8": 13,
+        "9": 0,
+        "10": 0,
+        "11": 0,
+        "12": 0
+      },
+      "broadFadeBridge": {
+        "sigma2": {
+          "smoothedPeakDarkness": 6.754736834069409,
+          "maximinSaddleDarkness": 0.19954178635800746,
+          "saddleToPeakRatio": 0.029541015625
+        },
+        "sigma4": {
+          "smoothedPeakDarkness": 5.734703683487163,
+          "maximinSaddleDarkness": 0.3234171266810387,
+          "saddleToPeakRatio": 0.05639648437499999
+        },
+        "sigma8": {
+          "smoothedPeakDarkness": 3.7217142031448294,
+          "maximinSaddleDarkness": 1.1775736345887935,
+          "saddleToPeakRatio": 0.31640624999999994
+        }
+      },
+      "images": {
+        "v1": {
+          "darkness": {
+            "min": 14.0,
+            "mean": 15.927835051546392,
+            "max": 20.0
+          }
+        },
+        "photoshop": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 3.9278350515463916,
+            "max": 8.0
+          }
+        },
+        "native": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 3.9278350515463916,
+            "max": 8.0
+          }
+        }
+      }
+    },
+    {
+      "componentId": "C03",
+      "label": 82,
+      "area": 634,
+      "bbox": [
+        115,
+        723,
+        178,
+        745
+      ],
+      "darkness": {
+        "min": 2.0,
+        "mean": 2.468454258675079,
+        "max": 6.0
+      },
+      "minimumMaskDistance": 121.82364302548172,
+      "minimumDistanceToLegalResidue": 23.0,
+      "surrounding8pxDarkness": {
+        "min": 0.0,
+        "mean": 0.5034626038781164,
+        "max": 2.0
+      },
+      "thresholdPersistenceArea": {
+        "2": 634,
+        "3": 215,
+        "4": 69,
+        "5": 12,
+        "6": 1,
+        "7": 0,
+        "8": 0,
+        "9": 0,
+        "10": 0,
+        "11": 0,
+        "12": 0
+      },
+      "broadFadeBridge": {
+        "sigma2": {
+          "smoothedPeakDarkness": 3.918226410722695,
+          "maximinSaddleDarkness": 0.08992023501170247,
+          "saddleToPeakRatio": 0.02294921875
+        },
+        "sigma4": {
+          "smoothedPeakDarkness": 3.0505762444564644,
+          "maximinSaddleDarkness": 0.14448530064076026,
+          "saddleToPeakRatio": 0.04736328124999999
+        },
+        "sigma8": {
+          "smoothedPeakDarkness": 1.8901428874705741,
+          "maximinSaddleDarkness": 0.38578111668100584,
+          "saddleToPeakRatio": 0.2041015625
+        }
+      },
+      "images": {
+        "v1": {
+          "darkness": {
+            "min": 14.0,
+            "mean": 14.468454258675079,
+            "max": 18.0
+          }
+        },
+        "photoshop": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.468454258675079,
+            "max": 6.0
+          }
+        },
+        "native": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.468454258675079,
+            "max": 6.0
+          }
+        }
+      }
+    },
+    {
+      "componentId": "C04",
+      "label": 91,
+      "area": 355,
+      "bbox": [
+        484,
+        725,
+        537,
+        742
+      ],
+      "darkness": {
+        "min": 2.0,
+        "mean": 2.2732394366197184,
+        "max": 4.0
+      },
+      "minimumMaskDistance": 92.97311439335567,
+      "minimumDistanceToLegalResidue": 73.06161783043132,
+      "surrounding8pxDarkness": {
+        "min": 0.0,
+        "mean": 0.4552058111380145,
+        "max": 2.0
+      },
+      "thresholdPersistenceArea": {
+        "2": 355,
+        "3": 92,
+        "4": 5,
+        "5": 0,
+        "6": 0,
+        "7": 0,
+        "8": 0,
+        "9": 0,
+        "10": 0,
+        "11": 0,
+        "12": 0
+      },
+      "broadFadeBridge": {
+        "sigma2": {
+          "smoothedPeakDarkness": 2.888199554528113,
+          "maximinSaddleDarkness": 0.0,
+          "saddleToPeakRatio": 0.0
+        },
+        "sigma4": {
+          "smoothedPeakDarkness": 2.086304360762894,
+          "maximinSaddleDarkness": 0.012224439613845083,
+          "saddleToPeakRatio": 0.005859375
+        },
+        "sigma8": {
+          "smoothedPeakDarkness": 1.1616290680883419,
+          "maximinSaddleDarkness": 0.07231821590882012,
+          "saddleToPeakRatio": 0.06225585937500001
+        }
+      },
+      "images": {
+        "v1": {
+          "darkness": {
+            "min": 14.0,
+            "mean": 14.273239436619718,
+            "max": 16.0
+          }
+        },
+        "photoshop": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.2732394366197184,
+            "max": 4.0
+          }
+        },
+        "native": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.2732394366197184,
+            "max": 4.0
+          }
+        }
+      }
+    },
+    {
+      "componentId": "C05",
+      "label": 85,
+      "area": 136,
+      "bbox": [
+        672,
+        723,
+        690,
+        740
+      ],
+      "darkness": {
+        "min": 2.0,
+        "mean": 2.286764705882353,
+        "max": 3.0
+      },
+      "minimumMaskDistance": 174.79702514631077,
+      "minimumDistanceToLegalResidue": 115.57248807566617,
+      "surrounding8pxDarkness": {
+        "min": 0.0,
+        "mean": 0.5201401050788091,
+        "max": 2.0
+      },
+      "thresholdPersistenceArea": {
+        "2": 136,
+        "3": 39,
+        "4": 0,
+        "5": 0,
+        "6": 0,
+        "7": 0,
+        "8": 0,
+        "9": 0,
+        "10": 0,
+        "11": 0,
+        "12": 0
+      },
+      "broadFadeBridge": {
+        "sigma2": {
+          "smoothedPeakDarkness": 2.322486627663058,
+          "maximinSaddleDarkness": 0.0,
+          "saddleToPeakRatio": 0.0
+        },
+        "sigma4": {
+          "smoothedPeakDarkness": 1.6906279094009402,
+          "maximinSaddleDarkness": 0.0,
+          "saddleToPeakRatio": 0.0
+        },
+        "sigma8": {
+          "smoothedPeakDarkness": 0.9747812512590578,
+          "maximinSaddleDarkness": 0.0030937881509686895,
+          "saddleToPeakRatio": 0.003173828125
+        }
+      },
+      "images": {
+        "v1": {
+          "darkness": {
+            "min": 14.0,
+            "mean": 14.286764705882353,
+            "max": 15.0
+          }
+        },
+        "photoshop": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.286764705882353,
+            "max": 3.0
+          }
+        },
+        "native": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.286764705882353,
+            "max": 3.0
+          }
+        }
+      }
+    },
+    {
+      "componentId": "C06",
+      "label": 92,
+      "area": 131,
+      "bbox": [
+        547,
+        725,
+        558,
+        745
+      ],
+      "darkness": {
+        "min": 2.0,
+        "mean": 2.480916030534351,
+        "max": 5.0
+      },
+      "minimumMaskDistance": 111.83022847155415,
+      "minimumDistanceToLegalResidue": 78.91767862779544,
+      "surrounding8pxDarkness": {
+        "min": 0.0,
+        "mean": 0.49796747967479676,
+        "max": 3.0
+      },
+      "thresholdPersistenceArea": {
+        "2": 131,
+        "3": 51,
+        "4": 11,
+        "5": 1,
+        "6": 0,
+        "7": 0,
+        "8": 0,
+        "9": 0,
+        "10": 0,
+        "11": 0,
+        "12": 0
+      },
+      "broadFadeBridge": {
+        "sigma2": {
+          "smoothedPeakDarkness": 2.934275976540174,
+          "maximinSaddleDarkness": 0.0,
+          "saddleToPeakRatio": 0.0
+        },
+        "sigma4": {
+          "smoothedPeakDarkness": 2.0669399364873113,
+          "maximinSaddleDarkness": 0.01211097619035534,
+          "saddleToPeakRatio": 0.005859375
+        },
+        "sigma8": {
+          "smoothedPeakDarkness": 1.0541686613182308,
+          "maximinSaddleDarkness": 0.07231967622813058,
+          "saddleToPeakRatio": 0.068603515625
+        }
+      },
+      "images": {
+        "v1": {
+          "darkness": {
+            "min": 14.0,
+            "mean": 14.48091603053435,
+            "max": 17.0
+          }
+        },
+        "photoshop": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.480916030534351,
+            "max": 5.0
+          }
+        },
+        "native": {
+          "darkness": {
+            "min": 2.0,
+            "mean": 2.480916030534351,
+            "max": 5.0
+          }
+        }
+      }
+    }
+  ],
+  "artifacts": {
+    "input.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8208\\calibration-gates-v3\\input.png",
+      "sha256": "6ca0ad07071d704f28aa3f15e1f8da8fa760fb4616f564743d2c16708016d3ab"
+    },
+    "preview.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8208\\calibration-gates-v3\\preview.png",
+      "sha256": "65aa6875009805f3bfc1764520028667f09891b7e7c693c0f3c537c76e241ee6"
+    },
+    "native-preview.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8208\\calibration-gates-v3\\native-preview.png",
+      "sha256": "eac616eaf1c3b5718b79ae73ed3d32ffff56d776294ba67e938fd574378c9c2e"
+    },
+    "mask.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8208\\calibration-gates-v3\\mask.png",
+      "sha256": "1dd58fbd8088b7061040c5d2701891f49a4de1c2ca4639d5025afcedaa2a19f2"
+    },
+    "report.json": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8208\\calibration-gates-v3\\report.json",
+      "sha256": "d17e03fa43441d80a261ca34bcf19656a35887a3f89394cbba427df3bb118a9a"
+    },
+    "detached-residue-overlay.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8208\\detached-residue-v1\\detached-residue-overlay.png",
+      "sha256": "39fe83741a5dc6026f28780807d6208d90ad7db7ece2036752a96e146cd478c3"
+    }
+  }
+}

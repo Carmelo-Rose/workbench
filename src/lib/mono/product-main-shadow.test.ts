@@ -4,6 +4,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ADAPTIVE_WHITE_SAMPLE_POLICY,
   applyLevelsChannel,
   assertRunnableMainImageVersion,
   buildCalibratedShadowAssignments,
@@ -15,12 +16,16 @@ import {
   isCalibratedShadowV2Enabled,
   isHistoricalShadowV2,
   loadCalibratedShadowBundle,
+  loadCandidateCalibratedShadowBundle,
   normalizeMainImageVersion,
   parseCalibratedShadowManifest,
   scaleAndClipReferenceRect,
   scaleReferenceCoordinate,
+  selectAdaptiveWhiteSample,
+  SLOT_4_DEVELOPMENT_IDENTITY,
   validateCalibratedShadowBundle,
   type CalibratedShadowManifest,
+  type AdaptiveCalibratedShadowManifest,
   type LegacyCalibratedShadowManifest,
   type LoadedCalibratedShadowBundle,
   type ScopedCalibratedShadowManifest,
@@ -187,6 +192,86 @@ function syntheticScopedBundle(): LoadedCalibratedShadowBundle & ScopedCalibrate
   };
 }
 
+function syntheticAdaptiveBundle(): LoadedCalibratedShadowBundle & AdaptiveCalibratedShadowManifest {
+  const goldIds = ["slot1-black", "slot1-blue", "slot1-white"];
+  const regressionAssets = goldIds.flatMap((id, index) => [
+    { id: `${id}-input`, kind: "input" as const, file: `${id}-input.png`, sha256: String(index + 1).repeat(64) },
+    { id: `${id}-product`, kind: "product" as const, file: `${id}-product.png`, sha256: String(index + 2).repeat(64) },
+    { id: `${id}-ps-mask`, kind: "mask" as const, file: `${id}-ps-mask.png`, sha256: String(index + 3).repeat(64) },
+    { id: `${id}-birefnet-mask`, kind: "mask" as const, file: `${id}-birefnet-mask.png`, sha256: String(index + 4).repeat(64) },
+    { id: `${id}-shadow`, kind: "shadow" as const, file: `${id}-shadow.png`, sha256: String(index + 5).repeat(64) },
+    { id: `${id}-preview`, kind: "preview" as const, file: `${id}-preview.png`, sha256: String(index + 6).repeat(64) },
+  ]);
+  return {
+    schemaVersion: 3,
+    version: "hat-ps-shadow-v2.4",
+    candidateOnly: false,
+    releaseState: "approved",
+    approved: true,
+    publicationAllowed: true,
+    canvas: { width: 800, height: 800 },
+    algorithm: { id: "ps-levels-roi-v2-adaptive-white", levels: "round(value*255/channelMedian)-clamp-255" },
+    biRefNet: {
+      modelId: "ZhengPeng7/BiRefNet_HR-matting",
+      revision: "5d6b6f8adcb5b417c871b1d84ceaae9871355b7f",
+      weightsSha256: "a5a4de698739ea5e0e8bbab28e1b293dde95092b87a442d566cbc585c53cef55",
+    },
+    gates: {
+      whitePointMin: 220,
+      whitePointMax: 245,
+      whitePointMaxChannelSpread: 8,
+      productBoxTolerance: 0.05,
+      roiBoundaryMaxChannelJump: 5,
+      detachedResidueMinArea: 64,
+      residueThreshold: 2,
+      legalShadowMaskNeighborhood: 16,
+    },
+    goldStandards: goldIds.map((id, index) => ({
+      id,
+      psdPath: `C:/${id}.psd`,
+      psdSha256: String.fromCharCode(97 + index).repeat(64),
+      layerNames: { product: "product", shadow: "shadow", background: "white" },
+      productBox: { left: 0.375, top: 0.25, width: 0.25, height: 0.375 },
+    })),
+    presets: [{
+      id: "hat-angle-slot-1",
+      angleSlot: 1,
+      humanAngleLabel: "主图斜视角",
+      approved: true,
+      roi: { x: 0, y: 480, width: 800, height: 320 },
+      whiteSamplePolicy: ADAPTIVE_WHITE_SAMPLE_POLICY,
+      goldStandardIds: goldIds,
+    }],
+    regressionAssets,
+    root: "C:/fixture-v3",
+    manifestSha256: "9".repeat(64),
+  };
+}
+
+function adaptiveRawFixture(side: number, background = 240): { rgb: Buffer; mask: Buffer } {
+  const rgb = Buffer.alloc(side * side * 3, background);
+  const mask = Buffer.alloc(side * side);
+  const left = Math.round(side * 0.375);
+  const top = Math.round(side * 0.25);
+  const width = Math.round(side * 0.25);
+  const height = Math.round(side * 0.375);
+  for (let y = top; y < top + height; y += 1) {
+    for (let x = left; x < left + width; x += 1) {
+      const index = y * side + x;
+      mask[index] = 255;
+      rgb[index * 3] = 30; rgb[index * 3 + 1] = 40; rgb[index * 3 + 2] = 50;
+    }
+  }
+  return { rgb, mask };
+}
+
+async function encodeAdaptiveFixture(rgb: Buffer, mask: Buffer, side: number): Promise<{ v1: Buffer; matte: Buffer }> {
+  return {
+    v1: await sharp(rgb, { raw: { width: side, height: side, channels: 3 } }).png().toBuffer(),
+    matte: await sharp(mask, { raw: { width: side, height: side, channels: 1 } }).png().toBuffer(),
+  };
+}
+
 async function rectangularMaskAtSide(side: number, left: number, top: number, width: number, height: number): Promise<Buffer> {
   const mask = Buffer.alloc(side * side);
   for (let y = top; y < top + height; y += 1) {
@@ -297,6 +382,118 @@ describe("native three-layer compositor", () => {
     expect(scaleAndClipReferenceRect(roi, 800)).toEqual({ x: 0, y: 330, width: 800, height: 470 });
     expect(scaleAndClipReferenceRect(roi, 1200)).toEqual({ x: 0, y: 495, width: 1200, height: 705 });
     expect(scaleAndClipReferenceRect(roi, 1600)).toEqual({ x: 0, y: 660, width: 1600, height: 940 });
+  });
+});
+
+describe("adaptive white-field schema v3", () => {
+  it("selects one deterministic patch and scales its window at 800/1200/1600", () => {
+    const patchSizes: number[] = [];
+    for (const side of [800, 1200, 1600]) {
+      const { rgb, mask } = adaptiveRawFixture(side);
+      const roi = scaleAndClipReferenceRect({ x: 0, y: 480, width: 800, height: 320 }, side);
+      const first = selectAdaptiveWhiteSample(rgb, 3, mask, 1, side, roi);
+      const second = selectAdaptiveWhiteSample(rgb, 3, mask, 1, side, roi);
+      expect(second).toEqual(first);
+      expect(first.medianRgb).toEqual([240, 240, 240]);
+      expect(first.patchPassRate).toBe(1);
+      expect(first.maskDistance).toBeGreaterThanOrEqual(scaleReferenceCoordinate(32, side));
+      patchSizes.push(first.patchSize);
+    }
+    expect(patchSizes).toEqual([31, 47, 63]);
+  });
+
+  it("rejects calibrated rendering when no admissible white field exists", async () => {
+    const side = 800;
+    const { rgb, mask } = adaptiveRawFixture(side, 255);
+    const { v1, matte } = await encodeAdaptiveFixture(rgb, mask, side);
+    const bundle = syntheticAdaptiveBundle();
+    await expect(composeCalibratedShadowMain(v1, matte, bundle, bundle.presets[0]))
+      .rejects.toThrow(/自适应白场采样失败/u);
+  });
+
+  it("purifies detached gray blocks, still fails ROI seams, and preserves a connected contact shadow", async () => {
+    const side = 800;
+    const bundle = syntheticAdaptiveBundle();
+
+    const detached = adaptiveRawFixture(side);
+    for (let y = 650; y < 660; y += 1) for (let x = 50; x < 60; x += 1) {
+      const offset = (y * side + x) * 3;
+      detached.rgb[offset] = 230; detached.rgb[offset + 1] = 230; detached.rgb[offset + 2] = 230;
+    }
+    const detachedImages = await encodeAdaptiveFixture(detached.rgb, detached.mask, side);
+    const detachedResult = await composeCalibratedShadowMain(detachedImages.v1, detachedImages.matte, bundle, bundle.presets[0]);
+    const { data: detachedOutput, info: detachedInfo } = await sharp(detachedResult.image).raw().toBuffer({ resolveWithObject: true });
+    const detachedOffset = (655 * side + 55) * detachedInfo.channels;
+    expect([...detachedOutput.subarray(detachedOffset, detachedOffset + 3)]).toEqual([255, 255, 255]);
+    expect(detachedResult.qualityGates.detachedBackgroundResidue).toMatchObject({ passed: true, largestDetachedArea: 0 });
+
+    const seam = adaptiveRawFixture(side);
+    for (let x = 50; x < 150; x += 1) {
+      const offset = (480 * side + x) * 3;
+      seam.rgb[offset] = 234; seam.rgb[offset + 1] = 234; seam.rgb[offset + 2] = 234;
+    }
+    const seamImages = await encodeAdaptiveFixture(seam.rgb, seam.mask, side);
+    await expect(composeCalibratedShadowMain(seamImages.v1, seamImages.matte, bundle, bundle.presets[0]))
+      .rejects.toThrow(/roiBoundary/u);
+
+    const legal = adaptiveRawFixture(side);
+    for (let y = 500; y < 520; y += 1) for (let x = 320; x < 480; x += 1) {
+      const index = y * side + x;
+      if (legal.mask[index] !== 0) continue;
+      const offset = index * 3;
+      legal.rgb[offset] = 230; legal.rgb[offset + 1] = 230; legal.rgb[offset + 2] = 230;
+    }
+    const legalImages = await encodeAdaptiveFixture(legal.rgb, legal.mask, side);
+    const legalResult = await composeCalibratedShadowMain(legalImages.v1, legalImages.matte, bundle, bundle.presets[0]);
+    expect(legalResult).toMatchObject({
+      sampledRgb: [240, 240, 240],
+      qualityGates: { detachedBackgroundResidue: { passed: true } },
+    });
+    const { data: legalOutput, info: legalInfo } = await sharp(legalResult.image).raw().toBuffer({ resolveWithObject: true });
+    const legalOffset = (510 * side + 400) * legalInfo.channels;
+    expect([...legalOutput.subarray(legalOffset, legalOffset + 3)]).toEqual([244, 244, 244]);
+  });
+
+  it("keeps v2.4 candidate state fail-closed and rejects fixed white points", () => {
+    const approved = syntheticAdaptiveBundle();
+    const candidate = structuredClone(approved);
+    candidate.candidateOnly = true;
+    candidate.releaseState = "awaiting-human-approval";
+    candidate.approved = false;
+    candidate.publicationAllowed = false;
+    candidate.presets[0].approved = false;
+    const bytes = Buffer.from(JSON.stringify(candidate));
+    expect(parseCalibratedShadowManifest(bytes, "hat-ps-shadow-v2.4", "candidate"))
+      .toMatchObject({ schemaVersion: 3, approved: false, presets: [{ approved: false }] });
+    expect(() => parseCalibratedShadowManifest(bytes, "hat-ps-shadow-v2.4"))
+      .toThrow(/候选包不得进入运行时/u);
+    const fixedPoint = structuredClone(candidate) as unknown as Record<string, unknown>;
+    (fixedPoint.presets as Array<Record<string, unknown>>)[0].whitePoint = { x: 413, y: 739 };
+    expect(() => parseCalibratedShadowManifest(Buffer.from(JSON.stringify(fixedPoint)), "hat-ps-shadow-v2.4", "candidate"))
+      .toThrow(/不可变自适应白场策略/u);
+  });
+
+  it("accepts an explicit Slot 4 development identity only in candidate mode", async () => {
+    const candidate = structuredClone(syntheticAdaptiveBundle()) as Record<string, unknown>;
+    candidate.version = SLOT_4_DEVELOPMENT_IDENTITY;
+    candidate.developmentIdentity = SLOT_4_DEVELOPMENT_IDENTITY;
+    candidate.candidateOnly = true;
+    candidate.releaseState = "awaiting-human-approval";
+    candidate.approved = false;
+    candidate.publicationAllowed = false;
+    const preset = (candidate.presets as Array<Record<string, unknown>>)[0];
+    preset.angleSlot = 4;
+    preset.humanAngleLabel = "synthetic-slot-4";
+    preset.approved = false;
+    const bytes = Buffer.from(JSON.stringify(candidate));
+    expect(parseCalibratedShadowManifest(bytes, SLOT_4_DEVELOPMENT_IDENTITY, "candidate"))
+      .toMatchObject({ version: SLOT_4_DEVELOPMENT_IDENTITY, presets: [{ angleSlot: 4, approved: false }] });
+    expect(() => parseCalibratedShadowManifest(bytes, SLOT_4_DEVELOPMENT_IDENTITY))
+      .toThrow(/开发身份不得进入生产运行时/u);
+    await expect(loadCalibratedShadowBundle(SLOT_4_DEVELOPMENT_IDENTITY as never))
+      .rejects.toThrow(/生产加载器拒绝开发身份/u);
+    await expect(loadCandidateCalibratedShadowBundle(process.cwd(), "hat-ps-shadow-v2.3"))
+      .rejects.toThrow(/仅接受显式开发身份/u);
   });
 });
 
