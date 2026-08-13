@@ -1,0 +1,81 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": { "image": "{{INPUT_IMAGE}}" }
+  },
+  "2": {
+    "class_type": "WhiteField_ScaleLongEdge",
+    "inputs": { "image": ["1", 0], "long_edge": 1600 }
+  },
+  "3": {
+    "class_type": "LayerMask: LoadBiRefNetModelV2",
+    "inputs": { "version": "BiRefNet-General" }
+  },
+  "4": {
+    "class_type": "LayerMask: BiRefNetUltraV2",
+    "inputs": {
+      "image": ["2", 0],
+      "birefnet_model": ["3", 0],
+      "detail_method": "GuidedFilter",
+      "detail_erode": 2,
+      "detail_dilate": 2,
+      "black_point": 0.01,
+      "white_point": 0.99,
+      "process_detail": true,
+      "device": "cuda",
+      "max_megapixels": 2.0
+    }
+  },
+  "5": {
+    "class_type": "WhiteField_FitBackdrop",
+    "inputs": {
+      "image": ["2", 0],
+      "mask": ["4", 1],
+      "exclude_px": 32,
+      "known_percentile": 55.0,
+      "sigma_frac": 0.16,
+      "levels": 4,
+      "fit_side": 640
+    }
+  },
+  "6": {
+    "class_type": "WhiteField_ScaleLongEdge",
+    "inputs": { "image": ["1", 0], "long_edge": 800 }
+  },
+  "7": {
+    "class_type": "WhiteField_Normalize",
+    "inputs": {
+      "image": ["6", 0],
+      "mask": ["4", 1],
+      "backdrop": ["5", 0],
+      "dilate_px": 0,
+      "feather_px": 1,
+      "white_at": 0.965,
+      "shadow_gain": 1.0,
+      "hole_white": 0.0,
+      "hole_feather": 2.0,
+      "remove_dust": true,
+      "dust_max_area": 400,
+      "dust_max_dim": 25,
+      "dust_min_gap": 30
+    }
+  },
+  "8": {
+    "class_type": "MaskToImage",
+    "inputs": { "mask": ["7", 4] }
+  },
+  "15": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["7", 1],
+      "filename_prefix": "{{TRANSMITTANCE_PREFIX}}"
+    }
+  },
+  "16": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["8", 0],
+      "filename_prefix": "{{PROTECT_PREFIX}}"
+    }
+  }
+}

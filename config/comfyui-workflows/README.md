@@ -6,6 +6,7 @@
 |---|---|---|
 | `product-main-image.json` | 商品主图白场归一与 800×800 构图 | BiRefNet + ComfyUI-WhiteField |
 | `product-sku-field.json` | SKU 白场归一（投影除掉，不裁方图） | BiRefNet + ComfyUI-WhiteField |
+| `product-shadow-template.json` | 离线提取固定阴影模板的透过率与商品保护蒙版 | BiRefNet + ComfyUI-WhiteField |
 | `wan2.2-ti2v-5b.json` | 文生视频 / 图生视频 | Wan2.2 TI2V-5B |
 
 后续能力按同名约定扩展（`matting-image.json` 图片抠像、`erase-video.json` 智能擦除、
@@ -47,11 +48,15 @@ video it removes the optional `LoadImage` edge before submission.
 业务范围、调度、CPU/GPU 边界、变更规则与排障请见
 [`docs/whitefield-normalization.md`](../../docs/whitefield-normalization.md)。本节只保留工作流目录层面的说明。
 
-`product-main-image.json` 是生产主图的唯一工作流。它保留真实阴影，不调用扩散
+`product-main-image.json` 是默认 V1 主图工作流。它保留真实阴影，不调用扩散
 模型，也不经过本地二次抠图或方图重构。节点 15 直接保存 800×800 `_main` 成品；
 节点 9 把 QA 报告写入 ComfyUI history，Workbench 只接受
 `product_delta_max=0.000`。工作流没有诊断白底 SaveImage 节点，因此 history 只长期
 保留 `_main` 成品，不堆积 3000px 中间文件。
+
+`product-shadow-template.json` 不在普通商品任务中运行，仅由
+`scripts/build-product-shadow-bundle.ts` 在发布新的不可变阴影包时调用。节点 15 保存
+投影透过率，节点 16 保存商品保护蒙版；脚本据此移除商品像素并生成透明阴影 PNG。
 
 生产参数固定为：`MASK_LONG_EDGE=2400`、`DELIVER_LONG_EDGE=3000`、
 `EXCLUDE_PX=40`、`DILATE_PX=0`、`FEATHER_PX=1`、`WHITE_AT=0.965`、

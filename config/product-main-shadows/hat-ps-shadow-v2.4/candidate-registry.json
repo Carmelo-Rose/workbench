@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "candidateOnly": true,
+  "releaseState": "awaiting-human-approval",
+  "approved": false,
+  "publicationAllowed": false,
+  "packages": [
+    {
+      "version": "hat-ps-shadow-v2.4",
+      "manifestSha256": "37d404b678ae126fc9753d5057c4cf74608f431b0c7a0c871a9ee7a771956166"
+    }
+  ]
+}

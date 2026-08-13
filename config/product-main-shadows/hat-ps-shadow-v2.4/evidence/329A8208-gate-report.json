@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 2,
+  "releaseState": "awaiting-human-approval",
+  "approved": false,
+  "publicationAllowed": false,
+  "sourceId": "329A8208",
+  "goldId": "329a8208",
+  "presetVersion": "hat-ps-shadow-v2.4",
+  "developmentIdentity": null,
+  "angleSlot": 1,
+  "humanAngleLabel": "主图斜视角",
+  "goldStandardIds": [
+    "329a8208",
+    "329a8217",
+    "329a8239"
+  ],
+  "whiteSamplePolicy": {
+    "referencePatchSize": 31,
+    "minimumPatchPassRate": 0.95,
+    "minimumMaskDistance": 32,
+    "minimumEdgeDistance": 16,
+    "rgbMin": 220,
+    "rgbMax": 245,
+    "maxChannelSpread": 8,
+    "targetMean": 240,
+    "selectionOrder": [
+      "patch-pass-rate-desc",
+      "mask-distance-desc",
+      "mean-distance-to-240-asc",
+      "y-asc",
+      "x-asc"
+    ],
+    "median": "per-channel-median-of-valid-patch-pixels"
+  },
+  "v1": {
+    "path": "Z:\\型麦-得物-品牌\\【详情页】-待审\\lj测试111\\主图\\329A8208.png",
+    "sha256": "f647e7075a2f709dc2462591e729f06c0904b2c074e18bcbe124bb6ec9937102"
+  },
+  "approvedPsd": {
+    "path": "tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8208\\photoshop-run-v4\\photoshop-candidate\\calibration.psd",
+    "sha256": "bdbc457ab13b94e591d9df676fe30f34cb7af59502cb4b06ab7d3dcff3c67b2c"
+  },
+  "birefnetMask": {
+    "path": "tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\masks\\329A8208-birefnet-mask.png",
+    "sha256": "579fc7877f6500fb195102920066a012c86ab520950dfc00f39231e2203f0f0e"
+  },
+  "layerNames": {
+    "product": "商品",
+    "shadow": "商品阴影",
+    "background": "白色背景"
+  },
+  "referenceCanvas": {
+    "width": 800,
+    "height": 800
+  },
+  "roi": {
+    "x": 0,
+    "y": 480,
+    "width": 800,
+    "height": 320
+  },
+  "sampledPoint": {
+    "x": 712,
+    "y": 730
+  },
+  "sampledPointRgb": [
+    242,
+    242,
+    242
+  ],
+  "sampledRgb": [
+    243,
+    243,
+    243
+  ],
+  "samplePatchPassRate": 1.0,
+  "sampleMaskDistance": 180.01111076819674,
+  "samplePatchSize": 31,
+  "backgroundPurification": {
+    "algorithm": "detached-residue-to-white-v1",
+    "residueThreshold": 2,
+    "minimumArea": 64,
+    "legalShadowMaskNeighborhoodAt800": 16,
+    "connectivity": 8,
+    "purifiedComponentCount": 6,
+    "purifiedPixelCount": 4200
+  },
+  "productBox": {
+    "left": 0.05,
+    "top": 0.1975,
+    "width": 0.89875,
+    "height": 0.60625
+  },
+  "automaticGates": {
+    "whitePoint": {
+      "passed": true,
+      "point": {
+        "x": 712,
+        "y": 730
+      },
+      "pointRgb": [
+        242,
+        242,
+        242
+      ],
+      "medianRgb": [
+        243,
+        243,
+        243
+      ],
+      "patchPassRate": 1.0,
+      "maskDistance": 180.01111076819674,
+      "patchSize": 31
+    },
+    "sampleOutsideMask": {
+      "passed": true,
+      "birefnetAlpha": 0,
+      "photoshopAlpha": 0
+    },
+    "photoshopShadowParity": {
+      "passed": true,
+      "meanChannelError": 0.0,
+      "maxChannelError": 0
+    },
+    "birefnetMask": {
+      "passed": true,
+      "iou": 1.0,
+      "meanBoundaryDistancePxAt800": 0.0
+    },
+    "productBox": {
+      "passed": true,
+      "actual": {
+        "left": 0.05,
+        "top": 0.1975,
+        "width": 0.89875,
+        "height": 0.60625
+      },
+      "associatedGold": {
+        "left": 0.05,
+        "top": 0.1975,
+        "width": 0.89875,
+        "height": 0.60625
+      },
+      "tolerance": 0.05
+    },
+    "opaqueProductCore": {
+      "passed": true
+    },
+    "outsideProductAndRoiWhite": {
+      "passed": true
+    },
+    "roiBoundary": {
+      "passed": true,
+      "maxChannelJump": 0,
+      "limit": 5
+    },
+    "detachedBackgroundResidue": {
+      "passed": true,
+      "largestDetachedArea": 52,
+      "minimumFailingArea": 64
+    },
+    "outputOpaqueRgb": {
+      "passed": true,
+      "mode": "RGB"
+    }
+  },
+  "automaticGatesPassed": true,
+  "artifactSha256": {
+    "difference.png": "37258747045b3fe5f33ebbbf7d6f3443c4671f29a47a8a355d8023cc513debb6",
+    "input.png": "6ca0ad07071d704f28aa3f15e1f8da8fa760fb4616f564743d2c16708016d3ab",
+    "mask.png": "1dd58fbd8088b7061040c5d2701891f49a4de1c2ca4639d5025afcedaa2a19f2",
+    "native-preview.png": "0f81a5937a2586e95254022e6955b3038747aac316bc3ef0d2cdc50105140822",
+    "native-shadow.png": "20914c5fc197f30c9d1fc5e34515888b62581cfc2cd330a627de43f2e8e4964a",
+    "preview.png": "c06cb9aef575362daee36ac5af24d7f427c0a87df9f95a271d59b33be00f84f0",
+    "product.png": "b60f658f5bfc8111ca8627e6260dc2290f66d345dac45a631017d5d2232f3f0f",
+    "shadow.png": "20914c5fc197f30c9d1fc5e34515888b62581cfc2cd330a627de43f2e8e4964a",
+    "side-by-side.png": "5250f48573a0877214d561adf4c77333d53b8ba5dcb0a78f0ad21ccc5a9fe676"
+  }
+}

@@ -1,10 +1,13 @@
 "use client";
 
 import type { useAui } from "@assistant-ui/react";
+import type { ProductShadowPresetVersion } from "@/lib/mono/contracts";
 
 export type ProductPipelineRunConfig = {
   folderId: string;
   workflowId: string;
+  mainImageVersion?: "whitefield-v1" | "calibrated-shadow-v2";
+  shadowPresetVersion?: ProductShadowPresetVersion;
   /** Every newly created 商品套图 carries this; kept optional so legacy job cards can render. */
   modelPairId?: string;
   /** Display label only — echoed straight back to the card, never stored on the job. */

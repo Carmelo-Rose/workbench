@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 2,
+  "candidateVersion": "hat-ps-shadow-v2.4",
+  "baselineVersion": "hat-ps-shadow-v2.1",
+  "releaseState": "awaiting-human-approval",
+  "approved": false,
+  "publicationAllowed": false,
+  "angleSlot": 1,
+  "humanAngleLabel": "主图斜视角",
+  "goldStandardIds": ["329a8208", "329a8217", "329a8239"],
+  "roi": {"x": 0, "y": 480, "width": 800, "height": 320},
+  "whiteSamplePolicy": {
+    "referencePatchSize": 31,
+    "minimumPatchPassRate": 0.95,
+    "minimumMaskDistance": 32,
+    "minimumEdgeDistance": 16,
+    "rgbMin": 220,
+    "rgbMax": 245,
+    "maxChannelSpread": 8,
+    "targetMean": 240,
+    "selectionOrder": ["patch-pass-rate-desc", "mask-distance-desc", "mean-distance-to-240-asc", "y-asc", "x-asc"],
+    "median": "per-channel-median-of-valid-patch-pixels"
+  },
+  "backgroundPurification": {
+    "algorithm": "detached-residue-to-white-v1",
+    "residueThreshold": 2,
+    "minimumArea": 64,
+    "legalShadowMaskNeighborhoodAt800": 16,
+    "connectivity": 8
+  },
+  "automaticGatesPassed": true,
+  "capabilityBoundary": "Preserve V1 product and contact-shadow geometry; purify only independently detached background components at the fixed 64px gate.",
+  "visualStyleReference": {
+    "path": "slot1-black-blue-white-v1-photoshop-native.png",
+    "sha256": "b3ed3d076b2ac8cff9b0a95363170a477cd52b09d060274827dbfa70535e1917",
+    "artboard": "Slot 1 black-blue-white comparison",
+    "role": "visual-style-reference-only",
+    "isGoldStandard": false
+  },
+  "samples": [
+    {
+      "sourceId": "329A8208",
+      "goldId": "329a8208",
+      "photoshopDir": "photoshop-run-v4/photoshop-candidate",
+      "gatesDir": "calibration-gates-v5",
+      "productBoxEvidence": {
+        "sha256": "5ecc1ea0b8f11ed30d4de224ff2c1af1440a843092b256aedad4d43d370d7dcd",
+        "threshold": "grayscale >= 128",
+        "box": {"left": 0.05, "top": 0.1975, "width": 0.89875, "height": 0.60625}
+      }
+    },
+    {
+      "sourceId": "329A8217",
+      "goldId": "329a8217",
+      "photoshopDir": "photoshop-run-v4/photoshop-candidate",
+      "gatesDir": "calibration-gates-v5",
+      "productBoxEvidence": {
+        "sha256": "69e97fd1c15f2df1c0ebe282e3132f35170ea7b9d696eb1657e2d15acedf5526",
+        "threshold": "grayscale >= 128",
+        "box": {"left": 0.05, "top": 0.185, "width": 0.89875, "height": 0.63}
+      }
+    },
+    {
+      "sourceId": "329A8239",
+      "goldId": "329a8239",
+      "photoshopDir": "photoshop-run-v4/photoshop-candidate",
+      "gatesDir": "calibration-gates-v5",
+      "productBoxEvidence": {
+        "sha256": "6641f152728902a94cffb0208ed371e6d5478378f3ca936da7c186b154d4c9e7",
+        "threshold": "grayscale >= 128",
+        "box": {"left": 0.05, "top": 0.2175, "width": 0.9, "height": 0.565}
+      }
+    }
+  ],
+  "candidateEvidence": [
+    {"id": "candidate-status", "path": "candidate-status.json", "packagePath": "evidence/candidate-status.json"},
+    {"id": "slot1-comparison", "path": "slot1-black-blue-white-v1-photoshop-native.png", "packagePath": "evidence/slot1-black-blue-white-v1-photoshop-native.png"},
+    {"id": "329a8208-gate-report", "path": "329A8208/calibration-gates-v5/report.json", "packagePath": "evidence/329A8208-gate-report.json"},
+    {"id": "329a8208-production-entry-report", "path": "329A8208/calibration-gates-v5/production-entry-report.json", "packagePath": "evidence/329A8208-production-entry-report.json"},
+    {"id": "329a8208-residue-json", "path": "329A8208/detached-residue-v1/detached-residue-components.json", "packagePath": "evidence/329A8208-residue-components.json"},
+    {"id": "329a8208-residue-overlay", "path": "329A8208/resolved-residue-v1/detached-residue-overlay.png", "packagePath": "evidence/329A8208-residue-overlay.png"},
+    {"id": "329a8217-gate-report", "path": "329A8217/calibration-gates-v5/report.json", "packagePath": "evidence/329A8217-gate-report.json"},
+    {"id": "329a8217-production-entry-report", "path": "329A8217/calibration-gates-v5/production-entry-report.json", "packagePath": "evidence/329A8217-production-entry-report.json"},
+    {"id": "329a8217-residue-json", "path": "329A8217/detached-residue-v1/detached-residue-components.json", "packagePath": "evidence/329A8217-residue-components.json"},
+    {"id": "329a8217-residue-overlay", "path": "329A8217/resolved-residue-v1/detached-residue-overlay.png", "packagePath": "evidence/329A8217-residue-overlay.png"},
+    {"id": "329a8239-gate-report", "path": "329A8239/calibration-gates-v5/report.json", "packagePath": "evidence/329A8239-gate-report.json"},
+    {"id": "329a8239-production-entry-report", "path": "329A8239/calibration-gates-v5/production-entry-report.json", "packagePath": "evidence/329A8239-production-entry-report.json"},
+    {"id": "329a8239-residue-json", "path": "329A8239/detached-residue-v1/detached-residue-components.json", "packagePath": "evidence/329A8239-residue-components.json"},
+    {"id": "329a8239-residue-overlay", "path": "329A8239/resolved-residue-v1/detached-residue-overlay.png", "packagePath": "evidence/329A8239-residue-overlay.png"}
+  ]
+}

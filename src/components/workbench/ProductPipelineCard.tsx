@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { JobCard } from "@/components/workbench/JobCard";
-import type { MonoJob } from "@/lib/mono/contracts";
+import type { MonoJob, ProductShadowPresetVersion } from "@/lib/mono/contracts";
 import { startProductPipelineRun } from "@/lib/product-pipeline-run";
 
 /**
@@ -82,7 +82,20 @@ const branchLabel: Record<string, string> = {
 
 type SlotRecord = { slot: string; attempts?: number; warning?: string; qa?: string };
 type FailedSlot = { slot: string; reason: string };
-type MainRecord = { stem: string; name: string; warnings?: string[]; assetId?: string };
+type MainRecord = {
+  stem: string;
+  name: string;
+  warnings?: string[];
+  assetId?: string;
+  requestedVersion?: string;
+  actualVersion?: string;
+  angleSlot?: number | null;
+  presetId?: string | null;
+  shadowPresetVersion?: string | null;
+  sampledRgb?: [number, number, number] | null;
+  inputSha256?: string;
+  fallbackReason?: string;
+};
 type FailedMain = { stem: string; name: string; reason: string };
 type BranchState = { stage?: string; progress?: number };
 type PipelineResult = {
@@ -101,6 +114,8 @@ type PipelineResult = {
   warnings?: string[];
   resumed?: boolean;
   incomplete?: boolean;
+  mainImageVersion?: string;
+  shadowPresetVersion?: string;
 };
 
 function pipelineResult(job: MonoJob): PipelineResult {
@@ -109,6 +124,18 @@ function pipelineResult(job: MonoJob): PipelineResult {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function isCalibratedShadowV2(value: unknown): boolean {
+  return value === "calibrated-shadow-v2";
+}
+
+function isHistoricalShadowV2(value: unknown): boolean {
+  return value === "refined-shadow-v2" || value === "template-shadow-v2";
+}
+
+function supportedShadowPresetVersion(value: unknown): ProductShadowPresetVersion | undefined {
+  return value === "hat-ps-shadow-v2.1" || value === "hat-ps-shadow-v2.3" ? value : undefined;
 }
 
 function imageUrl(jobId: string, slot: string, width?: number): string {
@@ -134,6 +161,8 @@ export function ProductPipelineCard({ initialJob, folderName }: { initialJob?: M
 function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folderNameHint?: string }) {
   const aui = useAui();
   const result = pipelineResult(job);
+  const pinnedShadowPresetVersion = supportedShadowPresetVersion(job.input.shadowPresetVersion)
+    ?? supportedShadowPresetVersion(result.shadowPresetVersion);
   const legacyMainFailed = result.failedBranches?.some((item) => item.branch === "main") ?? false;
   const retryTargetLabel = [
     result.failedMain?.length ? `${result.failedMain.length} 张主图` : legacyMainFailed ? "全部主图" : "",
@@ -199,6 +228,12 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
         {
           folderId,
           workflowId: stringValue(job.input.workflowId) ?? "hat-62604171-v1",
+          mainImageVersion: isCalibratedShadowV2(job.input.mainImageVersion)
+            ? "calibrated-shadow-v2"
+            : "whitefield-v1",
+          ...(pinnedShadowPresetVersion
+            ? { shadowPresetVersion: pinnedShadowPresetVersion }
+            : {}),
           modelPairId: stringValue(job.input.modelPairId),
           folderName,
           ...(failedIds.length ? { onlySlots: failedIds } : {}),
@@ -220,6 +255,15 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
   const mainDone = result.mainRecords?.length ?? 0;
   const mainFailed = result.failedMain?.length ?? 0;
   const mainTotal = mainDone + mainFailed;
+  const historicalVersion = [result.mainImageVersion, job.input.mainImageVersion].find(isHistoricalShadowV2);
+  const mainImageVersion = isCalibratedShadowV2(result.mainImageVersion)
+    || isCalibratedShadowV2(job.input.mainImageVersion)
+    ? "calibrated-shadow-v2"
+    : "whitefield-v1";
+  const calibratedShadowCount = result.mainRecords?.filter((record) => isCalibratedShadowV2(record.actualVersion)).length ?? 0;
+  const calibratedFallbackCount = mainImageVersion === "calibrated-shadow-v2"
+    ? result.mainRecords?.filter((record) => record.actualVersion === "whitefield-v1").length ?? 0
+    : 0;
 
   return (
     <div className="space-y-3">
@@ -290,7 +334,17 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
         {result.resumed ? <span className="bg-muted rounded-full px-2.5 py-1">已复用现有主图</span> : null}
         {result.colors?.length ? <span className="bg-muted rounded-full px-2.5 py-1">识别到 {result.colors.length} 个颜色</span> : null}
         {result.detailShots ? <span className="bg-muted rounded-full px-2.5 py-1">{result.detailShots} 张细节图</span> : null}
+        <span className="bg-muted rounded-full px-2.5 py-1">
+          {historicalVersion
+            ? `历史实验 · ${historicalVersion}`
+            : mainImageVersion === "calibrated-shadow-v2" ? "V2 · PS 标定阴影" : "主图 V1 · 实拍阴影"}
+        </span>
         {mainTotal ? <span className="bg-muted rounded-full px-2.5 py-1">主图 {mainDone} / {mainTotal}</span> : null}
+        {!historicalVersion && mainImageVersion === "calibrated-shadow-v2" && mainDone ? (
+          <span className="bg-muted rounded-full px-2.5 py-1">
+            预设命中 {calibratedShadowCount} · V1 回退 {calibratedFallbackCount}
+          </span>
+        ) : null}
         <span className="bg-muted rounded-full px-2.5 py-1">付费槽位 {modelDone} / {MODEL_SLOT_COUNT}</span>
         <span className="bg-muted rounded-full px-2.5 py-1">已用时长 {elapsedLabel(job)}</span>
       </div>
@@ -312,7 +366,7 @@ function ProductPipelineCardBody({ job, folderNameHint }: { job: MonoJob; folder
               {copied ? "已复制" : copyError ? "复制失败，请重试" : "复制文件夹路径"}
             </Button>
           ) : null}
-          {result.incomplete && (
+          {!historicalVersion && result.incomplete && (
             result.failedSlots?.length
             || result.failedMain?.length
             || legacyMainFailed

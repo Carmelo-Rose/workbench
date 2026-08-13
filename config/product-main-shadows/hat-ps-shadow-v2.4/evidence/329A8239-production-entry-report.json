@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "sourceId": "329A8239",
+  "presetVersion": "hat-ps-shadow-v2.4",
+  "releaseState": "awaiting-human-approval",
+  "approved": false,
+  "publicationAllowed": false,
+  "packageBuilt": false,
+  "sampledPoint": {
+    "x": 120,
+    "y": 638
+  },
+  "sampledPointRgb": [
+    240,
+    238,
+    234
+  ],
+  "sampledRgb": [
+    240,
+    238,
+    235
+  ],
+  "sampledPatchPassRate": 0.9729448491155047,
+  "sampledMaskDistance": 62.0966987850401,
+  "qualityGates": {
+    "roiBoundary": {
+      "passed": true,
+      "maxChannelJump": 0,
+      "limit": 5
+    },
+    "detachedBackgroundResidue": {
+      "passed": true,
+      "largestDetachedArea": 7,
+      "minimumFailingArea": 64
+    },
+    "opaqueProductCore": {
+      "passed": true
+    },
+    "outsideProductAndRoiWhite": {
+      "passed": true
+    },
+    "outputOpaqueRgb": {
+      "passed": true
+    }
+  },
+  "productionPixelParity": {
+    "meanChannelError": 0,
+    "maxChannelError": 0
+  },
+  "outputSha256": "de0d6cbc28477650932b9810e650f12d16e95cb151204d480899821005985651",
+  "automaticGatesPassed": true,
+  "passed": true
+}

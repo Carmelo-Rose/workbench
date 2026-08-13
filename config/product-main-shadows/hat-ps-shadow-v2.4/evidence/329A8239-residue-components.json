@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "sourceId": "329A8239",
+  "authoritativeGateReport": {
+    "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8239\\calibration-gates-v3\\report.json",
+    "sha256": "22f5f772e4514700cebf39bc57c1004d792c01d6dd031c251ec472eba079900f"
+  },
+  "fixedGatePolicy": {
+    "residueDefinition": "mask=0 and 255-min(RGB)>=2",
+    "minimumFailingArea": 64,
+    "legalShadowMaskNeighborhoodAt800": 16,
+    "connectivity": 8
+  },
+  "failedComponents": [],
+  "artifacts": {
+    "input.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8239\\calibration-gates-v3\\input.png",
+      "sha256": "95d5f4bfec83be84b4a772cadde079f6d241bbe82125c6f09ececf115f182458"
+    },
+    "preview.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8239\\calibration-gates-v3\\preview.png",
+      "sha256": "d529c8c2cf95c3fb824d16e5c66870917dc1a9a1a11b6bab33c102fa089b4d7d"
+    },
+    "native-preview.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8239\\calibration-gates-v3\\native-preview.png",
+      "sha256": "85b367e763b7f924b29807976b851cd6630820281f314b89540e48f5b6750a90"
+    },
+    "mask.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8239\\calibration-gates-v3\\mask.png",
+      "sha256": "abd5baaca3ea18515a7d8cf28b47f3469247c0274721348024e509280ba17e14"
+    },
+    "report.json": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8239\\calibration-gates-v3\\report.json",
+      "sha256": "22f5f772e4514700cebf39bc57c1004d792c01d6dd031c251ec472eba079900f"
+    },
+    "detached-residue-overlay.png": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\hat-ps-shadow-v2.4-slot1\\329A8239\\detached-residue-v1\\detached-residue-overlay.png",
+      "sha256": "802fde50c3f484489312e8a3a9f33323a40c3dc7098d4e5df8f8953b9ba0989f"
+    }
+  }
+}

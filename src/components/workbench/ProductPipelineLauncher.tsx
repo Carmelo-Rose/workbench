@@ -20,6 +20,7 @@ type Folder = {
   hasImages: boolean;
 };
 type Workflow = { id: string; label: string };
+type MainImageVersion = "whitefield-v1" | "calibrated-shadow-v2";
 type ModelProfile = {
   id: string;
   displayName: string;
@@ -68,6 +69,8 @@ export function ProductPipelineLauncher({
   const [fixedModel, setFixedModel] = useState(false);
   const [modelPairId, setModelPairId] = useState<string>();
   const [workflowId, setWorkflowId] = useState<string>();
+  const [mainImageVersion, setMainImageVersion] = useState<MainImageVersion>("whitefield-v1");
+  const [calibratedShadowV2Enabled, setCalibratedShadowV2Enabled] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string>();
   const [error, setError] = useState<string>();
@@ -111,6 +114,9 @@ export function ProductPipelineLauncher({
             current && installed.some((item) => item.id === current) ? current : installed[0]?.id);
           setRootReachable(payload.rootReachable ?? true);
           setRoot(payload.root);
+          const v2Enabled = payload.calibratedShadowV2Enabled === true;
+          setCalibratedShadowV2Enabled(v2Enabled);
+          if (!v2Enabled) setMainImageVersion("whitefield-v1");
           setError(undefined);
         })
         .catch((reason: unknown) =>
@@ -139,12 +145,13 @@ export function ProductPipelineLauncher({
         {
           folderId: selectedFolder.id,
           workflowId,
+          mainImageVersion,
           folderName: selectedFolder.name,
           ...(fixedModel && selectedPair ? { modelPairId: selectedPair.id } : {}),
         },
-        fixedModel && selectedPair
-          ? `用“${selectedPair.displayName}”生成商品套图：${selectedFolder.name}`
-          : `自动生成模特并制作商品套图：${selectedFolder.name}`,
+        `${mainImageVersion === "calibrated-shadow-v2" ? "用 PS 标定阴影 V2" : "用白场主图 V1"}${
+          fixedModel && selectedPair ? `和“${selectedPair.displayName}”模特` : "并自动生成模特"
+        }制作商品套图：${selectedFolder.name}`,
       );
       setSelected(undefined);
       onOpenChange(false);
@@ -320,6 +327,20 @@ export function ProductPipelineLauncher({
             </select>
           </label>
         ) : null}
+
+        <label className="flex items-center gap-3 text-sm">
+          <span className="text-muted-foreground shrink-0">主图版本</span>
+          <select
+            value={mainImageVersion}
+            onChange={(event) => setMainImageVersion(event.target.value as MainImageVersion)}
+            className="border-input bg-background min-w-0 flex-1 rounded-md border px-2 py-2 text-sm"
+          >
+            <option value="whitefield-v1">V1 · 保留实拍阴影（默认）</option>
+            {calibratedShadowV2Enabled ? (
+              <option value="calibrated-shadow-v2">V2 · PS 标定阴影</option>
+            ) : null}
+          </select>
+        </label>
 
         {error ? <p className="text-destructive text-sm">{error}</p> : null}
         <div className="flex items-center gap-3 border-t pt-4">

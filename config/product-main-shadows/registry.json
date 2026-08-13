@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "packages": [
+    {
+      "version": "hat-ps-shadow-v2.1",
+      "manifestSha256": "d55519c6be63659593d7dc33eeda710f08120fc9a421c693474549fb4a67c2c5"
+    },
+    {
+      "version": "hat-ps-shadow-v2.4",
+      "manifestSha256": "6a14451f80a130fe7014bfbce69fb0e90df57199ab2341c465f212a8bae9bdf3"
+    }
+  ]
+}

@@ -33,7 +33,23 @@ import {
 } from "./product-template";
 import { resolveProductModelPair, type ResolvedProductModelPair } from "./product-model-pairs";
 import { productDetailPageRoot, productSourceRoot } from "./product-roots";
-import type { MonoActor, MonoJob, ProductPipelineInput } from "./contracts";
+import {
+  isProductShadowPresetVersion,
+  type MonoActor,
+  type MonoJob,
+  type ProductMainImageVersion,
+  type ProductPipelineInput,
+  type ProductShadowPresetVersion,
+} from "./contracts";
+import {
+  assertRunnableMainImageVersion,
+  buildCalibratedShadowAssignments,
+  CALIBRATED_SHADOW_MAIN_IMAGE_VERSION,
+  composeCalibratedShadowMain,
+  loadCalibratedShadowBundle,
+  normalizeMainImageVersion,
+  type LoadedCalibratedShadowBundle,
+} from "./product-main-shadow";
 
 export { productDetailPageRoot, productSourceRoot } from "./product-roots";
 
@@ -696,16 +712,22 @@ async function requestCutout(source: SourceImage, folderKey: string, signal: Abo
  * whose article has to be located before it can be compared with the one that
  * was photographed. Same queue and same per-folder fair share as the sources.
  */
-async function requestCutoutBytes(bytes: Buffer, name: string, folderKey: string, signal: AbortSignal): Promise<Buffer> {
+export async function requestCutoutBytes(
+  bytes: Buffer,
+  name: string,
+  folderKey: string,
+  signal: AbortSignal,
+  gatewayActor?: { userId: string; workspaceId: string },
+): Promise<Buffer> {
   return productCutoutScheduler.run(folderKey, async () => {
-    const headers = gatewayHeaders();
+    const headers = gatewayHeaders(gatewayActor);
     // Re-wrapped rather than passed straight through: `Buffer` is typed over
     // ArrayBufferLike, which fetch does not accept as a body.
-    const uploaded = await fetch(`${gatewayBase()}/files/raw?name=${encodeURIComponent(name)}`, { method: "POST", headers: { ...headers, "content-type": "application/octet-stream" }, body: new Uint8Array(bytes), signal });
+    const uploaded = await fetch(`${gatewayBase(gatewayActor)}/files/raw?name=${encodeURIComponent(name)}`, { method: "POST", headers: { ...headers, "content-type": "application/octet-stream" }, body: new Uint8Array(bytes), signal });
     if (!uploaded.ok) throw new Error(`product_cutout 上传失败：${uploaded.status}`);
     const file = await uploaded.json() as { file_id?: string };
     if (!file.file_id) throw new Error("product_cutout 未返回输入文件标识");
-    const created = await fetch(`${gatewayBase()}/jobs`, {
+    const created = await fetch(`${gatewayBase(gatewayActor)}/jobs`, {
       method: "POST",
       headers: { ...headers, "content-type": "application/json" },
       // The gateway receives an opaque queue label only.  No UNC path or folder
@@ -718,14 +740,14 @@ async function requestCutoutBytes(bytes: Buffer, name: string, folderKey: string
     if (!gatewayJob.id) throw new Error("product_cutout 未返回任务标识");
     for (let attempt = 0; attempt < 900; attempt += 1) {
       if (signal.aborted) throw new Error("任务已取消");
-      const current = await fetch(`${gatewayBase()}/jobs/${encodeURIComponent(gatewayJob.id)}`, { headers, signal });
+      const current = await fetch(`${gatewayBase(gatewayActor)}/jobs/${encodeURIComponent(gatewayJob.id)}`, { headers, signal });
       if (!current.ok) throw new Error(`product_cutout 查询失败：${current.status}`);
       const info = await current.json() as { status?: string; error?: string; artifacts?: { path: string }[] };
       if (info.status === "failed" || info.status === "canceled") throw new Error(info.error ?? "product_cutout 失败");
       if (info.status === "succeeded") {
         const artifact = info.artifacts?.find((item) => item.path.toLowerCase().endsWith(".png"));
         if (!artifact) throw new Error("product_cutout 未返回 PNG 产物");
-        const response = await fetch(`${gatewayBase()}/jobs/${encodeURIComponent(gatewayJob.id)}/artifacts/${artifact.path.split("/").map(encodeURIComponent).join("/")}`, { headers, signal });
+        const response = await fetch(`${gatewayBase(gatewayActor)}/jobs/${encodeURIComponent(gatewayJob.id)}/artifacts/${artifact.path.split("/").map(encodeURIComponent).join("/")}`, { headers, signal });
         if (!response.ok) throw new Error(`product_cutout 下载失败：${response.status}`);
         return Buffer.from(await response.arrayBuffer());
       }
@@ -1412,6 +1434,14 @@ type MainFrameRecord = {
   qa: string;
   sha256: string;
   assetId?: string;
+  requestedVersion: ProductMainImageVersion;
+  actualVersion: ProductMainImageVersion;
+  angleSlot: number | null;
+  presetId: string | null;
+  shadowPresetVersion: ProductShadowPresetVersion | null;
+  sampledRgb: [number, number, number] | null;
+  inputSha256: string;
+  fallbackReason?: string;
 };
 type MainBranchOutcome = {
   deliverables: ProductPipelineDeliverable[];
@@ -1434,28 +1464,90 @@ async function runMainBranch(ctx: BranchContext): Promise<MainBranchOutcome> {
   const selectedStems = selectMainSourceStems(eligibleShots.map((item) => item.source.stem), onlyMain);
   const byStem = new Map(eligibleShots.map((item) => [item.source.stem, item]));
   const shots = selectedStems.map((stem) => byStem.get(stem)!);
-  const stage = path.join(ctx.stagingRoot, "主图");
+  const requestedVersion = normalizeMainImageVersion(ctx.job.input.mainImageVersion);
+  const calibratedV2 = requestedVersion === CALIBRATED_SHADOW_MAIN_IMAGE_VERSION;
+  const outputDirectory = calibratedV2 ? "主图-v2" : "主图";
+  const stage = path.join(ctx.stagingRoot, outputDirectory);
   await mkdir(stage, { recursive: true });
-  const destination = path.join(ctx.detailFolder, "主图");
+  const destination = path.join(ctx.detailFolder, outputDirectory);
   const warnings: string[] = [];
   const records: MainFrameRecord[] = [];
   const failedMain: FailedMainFrame[] = [];
-  ctx.progress.report("main", "generating_main", 2, { mainRecords: [], failedMain: [] });
+  const requestedPresetVersion = calibratedV2 && isProductShadowPresetVersion(ctx.job.input.shadowPresetVersion)
+    ? ctx.job.input.shadowPresetVersion
+    : undefined;
+  let bundle: LoadedCalibratedShadowBundle | undefined;
+  let bundleFailure: string | undefined;
+  if (calibratedV2) {
+    if (!requestedPresetVersion) {
+      bundleFailure = "任务未固定合法的 shadowPresetVersion";
+    } else {
+      try { bundle = await loadCalibratedShadowBundle(requestedPresetVersion); }
+      catch (error) { bundleFailure = error instanceof Error ? error.message : String(error); }
+    }
+  }
+  const assignments = buildCalibratedShadowAssignments(ctx.classification.colors, bundle?.presets ?? []);
+  ctx.progress.report("main", "generating_main", 2, {
+    mainRecords: [],
+    failedMain: [],
+    mainImageVersion: requestedVersion,
+    ...(requestedPresetVersion ? { shadowPresetVersion: requestedPresetVersion } : {}),
+  });
   await runWithConcurrency(shots, PRODUCT_CUTOUT_CONCURRENCY, async (item) => {
     if (ctx.signal.aborted) throw new Error("任务已取消");
     try {
-      const frame = await requestWhiteFieldMain(item.source, ctx.signal);
       const name = `${item.source.stem}.png`;
       const output = path.join(stage, name);
-      // Node 15 is already the finished 800×800 deliverable. Preserve its bytes
-      // instead of cutting it out, resizing it or locally rebuilding a square.
-      await writeFile(output, frame.image);
+      const frame = await requestWhiteFieldMain(item.source, ctx.signal);
+      const inputSha256 = sha256(frame.image);
+      let image = frame.image;
+      let actualVersion: ProductMainImageVersion = "whitefield-v1";
+      let fallbackReason: string | undefined;
+      let sampledRgb: [number, number, number] | undefined;
+      const assignment = assignments.get(item.master);
+      if (calibratedV2) {
+        if (bundleFailure) {
+          fallbackReason = `V2 预设校验失败：${bundleFailure}`;
+        } else if (!assignment?.presetId) {
+          fallbackReason = assignment?.fallbackReason ?? "无法安全确定颜色组六图顺序";
+        } else {
+          const preset = bundle?.presets.find((candidate) => candidate.id === assignment.presetId);
+          if (!bundle || !preset) {
+            fallbackReason = "任务命中的批准预设不存在";
+          } else {
+            try {
+              const mask = await requestCutoutBytes(
+                frame.image,
+                `${item.source.stem}-whitefield-v1.png`,
+                ctx.folderKey,
+                ctx.signal,
+              );
+              const rendered = await composeCalibratedShadowMain(frame.image, mask, bundle, preset);
+              image = rendered.image;
+              sampledRgb = rendered.sampledRgb;
+              actualVersion = CALIBRATED_SHADOW_MAIN_IMAGE_VERSION;
+            } catch (error) {
+              if (ctx.signal.aborted) throw error;
+              fallbackReason = `V2 原生渲染失败：${error instanceof Error ? error.message : String(error)}`;
+            }
+          }
+        }
+      }
+      await writeFile(output, image);
       records.push({
         stem: item.source.stem,
         name,
         attempts: frame.attempts,
         qa: frame.qa.text,
         sha256: await fileHash(output),
+        inputSha256,
+        requestedVersion,
+        actualVersion,
+        angleSlot: assignment?.angleSlot ?? null,
+        presetId: assignment?.presetId ?? null,
+        shadowPresetVersion: requestedPresetVersion ?? null,
+        sampledRgb: sampledRgb ?? null,
+        ...(fallbackReason ? { fallbackReason } : {}),
       });
     } catch (error) {
       if (ctx.signal.aborted) throw error;
@@ -1482,7 +1574,12 @@ async function runMainBranch(ctx: BranchContext): Promise<MainBranchOutcome> {
       mainRecords: [...records], failedMain: [...failedMain], mainWarnings: [...warnings], onlyMain,
     });
     await publishMainImages(stage, destination, producedNames);
-    deliverables = await persistProductDirectory(ctx.job, destination, "product-main", producedNames);
+    deliverables = await persistProductDirectory(
+      ctx.job,
+      destination,
+      calibratedV2 ? "product-main-v2" : "product-main",
+      producedNames,
+    );
     for (const record of records) {
       const asset = deliverables.find((item) => item.slotKey === record.name);
       if (asset) record.assetId = asset.assetId;
@@ -1670,6 +1767,7 @@ async function runImagesBranch(
  * branch's bad luck.
  */
 export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Promise<Record<string, unknown>> {
+  assertRunnableMainImageVersion(job.input.mainImageVersion);
   const folderId = String(job.input.folderId ?? "");
   const modelPairId = typeof job.input.modelPairId === "string" ? job.input.modelPairId : "";
   // Resolve before any local cutout work or paid request. The current adapter
@@ -1821,6 +1919,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
   ];
   const failedSlots = imagesOutcome?.failedSlots ?? [];
   const failedMain = mainOutcome?.failedMain ?? [];
+  const mainImageVersion = normalizeMainImageVersion(job.input.mainImageVersion);
   return {
     stage: "completed",
     progress: 100,
@@ -1830,6 +1929,11 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
     modelPairName: modelPair?.displayName,
     colors,
     detailShots: detailShotCount,
+    mainImageVersion,
+    ...(mainImageVersion === CALIBRATED_SHADOW_MAIN_IMAGE_VERSION
+      && isProductShadowPresetVersion(job.input.shadowPresetVersion)
+      ? { shadowPresetVersion: job.input.shadowPresetVersion }
+      : {}),
     mainRecords: mainOutcome?.records ?? [],
     failedMain,
     slots: imagesOutcome?.records ?? [],
@@ -1848,7 +1952,7 @@ export async function runProductPipeline(job: MonoJob, signal: AbortSignal): Pro
 
 type ProductPipelineDeliverable = {
   assetId: string;
-  role: "product-main" | "product-sku" | "product-detail";
+  role: "product-main" | "product-main-v2" | "product-sku" | "product-detail";
   slotKey: string;
   name: string;
   sha256: string;
@@ -1883,7 +1987,7 @@ async function persistProductFile(
 async function persistProductDirectory(
   job: MonoJob,
   directory: string,
-  role: "product-main" | "product-sku",
+  role: "product-main" | "product-main-v2" | "product-sku",
   onlyNames?: ReadonlySet<string>,
 ): Promise<ProductPipelineDeliverable[]> {
   const entries = await readdir(directory, { withFileTypes: true });
