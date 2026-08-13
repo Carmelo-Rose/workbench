@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "candidateVersion": "hat-ps-shadow-v2.5",
+  "baselineVersion": "hat-ps-shadow-v2.4",
+  "releaseState": "awaiting-human-approval",
+  "approved": false,
+  "publicationAllowed": false,
+  "slots": [
+    {
+      "angleSlot": 3,
+      "humanAngleLabel": "正面",
+      "goldStandardIds": [
+        "329a8210",
+        "329a8219"
+      ]
+    },
+    {
+      "angleSlot": 4,
+      "humanAngleLabel": "俯视",
+      "goldStandardIds": [
+        "slot4-black-329a8211",
+        "slot4-blue-329a8220",
+        "slot4-purple-329a8233"
+      ]
+    }
+  ],
+  "automaticGatesPassed": true,
+  "note": "Slot 3 source candidate package had stale pinned evidence; this new v2.5 candidate rebuilds evidence hashes and revalidates all Slot 1–4 pairs."
+}

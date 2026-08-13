@@ -1,0 +1,510 @@
+{
+  "schemaVersion": 1,
+  "developmentIdentity": "slot-4-development",
+  "releaseState": "awaiting-package-lineage",
+  "approved": false,
+  "publicationAllowed": false,
+  "packageBuilt": false,
+  "candidateOnly": true,
+  "productionRegistryModified": false,
+  "productionDefaultModified": false,
+  "angleSlot": 4,
+  "humanAngleLabel": "??",
+  "roi": {
+    "x": 0,
+    "y": 0,
+    "width": 800,
+    "height": 800
+  },
+  "whiteSamplePolicy": {
+    "referencePatchSize": 31,
+    "minimumPatchPassRate": 0.95,
+    "minimumMaskDistance": 32,
+    "minimumEdgeDistance": 16,
+    "rgbMin": 220,
+    "rgbMax": 245,
+    "maxChannelSpread": 8,
+    "targetMean": 240,
+    "selectionOrder": [
+      "patch-pass-rate-desc",
+      "mask-distance-desc",
+      "mean-distance-to-240-asc",
+      "y-asc",
+      "x-asc"
+    ],
+    "median": "per-channel-median-of-valid-patch-pixels"
+  },
+  "goldStandardIds": [
+    "slot4-black-329a8211",
+    "slot4-blue-329a8220",
+    "slot4-purple-329a8233"
+  ],
+  "visualStyleReference": {
+    "selected": "reference/1440-8.png",
+    "selectionReport": "reference/visual-reference-selection.json",
+    "role": "visual-style-reference-only"
+  },
+  "roiSelection": {
+    "selected": "full-canvas",
+    "roiSelectionReport": "roi-selection.json",
+    "initialReferenceBoundaryRejectedBecause": "blue sample ROI boundary max channel jump 7 exceeded fixed limit 5; full-canvas boundary jump is 0 for all golds"
+  },
+  "developmentPreviewBundle": {
+    "path": "development-preview-bundle",
+    "manifestSha256": "f88e69f835419b7b0b6401d06c0aadbee4b2e863269c7a62195ea4f0965348a5",
+    "validatorPassed": true,
+    "immutablePackage": false
+  },
+  "authoritativeReports": [
+    {
+      "sourceId": "329A8211",
+      "goldId": "slot4-black-329a8211",
+      "calibrationReport": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8211\\full-canvas-run\\calibration-gates\\report.json",
+      "authoritativeReport": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8211\\full-canvas-run\\calibration-gates\\authoritative-report.json",
+      "automaticGatesPassed": true,
+      "sampledPoint": {
+        "x": 48,
+        "y": 125
+      },
+      "sampledPointRgb": [
+        238,
+        238,
+        238
+      ],
+      "sampledRgbMedian": [
+        240,
+        240,
+        240
+      ],
+      "samplePatchPassRate": 1.0,
+      "sampleMaskDistance": 160.80111939908875,
+      "gates": {
+        "whitePoint": {
+          "passed": true,
+          "point": {
+            "x": 48,
+            "y": 125
+          },
+          "pointRgb": [
+            238,
+            238,
+            238
+          ],
+          "medianRgb": [
+            240,
+            240,
+            240
+          ],
+          "patchPassRate": 1.0,
+          "maskDistance": 160.80111939908875,
+          "patchSize": 31
+        },
+        "sampleOutsideMask": {
+          "passed": true,
+          "birefnetAlpha": 0,
+          "photoshopAlpha": 0
+        },
+        "photoshopShadowParity": {
+          "passed": true,
+          "meanChannelError": 0.0,
+          "maxChannelError": 0
+        },
+        "birefnetMask": {
+          "passed": true,
+          "iou": 0.9991370404636748,
+          "meanBoundaryDistancePxAt800": 0.11759698213563047
+        },
+        "productBox": {
+          "passed": true,
+          "actual": {
+            "left": 0.235,
+            "top": 0.05,
+            "width": 0.53,
+            "height": 0.9
+          },
+          "associatedGold": {
+            "left": 0.23625,
+            "top": 0.05,
+            "width": 0.5275,
+            "height": 0.9
+          },
+          "tolerance": 0.05
+        },
+        "opaqueProductCore": {
+          "passed": true
+        },
+        "outsideProductAndRoiWhite": {
+          "passed": true
+        },
+        "roiBoundary": {
+          "passed": true,
+          "maxChannelJump": 0,
+          "limit": 5
+        },
+        "detachedBackgroundResidue": {
+          "passed": true,
+          "largestDetachedArea": 22,
+          "minimumFailingArea": 64
+        },
+        "outputOpaqueRgb": {
+          "passed": true,
+          "mode": "RGB"
+        }
+      },
+      "productionEntry": {
+        "function": "composeCalibratedShadowMain",
+        "sampledPoint": {
+          "x": 48,
+          "y": 125
+        },
+        "sampledPointRgb": [
+          238,
+          238,
+          238
+        ],
+        "sampledRgb": [
+          240,
+          240,
+          240
+        ],
+        "sampledPatchPassRate": 1,
+        "sampledMaskDistance": 160.80111939908875,
+        "qualityGates": {
+          "roiBoundary": {
+            "passed": true,
+            "maxChannelJump": 0,
+            "limit": 5
+          },
+          "detachedBackgroundResidue": {
+            "passed": true,
+            "largestDetachedArea": 22,
+            "minimumFailingArea": 64
+          },
+          "opaqueProductCore": {
+            "passed": true
+          },
+          "outsideProductAndRoiWhite": {
+            "passed": true
+          },
+          "outputOpaqueRgb": {
+            "passed": true
+          }
+        },
+        "calibrationPixelParity": {
+          "meanChannelError": 0,
+          "maxChannelError": 0
+        },
+        "outputSha256": "2f5f27d247635d8724d7e586fb40a0a47fa5d80a024e49f6895908a6dd51ad97",
+        "passed": true
+      },
+      "controlledPreview": {
+        "report": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\controlled-preview-runs\\329A8211\\329A8211-preview-report.json",
+        "actualVersion": "calibrated-shadow-v2",
+        "fallbackReason": null
+      }
+    },
+    {
+      "sourceId": "329A8220",
+      "goldId": "slot4-blue-329a8220",
+      "calibrationReport": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8220\\full-canvas-run\\calibration-gates\\report.json",
+      "authoritativeReport": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8220\\full-canvas-run\\calibration-gates\\authoritative-report.json",
+      "automaticGatesPassed": true,
+      "sampledPoint": {
+        "x": 44,
+        "y": 154
+      },
+      "sampledPointRgb": [
+        243,
+        242,
+        241
+      ],
+      "sampledRgbMedian": [
+        243,
+        242,
+        242
+      ],
+      "samplePatchPassRate": 1.0,
+      "sampleMaskDistance": 159.26079241294764,
+      "gates": {
+        "whitePoint": {
+          "passed": true,
+          "point": {
+            "x": 44,
+            "y": 154
+          },
+          "pointRgb": [
+            243,
+            242,
+            241
+          ],
+          "medianRgb": [
+            243,
+            242,
+            242
+          ],
+          "patchPassRate": 1.0,
+          "maskDistance": 159.26079241294764,
+          "patchSize": 31
+        },
+        "sampleOutsideMask": {
+          "passed": true,
+          "birefnetAlpha": 0,
+          "photoshopAlpha": 0
+        },
+        "photoshopShadowParity": {
+          "passed": true,
+          "meanChannelError": 0.0,
+          "maxChannelError": 0
+        },
+        "birefnetMask": {
+          "passed": true,
+          "iou": 0.9989047599217091,
+          "meanBoundaryDistancePxAt800": 0.1457985531441291
+        },
+        "productBox": {
+          "passed": true,
+          "actual": {
+            "left": 0.245,
+            "top": 0.05125,
+            "width": 0.51,
+            "height": 0.89875
+          },
+          "associatedGold": {
+            "left": 0.245,
+            "top": 0.05125,
+            "width": 0.51,
+            "height": 0.89875
+          },
+          "tolerance": 0.05
+        },
+        "opaqueProductCore": {
+          "passed": true
+        },
+        "outsideProductAndRoiWhite": {
+          "passed": true
+        },
+        "roiBoundary": {
+          "passed": true,
+          "maxChannelJump": 0,
+          "limit": 5
+        },
+        "detachedBackgroundResidue": {
+          "passed": true,
+          "largestDetachedArea": 45,
+          "minimumFailingArea": 64
+        },
+        "outputOpaqueRgb": {
+          "passed": true,
+          "mode": "RGB"
+        }
+      },
+      "productionEntry": {
+        "function": "composeCalibratedShadowMain",
+        "sampledPoint": {
+          "x": 44,
+          "y": 154
+        },
+        "sampledPointRgb": [
+          243,
+          242,
+          241
+        ],
+        "sampledRgb": [
+          243,
+          242,
+          242
+        ],
+        "sampledPatchPassRate": 1,
+        "sampledMaskDistance": 159.26079241294764,
+        "qualityGates": {
+          "roiBoundary": {
+            "passed": true,
+            "maxChannelJump": 0,
+            "limit": 5
+          },
+          "detachedBackgroundResidue": {
+            "passed": true,
+            "largestDetachedArea": 45,
+            "minimumFailingArea": 64
+          },
+          "opaqueProductCore": {
+            "passed": true
+          },
+          "outsideProductAndRoiWhite": {
+            "passed": true
+          },
+          "outputOpaqueRgb": {
+            "passed": true
+          }
+        },
+        "calibrationPixelParity": {
+          "meanChannelError": 0,
+          "maxChannelError": 0
+        },
+        "outputSha256": "fe6732158889b39ea1d06ea8a52efd4cea843dc6bdfdf9741f9bea6ceba14c53",
+        "passed": true
+      },
+      "controlledPreview": {
+        "report": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\controlled-preview-runs\\329A8220\\329A8220-preview-report.json",
+        "actualVersion": "calibrated-shadow-v2",
+        "fallbackReason": null
+      }
+    },
+    {
+      "sourceId": "329A8233",
+      "goldId": "slot4-purple-329a8233",
+      "calibrationReport": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8233\\full-canvas-run\\calibration-gates\\report.json",
+      "authoritativeReport": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8233\\full-canvas-run\\calibration-gates\\authoritative-report.json",
+      "automaticGatesPassed": true,
+      "sampledPoint": {
+        "x": 59,
+        "y": 112
+      },
+      "sampledPointRgb": [
+        240,
+        238,
+        239
+      ],
+      "sampledRgbMedian": [
+        241,
+        240,
+        240
+      ],
+      "samplePatchPassRate": 1.0,
+      "sampleMaskDistance": 147.36349615830918,
+      "gates": {
+        "whitePoint": {
+          "passed": true,
+          "point": {
+            "x": 59,
+            "y": 112
+          },
+          "pointRgb": [
+            240,
+            238,
+            239
+          ],
+          "medianRgb": [
+            241,
+            240,
+            240
+          ],
+          "patchPassRate": 1.0,
+          "maskDistance": 147.36349615830918,
+          "patchSize": 31
+        },
+        "sampleOutsideMask": {
+          "passed": true,
+          "birefnetAlpha": 0,
+          "photoshopAlpha": 0
+        },
+        "photoshopShadowParity": {
+          "passed": true,
+          "meanChannelError": 0.0,
+          "maxChannelError": 0
+        },
+        "birefnetMask": {
+          "passed": true,
+          "iou": 0.9986870879029853,
+          "meanBoundaryDistancePxAt800": 0.178490990990991
+        },
+        "productBox": {
+          "passed": true,
+          "actual": {
+            "left": 0.2375,
+            "top": 0.05,
+            "width": 0.52375,
+            "height": 0.9
+          },
+          "associatedGold": {
+            "left": 0.23875,
+            "top": 0.05125,
+            "width": 0.5225,
+            "height": 0.89875
+          },
+          "tolerance": 0.05
+        },
+        "opaqueProductCore": {
+          "passed": true
+        },
+        "outsideProductAndRoiWhite": {
+          "passed": true
+        },
+        "roiBoundary": {
+          "passed": true,
+          "maxChannelJump": 0,
+          "limit": 5
+        },
+        "detachedBackgroundResidue": {
+          "passed": true,
+          "largestDetachedArea": 47,
+          "minimumFailingArea": 64
+        },
+        "outputOpaqueRgb": {
+          "passed": true,
+          "mode": "RGB"
+        }
+      },
+      "productionEntry": {
+        "function": "composeCalibratedShadowMain",
+        "sampledPoint": {
+          "x": 59,
+          "y": 112
+        },
+        "sampledPointRgb": [
+          240,
+          238,
+          239
+        ],
+        "sampledRgb": [
+          241,
+          240,
+          240
+        ],
+        "sampledPatchPassRate": 1,
+        "sampledMaskDistance": 147.36349615830918,
+        "qualityGates": {
+          "roiBoundary": {
+            "passed": true,
+            "maxChannelJump": 0,
+            "limit": 5
+          },
+          "detachedBackgroundResidue": {
+            "passed": true,
+            "largestDetachedArea": 47,
+            "minimumFailingArea": 64
+          },
+          "opaqueProductCore": {
+            "passed": true
+          },
+          "outsideProductAndRoiWhite": {
+            "passed": true
+          },
+          "outputOpaqueRgb": {
+            "passed": true
+          }
+        },
+        "calibrationPixelParity": {
+          "meanChannelError": 0,
+          "maxChannelError": 0
+        },
+        "outputSha256": "c0b648350f7f535093129a82b9d92d2c91af0f45703fb8e796b67fb841204c6c",
+        "passed": true
+      },
+      "controlledPreview": {
+        "report": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\controlled-preview-runs\\329A8233\\329A8233-preview-report.json",
+        "actualVersion": "calibrated-shadow-v2",
+        "fallbackReason": null
+      }
+    }
+  ],
+  "artifacts": {
+    "threeColourComparison": {
+      "path": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\slot-4-v1-photoshop-native-all-colours.png",
+      "sha256": "171c6dd1acb7111b089ced0bdd7803aac87a9c555e7513b65549211a44d6cc06"
+    },
+    "referenceComparison": "reference/1440-4-vs-1440-8.png"
+  },
+  "automaticGatesPassed": true,
+  "nextAction": "Await the explicit v2.4 approval/disposition and package-lineage decision. Do not publish or construct an immutable candidate package."
+}

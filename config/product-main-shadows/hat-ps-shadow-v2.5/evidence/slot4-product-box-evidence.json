@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "source": "independent Photoshop Select Subject masks",
+  "measurement": "gray>=128 on 800x800 exported product-mask.png",
+  "items": [
+    {
+      "sourceId": "329A8211",
+      "goldId": "slot4-black-329a8211",
+      "maskPath": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8211\\photoshop-independent-mask\\product-mask.png",
+      "maskSha256": "4e73f870a10e0ab462e0dee9d79e01964e850c4b67e046f72aa65fc061e3b698",
+      "threshold": "gray>=128",
+      "productBox": {
+        "left": 0.235,
+        "top": 0.05,
+        "width": 0.53,
+        "height": 0.9
+      },
+      "foregroundPixels": 240354
+    },
+    {
+      "sourceId": "329A8220",
+      "goldId": "slot4-blue-329a8220",
+      "maskPath": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8220\\photoshop-independent-mask\\product-mask.png",
+      "maskSha256": "962be2af83e791e5a72a5b6b806d1b1dc7ca39f87b278f08478bb5d10bdc54d9",
+      "threshold": "gray>=128",
+      "productBox": {
+        "left": 0.245,
+        "top": 0.05125,
+        "width": 0.51,
+        "height": 0.89875
+      },
+      "foregroundPixels": 239448
+    },
+    {
+      "sourceId": "329A8233",
+      "goldId": "slot4-purple-329a8233",
+      "maskPath": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8233\\photoshop-independent-mask\\product-mask.png",
+      "maskSha256": "83ed0b6a8913e59b5c87e93a08adb0fc862847a371e5b00dd03997544852dac6",
+      "threshold": "gray>=128",
+      "productBox": {
+        "left": 0.23875,
+        "top": 0.05,
+        "width": 0.5225,
+        "height": 0.9
+      },
+      "foregroundPixels": 240667
+    }
+  ]
+}

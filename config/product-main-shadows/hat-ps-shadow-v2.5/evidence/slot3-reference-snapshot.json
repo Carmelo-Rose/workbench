@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "releaseState": "awaiting-human-approval",
+  "sourceDocument": "C:/Users/Administrator.DESKTOP-GRHN4PA/Documents/WXWork/1688858081795141/Cache/File/2026-08/4.psd",
+  "sourceDiskSha256": "3d0d4fb69f6afba9c1cd8044b6ff815a78cdcd96a743549f67993ea77e35495d",
+  "sourceHadUnsavedChanges": true,
+  "snapshot": "D:/workspace/claude/code/workbench/tmp/product-main-shadow-candidates/hat-ps-shadow-v2.3-slot3-front/reference/4-slot3-front-reference.psd",
+  "snapshotSha256": "e468c077ad7b5df5cda5031971a83b44ee0ca8caa6fd4fe9fc72a3414efad3b8",
+  "snapshotBytes": 24493481,
+  "snapshotReadOnly": true,
+  "canvas": {
+    "width": 2624,
+    "height": 4448,
+    "depth": 8,
+    "colorMode": "RGB"
+  },
+  "expectedArtboard": {
+    "name": "1 拷贝",
+    "bbox": [921, 950, 1721, 1750],
+    "width": 800,
+    "height": 800
+  },
+  "role": "visual-style-reference-only",
+  "isGoldStandard": false,
+  "approved": false,
+  "publicationAllowed": false
+}

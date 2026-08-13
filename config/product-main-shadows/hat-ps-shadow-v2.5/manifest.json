@@ -1,0 +1,795 @@
+{
+  "schemaVersion": 3,
+  "version": "hat-ps-shadow-v2.5",
+  "candidateOnly": false,
+  "releaseState": "approved",
+  "approved": true,
+  "publicationAllowed": true,
+  "canvas": {
+    "width": 800,
+    "height": 800
+  },
+  "algorithm": {
+    "id": "ps-levels-roi-v2-adaptive-white",
+    "levels": "round(value*255/channelMedian)-clamp-255"
+  },
+  "biRefNet": {
+    "modelId": "ZhengPeng7/BiRefNet_HR-matting",
+    "revision": "5d6b6f8adcb5b417c871b1d84ceaae9871355b7f",
+    "weightsSha256": "a5a4de698739ea5e0e8bbab28e1b293dde95092b87a442d566cbc585c53cef55"
+  },
+  "gates": {
+    "whitePointMin": 220,
+    "whitePointMax": 245,
+    "whitePointMaxChannelSpread": 8,
+    "productBoxTolerance": 0.05,
+    "roiBoundaryMaxChannelJump": 5,
+    "detachedResidueMinArea": 64,
+    "residueThreshold": 2,
+    "legalShadowMaskNeighborhood": 16
+  },
+  "goldStandards": [
+    {
+      "id": "329a8209",
+      "psdPath": "gold-psd/329a8209.psd",
+      "psdSha256": "a946dab8591b8eda8c6d81f75465aa068acdd88d77c73c0109a9b798fc7a50f1",
+      "layerNames": {
+        "product": "帽子",
+        "shadow": "帽子阴影",
+        "background": "图层 3"
+      },
+      "productBox": {
+        "left": 0.05,
+        "top": 0.12875,
+        "width": 0.9,
+        "height": 0.74375
+      },
+      "sourcePsdPath": "gold-psd/329a8209.psd"
+    },
+    {
+      "id": "329a8218",
+      "psdPath": "gold-psd/329a8218.psd",
+      "psdSha256": "dc8866744d73f20b5843d372dafedae9f20d38dcd31163e147266f60794c6f4c",
+      "layerNames": {
+        "product": "帽子",
+        "shadow": "帽子阴影",
+        "background": "白色背景"
+      },
+      "productBox": {
+        "left": 0.05,
+        "top": 0.1225,
+        "width": 0.9,
+        "height": 0.7575
+      },
+      "sourcePsdPath": "gold-psd/329a8218.psd"
+    },
+    {
+      "id": "329a8208",
+      "psdPath": "gold-psd/329a8208.psd",
+      "sourcePsdPath": "gold-psd/329a8208.psd",
+      "psdSha256": "bdbc457ab13b94e591d9df676fe30f34cb7af59502cb4b06ab7d3dcff3c67b2c",
+      "layerNames": {
+        "product": "商品",
+        "shadow": "商品阴影",
+        "background": "白色背景"
+      },
+      "productBox": {
+        "left": 0.05,
+        "top": 0.1975,
+        "width": 0.89875,
+        "height": 0.60625
+      }
+    },
+    {
+      "id": "329a8217",
+      "psdPath": "gold-psd/329a8217.psd",
+      "sourcePsdPath": "gold-psd/329a8217.psd",
+      "psdSha256": "10a46216234146d7652823c1c3186559859749273a2c505a3580d7f59d696b2b",
+      "layerNames": {
+        "product": "商品",
+        "shadow": "商品阴影",
+        "background": "白色背景"
+      },
+      "productBox": {
+        "left": 0.05,
+        "top": 0.185,
+        "width": 0.89875,
+        "height": 0.63
+      }
+    },
+    {
+      "id": "329a8239",
+      "psdPath": "gold-psd/329a8239.psd",
+      "sourcePsdPath": "gold-psd/329a8239.psd",
+      "psdSha256": "d105c548979ebbe1d2e5f9951bc2174df7e0c91309a653846df3cd21b5677af2",
+      "layerNames": {
+        "product": "商品",
+        "shadow": "商品阴影",
+        "background": "白色背景"
+      },
+      "productBox": {
+        "left": 0.05,
+        "top": 0.2175,
+        "width": 0.9,
+        "height": 0.565
+      }
+    },
+    {
+      "id": "329a8210",
+      "psdPath": "gold-psd/329a8210.psd",
+      "sourcePsdPath": "329A8210/photoshop-candidate-v4/calibration.psd",
+      "psdSha256": "9d50e0f94558bb76bdc19777c7c1f4c8396db77d545b3b3550f117ae0b658cfb",
+      "layerNames": {
+        "product": "商品",
+        "shadow": "商品阴影",
+        "background": "白色背景"
+      },
+      "productBox": {
+        "left": 0.14375,
+        "top": 0.05125,
+        "width": 0.71125,
+        "height": 0.89875
+      }
+    },
+    {
+      "id": "329a8219",
+      "psdPath": "gold-psd/329a8219.psd",
+      "sourcePsdPath": "329A8219/photoshop-candidate-v4/calibration.psd",
+      "psdSha256": "a43e5d21a98d81611bb8b67793be2c39ebd67bc2fc9b94fb2e0e3b118a5cd6eb",
+      "layerNames": {
+        "product": "商品",
+        "shadow": "商品阴影",
+        "background": "白色背景"
+      },
+      "productBox": {
+        "left": 0.1525,
+        "top": 0.0725,
+        "width": 0.69625,
+        "height": 0.87875
+      }
+    },
+    {
+      "id": "slot4-black-329a8211",
+      "psdPath": "gold-psd/slot4-black-329a8211.psd",
+      "sourcePsdPath": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8211\\full-canvas-run\\photoshop-candidate\\calibration.psd",
+      "psdSha256": "85a9a2085c7c1f85dc534871571b3cc013498eb0266fa78685693d1e04981857",
+      "layerNames": {
+        "product": "product",
+        "shadow": "product-shadow",
+        "background": "white-background"
+      },
+      "productBox": {
+        "left": 0.23625,
+        "top": 0.05,
+        "width": 0.5275,
+        "height": 0.9
+      }
+    },
+    {
+      "id": "slot4-blue-329a8220",
+      "psdPath": "gold-psd/slot4-blue-329a8220.psd",
+      "sourcePsdPath": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8220\\full-canvas-run\\photoshop-candidate\\calibration.psd",
+      "psdSha256": "0b7abddafdeae81a9857915c01c6eacfa63c20e6c332354c579c98d29241cfbc",
+      "layerNames": {
+        "product": "product",
+        "shadow": "product-shadow",
+        "background": "white-background"
+      },
+      "productBox": {
+        "left": 0.245,
+        "top": 0.05125,
+        "width": 0.51,
+        "height": 0.89875
+      }
+    },
+    {
+      "id": "slot4-purple-329a8233",
+      "psdPath": "gold-psd/slot4-purple-329a8233.psd",
+      "sourcePsdPath": "D:\\workspace\\claude\\code\\workbench\\tmp\\product-main-shadow-candidates\\slot-4-development\\329A8233\\full-canvas-run\\photoshop-candidate\\calibration.psd",
+      "psdSha256": "62cc55fb727de4d4a0886a8db2f7ce7f534fc94fcb9fdb4e8225258568fca329",
+      "layerNames": {
+        "product": "product",
+        "shadow": "product-shadow",
+        "background": "white-background"
+      },
+      "productBox": {
+        "left": 0.23875,
+        "top": 0.05125,
+        "width": 0.5225,
+        "height": 0.89875
+      }
+    }
+  ],
+  "presets": [
+    {
+      "id": "hat-angle-slot-2",
+      "angleSlot": 2,
+      "humanAngleLabel": "左斜视角",
+      "approved": true,
+      "roi": {
+        "x": 0,
+        "y": 277,
+        "width": 800,
+        "height": 569
+      },
+      "whitePoint": {
+        "x": 11,
+        "y": 658
+      },
+      "goldStandardIds": [
+        "329a8209",
+        "329a8218"
+      ],
+      "releaseState": "approved",
+      "publicationAllowed": true
+    },
+    {
+      "id": "hat-angle-slot-1",
+      "angleSlot": 1,
+      "humanAngleLabel": "主图斜视角",
+      "approved": true,
+      "goldStandardIds": [
+        "329a8208",
+        "329a8217",
+        "329a8239"
+      ],
+      "roi": {
+        "x": 0,
+        "y": 480,
+        "width": 800,
+        "height": 320
+      },
+      "releaseState": "approved",
+      "publicationAllowed": true,
+      "whiteSamplePolicy": {
+        "referencePatchSize": 31,
+        "minimumPatchPassRate": 0.95,
+        "minimumMaskDistance": 32,
+        "minimumEdgeDistance": 16,
+        "rgbMin": 220,
+        "rgbMax": 245,
+        "maxChannelSpread": 8,
+        "targetMean": 240,
+        "selectionOrder": [
+          "patch-pass-rate-desc",
+          "mask-distance-desc",
+          "mean-distance-to-240-asc",
+          "y-asc",
+          "x-asc"
+        ],
+        "median": "per-channel-median-of-valid-patch-pixels"
+      }
+    },
+    {
+      "id": "hat-angle-slot-3",
+      "angleSlot": 3,
+      "humanAngleLabel": "正面",
+      "approved": true,
+      "goldStandardIds": [
+        "329a8210",
+        "329a8219"
+      ],
+      "roi": {
+        "x": 0,
+        "y": 330,
+        "width": 800,
+        "height": 470
+      },
+      "releaseState": "approved",
+      "publicationAllowed": true,
+      "whitePoint": {
+        "x": 15,
+        "y": 578
+      }
+    },
+    {
+      "id": "hat-angle-slot-4",
+      "angleSlot": 4,
+      "humanAngleLabel": "俯视",
+      "approved": true,
+      "goldStandardIds": [
+        "slot4-black-329a8211",
+        "slot4-blue-329a8220",
+        "slot4-purple-329a8233"
+      ],
+      "roi": {
+        "x": 0,
+        "y": 0,
+        "width": 800,
+        "height": 800
+      },
+      "releaseState": "approved",
+      "publicationAllowed": true,
+      "whiteSamplePolicy": {
+        "referencePatchSize": 31,
+        "minimumPatchPassRate": 0.95,
+        "minimumMaskDistance": 32,
+        "minimumEdgeDistance": 16,
+        "rgbMin": 220,
+        "rgbMax": 245,
+        "maxChannelSpread": 8,
+        "targetMean": 240,
+        "selectionOrder": [
+          "patch-pass-rate-desc",
+          "mask-distance-desc",
+          "mean-distance-to-240-asc",
+          "y-asc",
+          "x-asc"
+        ],
+        "median": "per-channel-median-of-valid-patch-pixels"
+      }
+    }
+  ],
+  "regressionAssets": [
+    {
+      "id": "329a8209-input",
+      "kind": "input",
+      "file": "regression/329A8209-input.png",
+      "sha256": "ea66ca5cf49f71562ec2035933211f732d162d99bb0958c3e6df5fc8c1484f34"
+    },
+    {
+      "id": "329a8209-product",
+      "kind": "product",
+      "file": "regression/329A8209-product.png",
+      "sha256": "994b600be271627901115106df5d73e5a8b7e5662d598ccea5ac952cf47c3e84"
+    },
+    {
+      "id": "329a8209-ps-mask",
+      "kind": "mask",
+      "file": "regression/329A8209-ps-mask.png",
+      "sha256": "979f5f786b0af98bdfd45ad94a545fdd710ffbbb15da599c59abb857c8857097"
+    },
+    {
+      "id": "329a8209-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/329A8209-birefnet-mask.png",
+      "sha256": "c9ad533e5aa25cc730cd027b7ee6a501dcb6a202bbe44c30552a974c02989db8"
+    },
+    {
+      "id": "329a8209-shadow",
+      "kind": "shadow",
+      "file": "regression/329A8209-shadow.png",
+      "sha256": "3a3c3777dd0b8a72590f857a0ef5177339185da4b2c8f0cac40218e3bcae3777"
+    },
+    {
+      "id": "329a8209-preview",
+      "kind": "preview",
+      "file": "regression/329A8209-preview.png",
+      "sha256": "19ca5ff6cfa446da1d9f31a526b1f5ad9535643c7e47bc902e4d985db6a9bbe7"
+    },
+    {
+      "id": "329a8218-input",
+      "kind": "input",
+      "file": "regression/329A8218-input.png",
+      "sha256": "2abc6b67a59d9376ca0af188ec5dcd39247f5c18156dd1bb537efcb419100883"
+    },
+    {
+      "id": "329a8218-product",
+      "kind": "product",
+      "file": "regression/329A8218-product.png",
+      "sha256": "628f51f8d73b26433173adf377e40a166189301771da149b2b83ec0f249ea60e"
+    },
+    {
+      "id": "329a8218-ps-mask",
+      "kind": "mask",
+      "file": "regression/329A8218-ps-mask.png",
+      "sha256": "4ca523a6ab10a9e2d3f643625a2178a63e138766ff048b1a51092b3bbe10b5da"
+    },
+    {
+      "id": "329a8218-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/329A8218-birefnet-mask.png",
+      "sha256": "1c97bf4a21535645e9bc75e7f1a43350ccc2c7ba2722f5a943b6368e58713377"
+    },
+    {
+      "id": "329a8218-shadow",
+      "kind": "shadow",
+      "file": "regression/329A8218-shadow.png",
+      "sha256": "fa2c76224becd32d8af3a858c8b31eb221b91785b953e689c72e1973b27f4c68"
+    },
+    {
+      "id": "329a8218-preview",
+      "kind": "preview",
+      "file": "regression/329A8218-preview.png",
+      "sha256": "8cceecb6b75dbeca93281c851946802b8c197347ff6c00e52bcc94f3a696062e"
+    },
+    {
+      "id": "329a8208-input",
+      "kind": "input",
+      "file": "regression/329A8208-input.png",
+      "sha256": "6ca0ad07071d704f28aa3f15e1f8da8fa760fb4616f564743d2c16708016d3ab"
+    },
+    {
+      "id": "329a8208-product",
+      "kind": "product",
+      "file": "regression/329A8208-product.png",
+      "sha256": "b60f658f5bfc8111ca8627e6260dc2290f66d345dac45a631017d5d2232f3f0f"
+    },
+    {
+      "id": "329a8208-ps-mask",
+      "kind": "mask",
+      "file": "regression/329A8208-ps-mask.png",
+      "sha256": "1dd58fbd8088b7061040c5d2701891f49a4de1c2ca4639d5025afcedaa2a19f2"
+    },
+    {
+      "id": "329a8208-shadow",
+      "kind": "shadow",
+      "file": "regression/329A8208-shadow.png",
+      "sha256": "20914c5fc197f30c9d1fc5e34515888b62581cfc2cd330a627de43f2e8e4964a"
+    },
+    {
+      "id": "329a8208-preview",
+      "kind": "preview",
+      "file": "regression/329A8208-preview.png",
+      "sha256": "c06cb9aef575362daee36ac5af24d7f427c0a87df9f95a271d59b33be00f84f0"
+    },
+    {
+      "id": "329a8208-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/329A8208-birefnet-mask.png",
+      "sha256": "579fc7877f6500fb195102920066a012c86ab520950dfc00f39231e2203f0f0e"
+    },
+    {
+      "id": "329a8217-input",
+      "kind": "input",
+      "file": "regression/329A8217-input.png",
+      "sha256": "f300c89f2100c761ede3fd2a8ad8b7a5b9d6a4acf7bcd1a8ba3163032095b139"
+    },
+    {
+      "id": "329a8217-product",
+      "kind": "product",
+      "file": "regression/329A8217-product.png",
+      "sha256": "6c6e408da017be9e490f5b9081948b00008ad8dafb68b2852a298f7ae6869f6d"
+    },
+    {
+      "id": "329a8217-ps-mask",
+      "kind": "mask",
+      "file": "regression/329A8217-ps-mask.png",
+      "sha256": "d18a20ef1aee49f15b5ff8530807c11af62f90a2dce98aefa726b3496d645bc0"
+    },
+    {
+      "id": "329a8217-shadow",
+      "kind": "shadow",
+      "file": "regression/329A8217-shadow.png",
+      "sha256": "0fac70922d55e8054e88e92c8302234618289194ddb64e43e2ea27c75c3b5b8d"
+    },
+    {
+      "id": "329a8217-preview",
+      "kind": "preview",
+      "file": "regression/329A8217-preview.png",
+      "sha256": "62fa10178072af7a399374fbf4b688158eaab75dcce9504a4b7880478167ebad"
+    },
+    {
+      "id": "329a8217-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/329A8217-birefnet-mask.png",
+      "sha256": "4775d5d61459b701da3ea22bee18800af8611fbabd02855a6ec7c9c0e9fe91a0"
+    },
+    {
+      "id": "329a8239-input",
+      "kind": "input",
+      "file": "regression/329A8239-input.png",
+      "sha256": "95d5f4bfec83be84b4a772cadde079f6d241bbe82125c6f09ececf115f182458"
+    },
+    {
+      "id": "329a8239-product",
+      "kind": "product",
+      "file": "regression/329A8239-product.png",
+      "sha256": "2b2346af373d90351e08b20dc6bb30d7615a24144a5dac56accadaa9e9963bc3"
+    },
+    {
+      "id": "329a8239-ps-mask",
+      "kind": "mask",
+      "file": "regression/329A8239-ps-mask.png",
+      "sha256": "abd5baaca3ea18515a7d8cf28b47f3469247c0274721348024e509280ba17e14"
+    },
+    {
+      "id": "329a8239-shadow",
+      "kind": "shadow",
+      "file": "regression/329A8239-shadow.png",
+      "sha256": "b821a4eb7867f9d9145faa269dc39ac8db04485ea2690a45ec1d86cb673b88eb"
+    },
+    {
+      "id": "329a8239-preview",
+      "kind": "preview",
+      "file": "regression/329A8239-preview.png",
+      "sha256": "d529c8c2cf95c3fb824d16e5c66870917dc1a9a1a11b6bab33c102fa089b4d7d"
+    },
+    {
+      "id": "329a8239-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/329A8239-birefnet-mask.png",
+      "sha256": "07b6875af9e3d8b628e67012e1048a314d60e9b70fc7d54b4146d28fb157ed9e"
+    },
+    {
+      "id": "329a8210-input",
+      "kind": "input",
+      "file": "regression/329a8210-input.png",
+      "sha256": "e46f28872dbdeec9f78c445f836800fa12654c9030707167a751b67c70e1716e"
+    },
+    {
+      "id": "329a8210-product",
+      "kind": "product",
+      "file": "regression/329a8210-product.png",
+      "sha256": "d558a85d9f6a1c82516888d210976f9b2c0404ea441467ae68ad34156bcceb6a"
+    },
+    {
+      "id": "329a8210-ps-mask",
+      "kind": "mask",
+      "file": "regression/329a8210-ps-mask.png",
+      "sha256": "af73dea7b0885c4e4dcfec498cffdd3d13882d8100a817ea8d9adde82267d5c1"
+    },
+    {
+      "id": "329a8210-shadow",
+      "kind": "shadow",
+      "file": "regression/329a8210-shadow.png",
+      "sha256": "1d2ed5154c71ae9bb5e57c477428dd9857eb19f098999a72caf86b0f03c410eb"
+    },
+    {
+      "id": "329a8210-preview",
+      "kind": "preview",
+      "file": "regression/329a8210-preview.png",
+      "sha256": "fd3a286d953ed352da60389f997d6f7d71dc20e938d879778189accb241309b8"
+    },
+    {
+      "id": "329a8210-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/329a8210-birefnet-mask.png",
+      "sha256": "fe6dc534f45fbd9c18867b97969feb786b93651958221a53dc91115da501c959"
+    },
+    {
+      "id": "329a8219-input",
+      "kind": "input",
+      "file": "regression/329a8219-input.png",
+      "sha256": "60c3cc606a36ba706c12c2e508a5f373696216b4c5e6c27cd9df6d554121dbd5"
+    },
+    {
+      "id": "329a8219-product",
+      "kind": "product",
+      "file": "regression/329a8219-product.png",
+      "sha256": "49816ec814a5a9037adfd8fbe95a0cc6e66288d0b4e59a3004add8b5cce9f349"
+    },
+    {
+      "id": "329a8219-ps-mask",
+      "kind": "mask",
+      "file": "regression/329a8219-ps-mask.png",
+      "sha256": "41c50593177a597381abdc6bb2d9faa3c1e48bf6d737e24b9da0f8087b63c678"
+    },
+    {
+      "id": "329a8219-shadow",
+      "kind": "shadow",
+      "file": "regression/329a8219-shadow.png",
+      "sha256": "9691a5da2f79a855c02c20a239cf1cf7f87bc059a4f186a3d3915444239e6bfd"
+    },
+    {
+      "id": "329a8219-preview",
+      "kind": "preview",
+      "file": "regression/329a8219-preview.png",
+      "sha256": "336925378c220a80a4e5d44354cdd51a24807c627264551ee43900f10e521fbc"
+    },
+    {
+      "id": "329a8219-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/329a8219-birefnet-mask.png",
+      "sha256": "4b552e21376bfd32a35cb84ced1ac955459709b8e98db7b7674f825e12f50f9d"
+    },
+    {
+      "id": "slot4-black-329a8211-input",
+      "kind": "input",
+      "file": "regression/slot4-black-329a8211-input.png",
+      "sha256": "96bae1fd95394a07d364bb587c3bc361fd2428faa9f0f18999583f60011a9d45"
+    },
+    {
+      "id": "slot4-black-329a8211-product",
+      "kind": "product",
+      "file": "regression/slot4-black-329a8211-product.png",
+      "sha256": "efc8267e39f78258e7780f080fe408d52b3c6f84141861b5b7b9e661ffc0f0db"
+    },
+    {
+      "id": "slot4-black-329a8211-ps-mask",
+      "kind": "mask",
+      "file": "regression/slot4-black-329a8211-ps-mask.png",
+      "sha256": "0cbc76648f8fb7289a1d624eba15c58694a9159c712ba6e82621499885e90a55"
+    },
+    {
+      "id": "slot4-black-329a8211-shadow",
+      "kind": "shadow",
+      "file": "regression/slot4-black-329a8211-shadow.png",
+      "sha256": "0f7e1d7d6e4d204c7630c26434e76d8373bf291af91d40774779cd58338b9086"
+    },
+    {
+      "id": "slot4-black-329a8211-preview",
+      "kind": "preview",
+      "file": "regression/slot4-black-329a8211-preview.png",
+      "sha256": "c654e1a1d425227308a77db294e7f1415c97b65baef03b083a416a6870a8d6a4"
+    },
+    {
+      "id": "slot4-black-329a8211-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/slot4-black-329a8211-birefnet-mask.png",
+      "sha256": "4c38e0d922a2d1c975ecea85ad98255295f60da4d3af2aadf1dee168268c7959"
+    },
+    {
+      "id": "slot4-blue-329a8220-input",
+      "kind": "input",
+      "file": "regression/slot4-blue-329a8220-input.png",
+      "sha256": "9f4fae3b0e174b32b09ec663381122544bde3fc415c92c1554731a13d4800e56"
+    },
+    {
+      "id": "slot4-blue-329a8220-product",
+      "kind": "product",
+      "file": "regression/slot4-blue-329a8220-product.png",
+      "sha256": "5937797dfde52b1ce45a9a1dae2c59da80b2fd9a951afa40ddfc925f4fd7452a"
+    },
+    {
+      "id": "slot4-blue-329a8220-ps-mask",
+      "kind": "mask",
+      "file": "regression/slot4-blue-329a8220-ps-mask.png",
+      "sha256": "ce634175906abc137f3374f2cddcbba389fa5e2895dcae5a497855dac074a196"
+    },
+    {
+      "id": "slot4-blue-329a8220-shadow",
+      "kind": "shadow",
+      "file": "regression/slot4-blue-329a8220-shadow.png",
+      "sha256": "4c51829c52880ed2e5806d3e8a424d2bc4dc35cce39a2b74a9565ec2042dba93"
+    },
+    {
+      "id": "slot4-blue-329a8220-preview",
+      "kind": "preview",
+      "file": "regression/slot4-blue-329a8220-preview.png",
+      "sha256": "9bc97b4cae457bb3595a64865f92545ed6c770180d6c19b26fd0c1c69ae3449c"
+    },
+    {
+      "id": "slot4-blue-329a8220-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/slot4-blue-329a8220-birefnet-mask.png",
+      "sha256": "1c244cba775a14f3c72807fc56d42d9f4bca0b102c2f24797e3afb49ec69aa54"
+    },
+    {
+      "id": "slot4-purple-329a8233-input",
+      "kind": "input",
+      "file": "regression/slot4-purple-329a8233-input.png",
+      "sha256": "866e7a2ccde4290d0a748aae937efb00e04f880898a9e8b1ff7f690638b0953c"
+    },
+    {
+      "id": "slot4-purple-329a8233-product",
+      "kind": "product",
+      "file": "regression/slot4-purple-329a8233-product.png",
+      "sha256": "e2acd6e34b75b3459ca39e0e529e488b87bd5dafcec904166f4b9bc096361474"
+    },
+    {
+      "id": "slot4-purple-329a8233-ps-mask",
+      "kind": "mask",
+      "file": "regression/slot4-purple-329a8233-ps-mask.png",
+      "sha256": "cf59f7ac8a1fe3867cf238b58c2f3f6aaa2c0862f625e3802687c6c5a0ecef8a"
+    },
+    {
+      "id": "slot4-purple-329a8233-shadow",
+      "kind": "shadow",
+      "file": "regression/slot4-purple-329a8233-shadow.png",
+      "sha256": "9338e896d1d636e8fb643dddedf2d5dc06d4d98a5cacec1b6d24d3a5fd7859d5"
+    },
+    {
+      "id": "slot4-purple-329a8233-preview",
+      "kind": "preview",
+      "file": "regression/slot4-purple-329a8233-preview.png",
+      "sha256": "b68316be9f4de57b0a8ae194e24a6ece5c5f99c86f6e657717dc14976f4775bb"
+    },
+    {
+      "id": "slot4-purple-329a8233-birefnet-mask",
+      "kind": "mask",
+      "file": "regression/slot4-purple-329a8233-birefnet-mask.png",
+      "sha256": "952f9fdeea1a2d45ff925371cc3f1d4e498b3d6cf962f983ae7cc9dd4b340136"
+    }
+  ],
+  "visualStyleReference": {
+    "file": "visual-style-reference/slot4-1440-8.png",
+    "sha256": "9b437183c5f3af122bcad8c79fa61bd27288ad237cc61fe59ffce570b1118990",
+    "artboard": "Slot 4 visual style reference",
+    "role": "visual-style-reference-only",
+    "isGoldStandard": false
+  },
+  "candidateEvidence": [
+    {
+      "id": "candidate-summary",
+      "file": "evidence/candidate-summary.json",
+      "sha256": "f5c91debceebfd8e39338f4b20d5adbb27ff6ce5d8ceaac30c01ff7b354d0f03"
+    },
+    {
+      "id": "slot3-source-summary",
+      "file": "evidence/slot3-source-summary.json",
+      "sha256": "e040c4db6580edb44caf718123a77da8a55cbbda3da41502c84111566d5b2643"
+    },
+    {
+      "id": "slot3-comparison",
+      "file": "evidence/slot3-comparison.png",
+      "sha256": "b0dd2cf10e6afeb06d79aba311f0ca820779abc3691b342134a40ed114997298"
+    },
+    {
+      "id": "slot3-reference-comparison",
+      "file": "evidence/slot3-reference-comparison.png",
+      "sha256": "e049891c17e6599ce0c6ab2071b3a8ace42e698a5089f6b90dfe8eb4a2e4feaa"
+    },
+    {
+      "id": "slot3-reference-snapshot",
+      "file": "evidence/slot3-reference-snapshot.json",
+      "sha256": "f21e82d4291706b9014ca6d6b774e6439968086b472f34a8855924b691b9bfaa"
+    },
+    {
+      "id": "329a8210-product-box-mask",
+      "file": "evidence/329a8210-product-box-mask.png",
+      "sha256": "4827736ea9e3accc06631e19e3572b7fd089f9d76a0d8e97b1f948cc2b36f64b"
+    },
+    {
+      "id": "329a8210-gate-report",
+      "file": "evidence/329a8210-gate-report.json",
+      "sha256": "91168be74cbfc94c4da2c9abe780e236b14ec8fb6c92bf1246c141a316dc2402"
+    },
+    {
+      "id": "329a8219-product-box-mask",
+      "file": "evidence/329a8219-product-box-mask.png",
+      "sha256": "ee7ee4a68bc19a623308f96b698ab2ba186ac6a6982abb13179e78010f9b545b"
+    },
+    {
+      "id": "329a8219-gate-report",
+      "file": "evidence/329a8219-gate-report.json",
+      "sha256": "487889504a7e78fa1f4da9658ac98025985f38b34fe161901da72bf4b0c3d293"
+    },
+    {
+      "id": "slot4-candidate-status",
+      "file": "evidence/slot4-candidate-status.json",
+      "sha256": "06ba8e3191941d50e809b41140a65825dfa6b418fd3f4d9510064726398e7da6"
+    },
+    {
+      "id": "slot4-comparison",
+      "file": "evidence/slot4-comparison.png",
+      "sha256": "171c6dd1acb7111b089ced0bdd7803aac87a9c555e7513b65549211a44d6cc06"
+    },
+    {
+      "id": "slot4-product-box-evidence",
+      "file": "evidence/slot4-product-box-evidence.json",
+      "sha256": "e86b5bf40ea202d4a7969bbdfd53cbf37fa0a8d47d8051a92b45004cacb35556"
+    },
+    {
+      "id": "slot4-black-329a8211-product-box-mask",
+      "file": "evidence/slot4-black-329a8211-product-box-mask.png",
+      "sha256": "29305ef0de5eca423d49e2cf476808128c03111201d81e1609e908aad990b4b7"
+    },
+    {
+      "id": "slot4-black-329a8211-gate-report",
+      "file": "evidence/slot4-black-329a8211-gate-report.json",
+      "sha256": "b27dedc70e174e3fea89b0ff3b8623dc9c5f982a61f5b15ace6a9ee14e758054"
+    },
+    {
+      "id": "slot4-blue-329a8220-product-box-mask",
+      "file": "evidence/slot4-blue-329a8220-product-box-mask.png",
+      "sha256": "5a13f1349d036f4f229ca47f2deaa5ccb26e4ac807dd8d4255c91da0087572b4"
+    },
+    {
+      "id": "slot4-blue-329a8220-gate-report",
+      "file": "evidence/slot4-blue-329a8220-gate-report.json",
+      "sha256": "16f664ee07db08d15f357dc71c779f6ea8170cd1f1a7f77a1706687cce594af7"
+    },
+    {
+      "id": "slot4-purple-329a8233-product-box-mask",
+      "file": "evidence/slot4-purple-329a8233-product-box-mask.png",
+      "sha256": "818efe66d9e8725dfb50d02ea7626274ea6c5fc12c2fd4c2dd3afdb48dd9c270"
+    },
+    {
+      "id": "slot4-purple-329a8233-gate-report",
+      "file": "evidence/slot4-purple-329a8233-gate-report.json",
+      "sha256": "740d9515bd6bbc3c525692f02c8ecc2d33bb9d9226286b21d9cb3307ca7d2b26"
+    },
+    {
+      "id": "slot3-visual-style-reference",
+      "file": "visual-style-reference/slot3-4-slot3-front-reference.psd",
+      "sha256": "e468c077ad7b5df5cda5031971a83b44ee0ca8caa6fd4fe9fc72a3414efad3b8"
+    }
+  ],
+  "provenance": {
+    "baselineVersion": "hat-ps-shadow-v2.4",
+    "baselineManifestSha256": "6a14451f80a130fe7014bfbce69fb0e90df57199ab2341c465f212a8bae9bdf3",
+    "slot3SourceSummarySha256": "e040c4db6580edb44caf718123a77da8a55cbbda3da41502c84111566d5b2643",
+    "slot4CandidateStatusSha256": "06ba8e3191941d50e809b41140a65825dfa6b418fd3f4d9510064726398e7da6"
+  }
+}
