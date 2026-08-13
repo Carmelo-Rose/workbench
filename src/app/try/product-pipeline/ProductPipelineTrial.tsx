@@ -132,7 +132,7 @@ export function ProductPipelineTrial() {
   const [query, setQuery] = useState("");
   const [selectedFolderId, setSelectedFolderId] = useState<string>();
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>();
-  const [mainImageVersion, setMainImageVersion] = useState<MainImageVersion>("whitefield-v1");
+  const [mainImageVersion, setMainImageVersion] = useState<MainImageVersion>("calibrated-shadow-v2");
   const [calibratedShadowV2Enabled, setCalibratedShadowV2Enabled] = useState(false);
   const [selectedModelPairId, setSelectedModelPairId] = useState<string>();
   const [job, setJob] = useState<MonoJob | null>(null);
@@ -217,6 +217,7 @@ export function ProductPipelineTrial() {
           workflowId: selectedWorkflowId,
           modelPairId: selectedModelPairId,
           mainImageVersion,
+          ...(mainImageVersion === "calibrated-shadow-v2" ? { shadowPresetVersion: "hat-ps-shadow-v2.5" } : {}),
         }),
       });
       if (!payload.job) throw new Error("任务创建失败");
@@ -340,8 +341,8 @@ export function ProductPipelineTrial() {
                 value={mainImageVersion}
                 onChange={(event) => setMainImageVersion(event.target.value as MainImageVersion)}
               >
-                <option value="whitefield-v1">V1 · 保留实拍阴影（默认）</option>
-                {calibratedShadowV2Enabled ? <option value="calibrated-shadow-v2">V2 · PS 标定阴影</option> : null}
+                <option value="whitefield-v1">V1 · 保留实拍阴影</option>
+                {calibratedShadowV2Enabled ? <option value="calibrated-shadow-v2">V2 · PS 标定阴影（默认 v2.5）</option> : null}
               </select>
             </label>
             <div className="bg-muted/50 rounded-xl p-3 text-xs leading-5">

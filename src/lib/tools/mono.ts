@@ -6,6 +6,7 @@ import {
   monoSubjectInputSchema,
   monoSubjectPatchSchema,
   monoVideoAnalysisSchema,
+  productShadowPresetVersions,
   type MonoJob,
 } from "@/lib/mono/contracts";
 import {
@@ -177,10 +178,12 @@ export function createMonoTools(context: MonoToolContext = {}) {
           .describe("只重跑这些失败主图，取原图文件名且不带扩展名，例如 [\"329A8208\"]。不传则完整跑一遍"),
         retryMain: z.boolean().optional()
           .describe("只重跑主图分支；不传 onlyMain 时重跑全部主图，不会重跑详情图或 SKU"),
-        mainImageVersion: z.enum(["whitefield-v1", "calibrated-shadow-v2"]).optional()
-          .describe("主图算法；省略为 whitefield-v1，用户明确要求 PS 标定阴影时传 calibrated-shadow-v2"),
+        mainImageVersion: z.enum(["whitefield-v1", "calibrated-shadow-v2"]).default("calibrated-shadow-v2")
+          .describe("主图算法；默认使用已发布的 PS 标定阴影 calibrated-shadow-v2，需要保留实拍阴影时才传 whitefield-v1"),
+        shadowPresetVersion: z.enum(productShadowPresetVersions).default("hat-ps-shadow-v2.5")
+          .describe("PS 标定阴影的不可变预设版本；主图默认固定为 hat-ps-shadow-v2.5"),
       }),
-      execute: async ({ folderName, onlySlots, onlyMain, retryMain, mainImageVersion }) => {
+      execute: async ({ folderName, onlySlots, onlyMain, retryMain, mainImageVersion, shadowPresetVersion }) => {
         const folder = await resolveProductFolderByName(folderName);
         return lightenMonoJob(createProductPipelineJob(actor, {
           folderId: folder.id,
@@ -189,6 +192,7 @@ export function createMonoTools(context: MonoToolContext = {}) {
           onlyMain,
           retryMain,
           mainImageVersion,
+          shadowPresetVersion,
         }));
       },
     }),

@@ -69,7 +69,7 @@ export function ProductPipelineLauncher({
   const [fixedModel, setFixedModel] = useState(false);
   const [modelPairId, setModelPairId] = useState<string>();
   const [workflowId, setWorkflowId] = useState<string>();
-  const [mainImageVersion, setMainImageVersion] = useState<MainImageVersion>("whitefield-v1");
+  const [mainImageVersion, setMainImageVersion] = useState<MainImageVersion>("calibrated-shadow-v2");
   const [calibratedShadowV2Enabled, setCalibratedShadowV2Enabled] = useState(false);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string>();
@@ -146,6 +146,7 @@ export function ProductPipelineLauncher({
           folderId: selectedFolder.id,
           workflowId,
           mainImageVersion,
+          ...(mainImageVersion === "calibrated-shadow-v2" ? { shadowPresetVersion: "hat-ps-shadow-v2.5" as const } : {}),
           folderName: selectedFolder.name,
           ...(fixedModel && selectedPair ? { modelPairId: selectedPair.id } : {}),
         },
@@ -335,9 +336,9 @@ export function ProductPipelineLauncher({
             onChange={(event) => setMainImageVersion(event.target.value as MainImageVersion)}
             className="border-input bg-background min-w-0 flex-1 rounded-md border px-2 py-2 text-sm"
           >
-            <option value="whitefield-v1">V1 · 保留实拍阴影（默认）</option>
+            <option value="whitefield-v1">V1 · 保留实拍阴影</option>
             {calibratedShadowV2Enabled ? (
-              <option value="calibrated-shadow-v2">V2 · PS 标定阴影</option>
+              <option value="calibrated-shadow-v2">V2 · PS 标定阴影（默认 v2.5）</option>
             ) : null}
           </select>
         </label>

@@ -30,5 +30,10 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    // Legacy offline bundle builder; the calibrated-shadow-v2 runtime uses
+    // the immutable package tooling under scripts/calibrate-* and publish-*.
+    "scripts/build-product-shadow-bundle.ts"
+  ]
 }

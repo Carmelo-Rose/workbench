@@ -38,7 +38,7 @@ afterEach(async () => {
 
 describe("calibrated shadow rollout and history", () => {
   it("keeps the current V2 opt-in and refuses to reinterpret historical experiments", () => {
-    expect(DEFAULT_SHADOW_PRESET_VERSION).toBe("hat-ps-shadow-v2.1");
+    expect(DEFAULT_SHADOW_PRESET_VERSION).toBe("hat-ps-shadow-v2.5");
     expect(isCalibratedShadowV2Enabled({})).toBe(false);
     expect(isCalibratedShadowV2Enabled({ PRODUCT_MAIN_V2_ENABLED: "false" })).toBe(false);
     expect(isCalibratedShadowV2Enabled({ PRODUCT_MAIN_V2_ENABLED: "true" })).toBe(true);
@@ -132,7 +132,7 @@ function syntheticBundle(): LoadedCalibratedShadowBundle {
   ]);
   return {
     schemaVersion: 1,
-    version: DEFAULT_SHADOW_PRESET_VERSION,
+    version: "hat-ps-shadow-v2.1",
     canvas: { width: 800, height: 800 },
     algorithm: { id: "ps-levels-roi-v1", levels: "round(value*255/whitePoint)-clamp-255" },
     biRefNet: {
@@ -510,26 +510,30 @@ describe("immutable preset package", () => {
   });
 
   it("rejects illegal dimensions, paths, hashes, duplicate IDs, and parameters", async () => {
-    const manifestPath = path.join(process.cwd(), "config", "product-main-shadows", DEFAULT_SHADOW_PRESET_VERSION, "manifest.json");
+    // The synthetic mutation fixtures below exercise the legacy schema v1
+    // parser, so keep them pinned to the immutable v2.1 package even though
+    // new calibrated jobs now default to v2.5.
+    const legacyVersion = "hat-ps-shadow-v2.1" as const;
+    const manifestPath = path.join(process.cwd(), "config", "product-main-shadows", legacyVersion, "manifest.json");
     const original = JSON.parse(await readFile(manifestPath, "utf8")) as CalibratedShadowManifest;
     const invalid = (mutate: (copy: CalibratedShadowManifest) => void): Buffer => {
       const copy = structuredClone(original);
       mutate(copy);
       return Buffer.from(JSON.stringify(copy));
     };
-    expect(() => parseCalibratedShadowManifest(invalid((copy) => { copy.canvas.width = 801; }), DEFAULT_SHADOW_PRESET_VERSION)).toThrow(/800×800/u);
-    expect(() => parseCalibratedShadowManifest(invalid((copy) => { copy.regressionAssets[0].file = "../escape.png"; }), DEFAULT_SHADOW_PRESET_VERSION)).toThrow(/越界/u);
-    expect(() => parseCalibratedShadowManifest(invalid((copy) => { copy.regressionAssets[0].sha256 = "bad"; }), DEFAULT_SHADOW_PRESET_VERSION)).toThrow(/哈希/u);
+    expect(() => parseCalibratedShadowManifest(invalid((copy) => { copy.canvas.width = 801; }), legacyVersion)).toThrow(/800×800/u);
+    expect(() => parseCalibratedShadowManifest(invalid((copy) => { copy.regressionAssets[0].file = "../escape.png"; }), legacyVersion)).toThrow(/越界/u);
+    expect(() => parseCalibratedShadowManifest(invalid((copy) => { copy.regressionAssets[0].sha256 = "bad"; }), legacyVersion)).toThrow(/哈希/u);
     expect(() => parseCalibratedShadowManifest(invalid((copy) => {
       if (copy.schemaVersion !== 1) throw new Error("expected schema v1 fixture");
       copy.presets.push(structuredClone(copy.presets[0]));
-    }), DEFAULT_SHADOW_PRESET_VERSION)).toThrow(/重复/u);
-    expect(() => parseCalibratedShadowManifest(invalid((copy) => { copy.presets[0].roi.y = -1; }), DEFAULT_SHADOW_PRESET_VERSION)).toThrow(/ROI/u);
+    }), legacyVersion)).toThrow(/重复/u);
+    expect(() => parseCalibratedShadowManifest(invalid((copy) => { copy.presets[0].roi.y = -1; }), legacyVersion)).toThrow(/ROI/u);
   });
 
   it("parses legacy schema v1 unchanged and validates schema v2 per-preset gold references", () => {
     const legacy = syntheticBundle();
-    expect(parseCalibratedShadowManifest(Buffer.from(JSON.stringify(legacy)), DEFAULT_SHADOW_PRESET_VERSION))
+    expect(parseCalibratedShadowManifest(Buffer.from(JSON.stringify(legacy)), "hat-ps-shadow-v2.1"))
       .toMatchObject({ schemaVersion: 1, presets: [{ id: "hat-angle-slot-2" }] });
 
     const scoped = syntheticScopedBundle();

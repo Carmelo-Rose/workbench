@@ -6,7 +6,11 @@ import { isProductShadowPresetVersion, type ProductMainImageVersion, type Produc
 
 export const DEFAULT_MAIN_IMAGE_VERSION: ProductMainImageVersion = "whitefield-v1";
 export const CALIBRATED_SHADOW_MAIN_IMAGE_VERSION: ProductMainImageVersion = "calibrated-shadow-v2";
-export const DEFAULT_SHADOW_PRESET_VERSION: ProductShadowPresetVersion = "hat-ps-shadow-v2.1";
+/**
+ * The currently released hat calibration used by new calibrated main-image
+ * jobs. Older jobs keep the preset version pinned in their persisted input.
+ */
+export const DEFAULT_SHADOW_PRESET_VERSION: ProductShadowPresetVersion = "hat-ps-shadow-v2.5";
 
 export const BIREFNET_MODEL_ID = "ZhengPeng7/BiRefNet_HR-matting";
 export const BIREFNET_MODEL_REVISION = "5d6b6f8adcb5b417c871b1d84ceaae9871355b7f";
